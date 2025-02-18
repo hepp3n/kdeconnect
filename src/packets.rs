@@ -136,3 +136,34 @@ impl Identity {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PairPacket {
+    #[serde(deserialize_with = "deserialize_id")]
+    pub id: u128,
+    #[serde(rename = "type")]
+    pub packet_type: String,
+    pub body: Pair,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Pair {
+    pair: bool,
+}
+
+impl Pair {
+    pub fn create_packet(pair: bool) -> PairPacket {
+        let pair = Pair { pair };
+
+        let id = time::SystemTime::now()
+            .duration_since(time::SystemTime::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_millis();
+
+        PairPacket {
+            id,
+            packet_type: "kdeconnect.pair".into(),
+            body: pair,
+        }
+    }
+}
