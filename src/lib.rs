@@ -1,16 +1,23 @@
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    sync::Arc,
+};
+
 use device::Device;
-use native_tls::{TlsAcceptor, TlsConnector};
 use packets::{Identity, IdentityPacket};
 use serde_json as json;
-use std::{
+use tokio::{
     fs::File,
-    io::{Read, Write},
-    net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpStream, UdpSocket},
     sync::{
         mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
+        Mutex,
     },
-    thread::{self},
+};
+use tokio_native_tls::{
+    native_tls::{self},
+    TlsAcceptor,
 };
 
 use config::KdeConnectConfig;
@@ -32,62 +39,56 @@ pub struct KdeConnect {
     pub config: KdeConnectConfig,
     identity: Arc<Mutex<Identity>>,
     udp_socket: Arc<UdpSocket>,
-    tcp_listener: Arc<TcpListener>,
     tls_acceptor: Arc<TlsAcceptor>,
     device_tx: Arc<Sender<Device>>,
     device_rx: Arc<Mutex<Receiver<Device>>>,
-    action_rx: Option<Arc<Mutex<Receiver<KdeAction>>>>,
 }
 
 impl KdeConnect {
-    pub fn new() -> anyhow::Result<KdeConnect> {
+    pub async fn new() -> anyhow::Result<KdeConnect> {
         let config = KdeConnectConfig::default();
 
         let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
-        let udp_socket = UdpSocket::bind(socket_addr)?;
+        let udp_socket = UdpSocket::bind(socket_addr).await?;
         udp_socket.set_broadcast(true)?;
 
         let identity = Identity::new(config.device_id.clone(), config.device_name.clone(), None);
 
-        let mut cert_file = File::open(&config.root_ca)?;
+        let mut cert_file = File::open(&config.root_ca).await?;
         let mut certs = vec![];
-        cert_file.read_to_end(&mut certs).unwrap();
-        let mut key_file = File::open(&config.priv_key)?;
+        cert_file.read_to_end(&mut certs).await?;
+        let mut key_file = File::open(&config.priv_key).await?;
         let mut key = vec![];
-        key_file.read_to_end(&mut key).unwrap();
+        key_file.read_to_end(&mut key).await?;
         let pkcs8 = native_tls::Identity::from_pkcs8(&certs, &key)?;
 
-        let acceptor = TlsAcceptor::new(pkcs8)?;
+        let inner = native_tls::TlsAcceptor::builder(pkcs8).build()?;
+        let acceptor = TlsAcceptor::from(inner);
 
-        let listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
-        let listener = TcpListener::bind(listener_addr)?;
-
-        let (device_tx, device_rx) = mpsc::channel();
+        let (device_tx, device_rx) = mpsc::channel(4);
 
         Ok(KdeConnect {
             config,
             identity: Arc::new(Mutex::new(identity)),
             udp_socket: Arc::new(udp_socket),
-            tcp_listener: Arc::new(listener),
             tls_acceptor: Arc::new(acceptor),
             device_tx: Arc::new(device_tx),
-            device_rx: Arc::new(device_rx.into()),
-            action_rx: None,
+            device_rx: Arc::new(Mutex::new(device_rx)),
         })
     }
 
-    fn handle_clients(
+    async fn handle_clients(
         device_rx: Arc<Mutex<Receiver<Device>>>,
         action_rx: Arc<Mutex<Receiver<KdeAction>>>,
     ) -> anyhow::Result<()> {
-        while let Ok(mut device) = device_rx.lock().unwrap().recv() {
-            device.inner_task(action_rx.clone())?;
+        while let Some(mut device) = device_rx.lock().await.recv().await {
+            device.inner_task(action_rx.clone()).await?;
         }
 
         Ok(())
     }
 
-    fn udp_listener(
+    async fn udp_listener(
         device_tx: Arc<Sender<Device>>,
         udp_socket: Arc<UdpSocket>,
         this_identity: Arc<Mutex<Identity>>,
@@ -97,11 +98,11 @@ impl KdeConnect {
 
         let mut buffer = vec![0; 8192];
 
-        while let Ok((len, mut addr)) = udp_socket.recv_from(&mut buffer) {
+        while let Ok((len, mut addr)) = udp_socket.recv_from(&mut buffer).await {
             if let Ok(packet) = json::from_slice::<IdentityPacket>(&buffer[..len]) {
                 let identity = packet.body;
 
-                if identity.device_id == this_identity.lock().unwrap().device_id {
+                if identity.device_id == this_identity.lock().await.device_id {
                     println!("[UDP] Dont respond to the same device");
                     continue;
                 }
@@ -112,32 +113,31 @@ impl KdeConnect {
                     addr.set_port(port);
                 }
 
-                let packet = this_identity.lock().unwrap().create_packet(None);
+                let packet = this_identity.lock().await.create_packet(None);
                 let data = json::to_string(&packet).expect("Creating packet") + "\n";
 
-                let stream = TcpStream::connect(addr);
+                let mut stream = TcpStream::connect(addr).await?;
 
-                match stream {
-                    Ok(mut stream) => {
-                        stream
-                            .write_all(data.as_bytes())
-                            .expect("[TCP] Sending packet");
+                stream
+                    .write_all(data.as_bytes())
+                    .await
+                    .expect("[TCP] Sending packet");
 
-                        match acceptor.accept(stream) {
-                            Ok(stream) => {
-                                println!(
-                                    "[TCP] Connected with device: {} and IP: {}",
-                                    identity.device_name, addr
-                                );
+                match acceptor.accept(stream).await {
+                    Ok(stream) => {
+                        println!(
+                            "[TCP] Connected with device: {} and IP: {}",
+                            identity.device_name, addr
+                        );
 
-                                let device = Device::new(identity.clone(), stream)?;
+                        let device = Device::new(identity.clone(), stream).await?;
 
-                                device_tx.send(device).expect("[Device] Adding new device");
-                            }
-                            Err(err) => eprintln!("{}", err),
-                        }
+                        device_tx
+                            .send(device)
+                            .await
+                            .expect("[Device] Adding new device");
                     }
-                    Err(err) => eprintln!("{}", err),
+                    Err(e) => eprintln!("Error while accepting stream: {}", e),
                 }
             };
         }
@@ -145,47 +145,49 @@ impl KdeConnect {
         Ok(())
     }
 
-    fn tcp_listener(
-        listener: Arc<TcpListener>,
-        _this_identity: Arc<Mutex<Identity>>,
-    ) -> anyhow::Result<()> {
-        println!("[TCP] Listening...");
+    // async fn tcp_listener(
+    //     listener: Arc<TcpListener>,
+    //     _this_identity: Arc<Mutex<Identity>>,
+    // ) -> anyhow::Result<()> {
+    //     println!("[TCP] Listening...");
 
-        while let Ok((mut stream, addr)) = listener.accept() {
-            let mut identity = String::new();
-            stream.read_to_string(&mut identity)?;
+    //     while let Ok((mut stream, addr)) = listener.accept().await {
+    //         let mut identity = String::new();
+    //         stream.read_to_string(&mut identity).await?;
 
-            if let Ok(packet) = json::from_str::<IdentityPacket>(&identity) {
-                let identity = packet.body;
+    //         if let Ok(packet) = json::from_str::<IdentityPacket>(&identity) {
+    //             let identity = packet.body;
 
-                println!("[TCP] Found {}", identity.device_name);
+    //             println!("[TCP] Found {}", identity.device_name);
 
-                let connector = TlsConnector::new()?;
-                let stream = TcpStream::connect(addr).expect("[TCP] Connecting to device");
-                let stream = connector.connect(&addr.ip().to_string(), stream);
+    //             let connector = TlsConnector::new()?;
+    //             let stream = TcpStream::connect(addr)
+    //                 .await
+    //                 .expect("[TCP] Connecting to device");
 
-                println!("{:#?}", stream);
+    //             let stream = connector.connect(&addr.ip().to_string(), stream);
+
+    //             println!("{:#?}", stream);
+    //         }
+    //     }
+
+    //     Ok(())
+    // }
+
+    pub async fn start(&self, action_rx: Arc<Mutex<Receiver<KdeAction>>>) {
+        let udp_socket = Arc::clone(&self.udp_socket);
+        let udp_identity = Arc::clone(&self.identity);
+        let acceptor = Arc::clone(&self.tls_acceptor);
+        let device_tx = Arc::clone(&self.device_tx);
+        let device_rx = Arc::clone(&self.device_rx);
+
+        tokio::select! {
+            _handler = Self::handle_clients(device_rx, action_rx) => {
+                println!("handler")
             }
-        }
-
-        Ok(())
-    }
-
-    pub fn start(&mut self, action_rx: Arc<Mutex<Receiver<KdeAction>>>) {
-        self.action_rx = Some(action_rx.clone());
-
-        thread::scope(|td| {
-            let udp_socket = Arc::clone(&self.udp_socket);
-            let udp_identity = Arc::clone(&self.identity);
-            let acceptor = Arc::clone(&self.tls_acceptor);
-            let tcp_listener = Arc::clone(&self.tcp_listener);
-            let tcp_identity = Arc::clone(&self.identity);
-            let device_tx = Arc::clone(&self.device_tx);
-            let device_rx = Arc::clone(&self.device_rx);
-
-            td.spawn(move || Self::handle_clients(device_rx, action_rx));
-            td.spawn(move || Self::udp_listener(device_tx, udp_socket, udp_identity, acceptor));
-            td.spawn(move || Self::tcp_listener(tcp_listener, tcp_identity));
-        });
+            _udp = Self::udp_listener(device_tx, udp_socket, udp_identity, acceptor) => {
+                println!("udp listener")
+            }
+        };
     }
 }

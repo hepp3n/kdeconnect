@@ -1,9 +1,12 @@
-use native_tls::TlsStream;
+use std::sync::Arc;
+
 use serde_json as json;
-use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::{mpsc::Receiver, Mutex},
+};
+use tokio_native_tls::TlsStream;
 
 use crate::{
     packets::{DeviceType, Identity, Pair},
@@ -26,7 +29,7 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(identity: Identity, stream: TlsStream<TcpStream>) -> anyhow::Result<Device> {
+    pub async fn new(identity: Identity, stream: TlsStream<TcpStream>) -> anyhow::Result<Device> {
         let device_id = identity.device_id;
         let device_name = identity.device_name;
         let device_type = identity.device_type;
@@ -37,7 +40,7 @@ impl Device {
             device_type,
         };
 
-        if let Some(cert) = stream.peer_certificate()? {
+        if let Some(cert) = stream.get_ref().peer_certificate()? {
             return Ok(Device {
                 config,
                 stream,
@@ -52,8 +55,11 @@ impl Device {
         })
     }
 
-    pub fn inner_task(&mut self, action_rx: Arc<Mutex<Receiver<KdeAction>>>) -> anyhow::Result<()> {
-        while let Ok(k_action) = action_rx.lock().unwrap().recv() {
+    pub async fn inner_task(
+        &mut self,
+        action_rx: Arc<Mutex<Receiver<KdeAction>>>,
+    ) -> anyhow::Result<()> {
+        while let Some(k_action) = action_rx.lock().await.recv().await {
             match k_action {
                 KdeAction::Idle => {
                     println!("Idling...")
@@ -64,12 +70,14 @@ impl Device {
 
                     self.stream
                         .write_all(data.as_bytes())
+                        .await
                         .expect("[Packet] Sending");
 
                     let mut buffer = String::new();
 
                     self.stream
                         .read_to_string(&mut buffer)
+                        .await
                         .expect("[Packet] Reading...");
 
                     println!("{}", buffer);
