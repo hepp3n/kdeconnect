@@ -12,7 +12,7 @@ use crate::{
 
 const CONFIG_FILE: &str = "config.ron";
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KdeConnectConfig {
     pub device_id: String,
     pub device_name: String,
