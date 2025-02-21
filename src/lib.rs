@@ -1,13 +1,12 @@
 use anyhow::Result;
 use config::KdeConnectConfig;
+use device::{ConnectedDevices, Device};
 use std::{cell::RefCell, sync::Arc};
 use tokio::{
     sync::{mpsc, oneshot, Mutex},
     task::JoinHandle,
 };
 use udp_listener::UdpListener;
-
-use device::Device;
 
 mod cert;
 mod config;
@@ -18,10 +17,9 @@ mod utils;
 
 #[derive(Debug)]
 pub enum KdeConnectAction {
-    StartUdpListener,
-    HandleDevices((device::Message, String)),
-
     Stop { tx: oneshot::Sender<()> },
+
+    StartListener { config: KdeConnectConfig },
 }
 
 #[derive(Debug)]
@@ -32,31 +30,22 @@ enum KdeConnectState {
 }
 
 #[derive(Debug)]
-struct KdeConnect {
-    _id: uuid::Uuid,
-    rx: mpsc::Receiver<KdeConnectAction>,
-    state: Arc<Mutex<RefCell<KdeConnectState>>>,
-    config: KdeConnectConfig,
-    connected_devices: Vec<(String, String)>,
-    device_rx: Option<Arc<Mutex<mpsc::Receiver<Device>>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct KdeConnectHandler {
-    _id: uuid::Uuid,
+pub struct KdeConnectServer {
     tx: mpsc::Sender<KdeConnectAction>,
-    _state: Arc<Mutex<RefCell<KdeConnectState>>>,
+    rx: mpsc::Receiver<KdeConnectAction>,
+    device_tx: mpsc::Sender<Device>,
+    device_rx: mpsc::Receiver<Device>,
+    pub state: Arc<Mutex<RefCell<KdeConnectState>>>,
 }
 
-impl KdeConnect {
-    async fn run(&mut self) {
-        self.state.lock().await.replace(KdeConnectState::Running);
+impl KdeConnectServer {
+    pub async fn stop(&self) -> JoinHandle<Result<(), mpsc::error::SendError<KdeConnectAction>>> {
+        let (tx, rx) = oneshot::channel();
+        let message = KdeConnectAction::Stop { tx };
+        let handle = self.send(message);
 
-        while let Some(message) = self.rx.recv().await {
-            self.update(message).await;
-        }
-
-        self.state.lock().await.replace(KdeConnectState::Stopped);
+        let _ = rx.await;
+        handle
     }
 
     async fn update(&mut self, message: KdeConnectAction) {
@@ -66,70 +55,23 @@ impl KdeConnect {
                 let _ = tx.send(());
                 self.rx.close();
             }
-            KdeConnectAction::StartUdpListener => {
-                let device_id = self.config.device_id.clone();
-                let device_name = self.config.device_name.clone();
-                let root_ca = self.config.root_ca.clone();
-                let key = self.config.priv_key.clone();
+            KdeConnectAction::StartListener { config } => {
+                let device_tx = Arc::clone(&Arc::new(self.device_tx.clone()));
+                let config = Arc::clone(&Arc::new(config));
 
-                let udp_listener = UdpListener::new(device_id, device_name, root_ca, key)
-                    .await
-                    .unwrap();
+                tokio::task::spawn(async move {
+                    let udp = UdpListener::new(
+                        config.device_id.clone(),
+                        config.device_name.clone(),
+                        config.root_ca.clone(),
+                        config.priv_key.clone(),
+                        device_tx,
+                    );
 
-                self.device_rx = Some(udp_listener.1.clone());
-
-                tokio::spawn(async move {
-                    let _ = udp_listener.0.lock().await.listen().await;
+                    let _ = udp.await.unwrap().listen().await;
                 });
-
-                if let Some(device_rx) = &self.device_rx {
-                    while let Some(device) = device_rx.lock().await.recv().await {
-                        self.connected_devices
-                            .push((device.config.device_id, device.config.device_name));
-                    }
-                }
-            }
-            KdeConnectAction::HandleDevices((action, device_id)) => {
-                if let Some(device_rx) = &self.device_rx {
-                    while let Some(mut device) = device_rx.lock().await.recv().await {
-                        if device.config.device_id == device_id {
-                            let _ = device.inner_task(&action).await;
-                        }
-                    }
-                }
             }
         }
-    }
-}
-
-impl KdeConnectHandler {
-    pub fn new(buffer: usize) -> (Self, JoinHandle<()>) {
-        let (tx, rx) = mpsc::channel(buffer);
-        let actor_id = uuid::Uuid::new_v4();
-        let state = Arc::new(Mutex::new(RefCell::new(KdeConnectState::Ready)));
-        let actor_state = state.clone();
-
-        let actor_handler = KdeConnectHandler {
-            _id: actor_id,
-            tx,
-            _state: state,
-        };
-
-        let handle = tokio::spawn(async move {
-            let config = KdeConnectConfig::default();
-
-            let mut actor = KdeConnect {
-                _id: actor_id,
-                rx,
-                state: actor_state,
-                config,
-                connected_devices: Vec::new(),
-                device_rx: None,
-            };
-            actor.run().await;
-        });
-
-        (actor_handler, handle)
     }
 
     pub fn send(
@@ -139,13 +81,66 @@ impl KdeConnectHandler {
         let tx = self.tx.clone();
         tokio::spawn(async move { tx.send(message).await })
     }
+}
 
-    pub async fn stop(&self) -> JoinHandle<Result<(), mpsc::error::SendError<KdeConnectAction>>> {
-        let (tx, rx) = oneshot::channel();
-        let message = KdeConnectAction::Stop { tx };
-        let handle = self.send(message);
+#[derive(Debug)]
+pub struct KdeConnectClient {
+    pub server: Arc<Mutex<RefCell<KdeConnectServer>>>,
+    pub config: KdeConnectConfig,
+    pub connected_devices: Vec<ConnectedDevices>,
+}
 
-        let _ = rx.await;
-        handle
+impl KdeConnectClient {
+    pub fn new(buffer: usize) -> (Self, JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel(buffer);
+
+        let config = KdeConnectConfig::default();
+
+        let state = Arc::new(Mutex::new(RefCell::new(KdeConnectState::Ready)));
+        let (device_tx, device_rx) = mpsc::channel(4);
+
+        let server = KdeConnectServer {
+            tx,
+            rx,
+            state,
+            device_tx,
+            device_rx,
+        };
+
+        let arc_server = Arc::new(Mutex::new(RefCell::new(server)));
+
+        let client = KdeConnectClient {
+            server: arc_server.clone(),
+            config,
+            connected_devices: Vec::new(),
+        };
+
+        let server = arc_server.clone();
+
+        let handle = tokio::spawn(async move {
+            server
+                .lock()
+                .await
+                .get_mut()
+                .state
+                .lock()
+                .await
+                .replace(KdeConnectState::Running);
+
+            while let Some(message) = server.lock().await.get_mut().rx.recv().await {
+                server.lock().await.get_mut().update(message).await;
+            }
+
+            server
+                .lock()
+                .await
+                .get_mut()
+                .state
+                .lock()
+                .await
+                .replace(KdeConnectState::Stopped);
+        });
+
+        (client, handle)
     }
 }

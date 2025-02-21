@@ -24,7 +24,7 @@ pub struct UdpListener {
     udp_socket: UdpSocket,
     tls_acceptor: TlsAcceptor,
     identity: Identity,
-    device_tx: mpsc::Sender<Device>,
+    device_tx: Arc<mpsc::Sender<Device>>,
 }
 
 impl UdpListener {
@@ -33,7 +33,8 @@ impl UdpListener {
         device_name: String,
         root_ca: PathBuf,
         key: PathBuf,
-    ) -> anyhow::Result<(Arc<Mutex<Self>>, Arc<Mutex<mpsc::Receiver<Device>>>)> {
+        device_tx: Arc<mpsc::Sender<Device>>,
+    ) -> anyhow::Result<Self> {
         let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
         let udp_socket = UdpSocket::bind(socket_addr).await?;
         udp_socket.set_broadcast(true)?;
@@ -49,21 +50,14 @@ impl UdpListener {
         let inner = native_tls::TlsAcceptor::builder(pkcs8).build()?;
         let tls_acceptor = TlsAcceptor::from(inner);
 
-        let (device_tx, device_rx) = mpsc::channel(4);
-
         let identity = Identity::new(device_id, device_name, None);
 
-        let device_rx = Arc::new(Mutex::new(device_rx));
-
-        Ok((
-            Arc::new(Mutex::new(Self {
-                udp_socket,
-                tls_acceptor,
-                identity,
-                device_tx,
-            })),
-            device_rx,
-        ))
+        Ok(Self {
+            udp_socket,
+            tls_acceptor,
+            identity,
+            device_tx,
+        })
     }
 
     pub async fn listen(&mut self) -> anyhow::Result<()> {
@@ -105,10 +99,7 @@ impl UdpListener {
 
                         let device = Device::new(identity.clone(), stream).await?;
 
-                        self.device_tx
-                            .send(device)
-                            .await
-                            .expect("[Device] Adding new device");
+                        self.device_tx.send(device).await?;
                     }
                     Err(e) => eprintln!("Error while accepting stream: {}", e),
                 }

@@ -22,6 +22,12 @@ pub struct DeviceConfig {
 }
 
 #[derive(Debug)]
+pub struct ConnectedDevices {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug)]
 pub struct Device {
     pub config: DeviceConfig,
     pub stream: TlsStream<TcpStream>,
