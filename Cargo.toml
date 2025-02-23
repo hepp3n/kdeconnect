@@ -17,3 +17,4 @@ uuid = { version = "1.13.1", features = ["v4"] }
 time = "0.3.37"
 openssl = "0.10.70"
 webpki-roots = "0.26"
+tracing = "0.1"

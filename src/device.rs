@@ -1,11 +1,20 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
 use serde_json as json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::Mutex,
 };
 use tokio_native_tls::TlsStream;
 
 use crate::packets::{DeviceType, Identity, Pair};
+
+pub type DeviceStream = HashMap<String, Arc<Mutex<TlsStream<TcpStream>>>>;
+pub type ConnectedDevices = HashSet<ConnectedDevice>;
 
 #[derive(Debug)]
 pub enum Message {
@@ -13,7 +22,7 @@ pub enum Message {
     Pair,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceConfig {
     pub device_id: String,
     pub device_name: String,
@@ -21,8 +30,8 @@ pub struct DeviceConfig {
     // pub certificate: Option<Vec<u8>>,
 }
 
-#[derive(Debug)]
-pub struct ConnectedDevices {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectedDevice {
     pub id: String,
     pub name: String,
 }
