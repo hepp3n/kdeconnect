@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpStream, UdpSocket},
     sync::{mpsc, Mutex},
 };
@@ -26,13 +26,13 @@ pub struct UdpListener {
     udp_socket: UdpSocket,
     tls_acceptor: TlsAcceptor,
     stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
-    connected_devices: mpsc::UnboundedSender<ConnectedDevice>,
+    connected_devices: Arc<mpsc::UnboundedSender<ConnectedDevice>>,
 }
 
 impl UdpListener {
     pub async fn new(
         stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
-        tx: mpsc::UnboundedSender<ConnectedDevice>,
+        tx: Arc<mpsc::UnboundedSender<ConnectedDevice>>,
         root_ca: PathBuf,
         key: PathBuf,
     ) -> anyhow::Result<Self> {
@@ -84,7 +84,7 @@ impl UdpListener {
                 let packet = this_identity.create_packet(None);
                 let data = json::to_string(&packet).expect("Creating packet") + "\n";
 
-                let mut stream = TcpStream::connect(addr).await?;
+                let mut stream = BufReader::new(TcpStream::connect(addr).await?);
 
                 stream
                     .write_all(data.as_bytes())

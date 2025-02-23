@@ -1,9 +1,10 @@
 use anyhow::Result;
 use config::KdeConnectConfig;
 use device::{ConnectedDevice, DeviceStream};
-use packets::Pair;
+use packets::{Pair, Ping};
 use serde_json as json;
 use std::sync::Arc;
+use tcp_listener::TcpConnection;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{mpsc, oneshot},
@@ -16,6 +17,7 @@ mod cert;
 mod config;
 pub mod device;
 mod packets;
+mod tcp_listener;
 mod udp_listener;
 mod utils;
 
@@ -26,11 +28,15 @@ pub enum KdeConnectAction {
     },
 
     StartListener {
-        config: KdeConnectConfig,
+        config: Arc<KdeConnectConfig>,
         tx: mpsc::UnboundedSender<ConnectedDevice>,
     },
 
     PairDevice {
+        id: String,
+    },
+
+    SendPing {
         id: String,
     },
 }
@@ -58,23 +64,39 @@ impl KdeConnectServer {
             KdeConnectAction::StartListener { config, tx } => {
                 info!("Starting listening");
 
+                let arc_tx = Arc::new(tx);
                 let stream_tx = Arc::clone(&self.stream_tx);
+                let tx = Arc::clone(&arc_tx);
+                let arc_config = Arc::clone(&config);
 
                 tokio::spawn(async move {
-                    let config = config.clone();
-
                     let mut udp = UdpListener::new(
                         stream_tx,
                         tx,
-                        config.root_ca.clone(),
-                        config.priv_key.clone(),
+                        arc_config.root_ca.clone(),
+                        arc_config.priv_key.clone(),
                     )
                     .await
                     .unwrap();
 
-                    udp.listen(config.device_id.clone(), config.device_name.clone())
+                    udp.listen(arc_config.device_id.clone(), arc_config.device_name.clone())
                         .await
                         .unwrap();
+                });
+
+                let stream_tx = Arc::clone(&self.stream_tx);
+                let arc_config = Arc::clone(&config);
+
+                tokio::spawn(async move {
+                    let tcp = TcpConnection::new(
+                        stream_tx,
+                        arc_config.root_ca.clone(),
+                        arc_config.priv_key.clone(),
+                    )
+                    .await
+                    .unwrap();
+
+                    tcp.listen(arc_config.device_id.clone()).await.unwrap();
                 });
             }
             KdeConnectAction::PairDevice { id } => {
@@ -92,20 +114,31 @@ impl KdeConnectServer {
                             .await
                             .expect("Writing to device");
 
-                        let mut buffer = String::new();
-
-                        stream
-                            .lock()
-                            .await
-                            .read_to_string(&mut buffer)
-                            .await
-                            .expect("[Packet] Reading...");
-
-                        println!("{}", buffer);
+                        break;
                     }
                 }
             }
-        }
+            KdeConnectAction::SendPing { id } => {
+                let ping_packet = Ping::create_packet("Hello COSMIC!".into());
+
+                let data = json::to_string(&ping_packet).expect("Creating packet") + "\n";
+
+                while let Some(rx) = self.stream_rx.recv().await {
+                    info!("Trying to send ping");
+
+                    if let Some(stream) = rx.get(&id) {
+                        stream
+                            .lock()
+                            .await
+                            .write_all(data.as_bytes())
+                            .await
+                            .expect("Writing to device");
+
+                        break;
+                    }
+                }
+            }
+        };
     }
 }
 

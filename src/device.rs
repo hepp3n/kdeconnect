@@ -5,7 +5,7 @@ use std::{
 
 use serde_json as json;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
     sync::Mutex,
 };
@@ -13,7 +13,7 @@ use tokio_native_tls::TlsStream;
 
 use crate::packets::{DeviceType, Identity, Pair};
 
-pub type DeviceStream = HashMap<String, Arc<Mutex<TlsStream<TcpStream>>>>;
+pub type DeviceStream = HashMap<String, Arc<Mutex<TlsStream<BufReader<TcpStream>>>>>;
 pub type ConnectedDevices = HashSet<ConnectedDevice>;
 
 #[derive(Debug)]
@@ -39,12 +39,15 @@ pub struct ConnectedDevice {
 #[derive(Debug)]
 pub struct Device {
     pub config: DeviceConfig,
-    pub stream: TlsStream<TcpStream>,
-    _peer_certificate: Vec<u8>,
+    pub stream: TlsStream<BufReader<TcpStream>>,
+    // _peer_certificate: Vec<u8>,
 }
 
 impl Device {
-    pub async fn new(identity: Identity, stream: TlsStream<TcpStream>) -> anyhow::Result<Device> {
+    pub async fn new(
+        identity: Identity,
+        stream: TlsStream<BufReader<TcpStream>>,
+    ) -> anyhow::Result<Device> {
         let device_id = identity.device_id;
         let device_name = identity.device_name;
         let device_type = identity.device_type;
@@ -55,18 +58,18 @@ impl Device {
             device_type,
         };
 
-        if let Some(cert) = stream.get_ref().peer_certificate()? {
-            return Ok(Device {
-                config,
-                stream,
-                _peer_certificate: cert.to_der()?,
-            });
-        }
+        // if let Some(cert) = stream.get_ref().peer_certificate()? {
+        //     return Ok(Device {
+        //         config,
+        //         stream,
+        //         _peer_certificate: cert.to_der()?,
+        //     });
+        // }
 
         Ok(Device {
             config,
             stream,
-            _peer_certificate: Vec::new(),
+            // _peer_certificate: Vec::new(),
         })
     }
 

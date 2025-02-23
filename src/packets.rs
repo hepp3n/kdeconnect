@@ -167,3 +167,34 @@ impl Pair {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PingPacket {
+    #[serde(deserialize_with = "deserialize_id")]
+    pub id: u128,
+    #[serde(rename = "type")]
+    pub packet_type: String,
+    pub body: Ping,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Ping {
+    message: String,
+}
+
+impl Ping {
+    pub fn create_packet(message: String) -> PingPacket {
+        let ping = Ping { message };
+
+        let id = time::SystemTime::now()
+            .duration_since(time::SystemTime::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_millis();
+
+        PingPacket {
+            id,
+            packet_type: "kdeconnect.ping".into(),
+            body: ping,
+        }
+    }
+}
