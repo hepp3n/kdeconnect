@@ -61,7 +61,7 @@ impl KdeConnectServer {
                 let stream_tx = Arc::clone(&self.stream_tx);
 
                 tokio::spawn(async move {
-                    let config = Arc::clone(&Arc::new(config));
+                    let config = config.clone();
 
                     let mut udp = UdpListener::new(
                         stream_tx,
@@ -72,9 +72,9 @@ impl KdeConnectServer {
                     .await
                     .unwrap();
 
-                    let _ = udp
-                        .listen(config.device_id.clone(), config.device_name.clone())
-                        .await;
+                    udp.listen(config.device_id.clone(), config.device_name.clone())
+                        .await
+                        .unwrap();
                 });
             }
             KdeConnectAction::PairDevice { id } => {
