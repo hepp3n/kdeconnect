@@ -1,32 +1,32 @@
-use std::{io::stdin, sync::Arc};
+use std::io::stdin;
 
-use kdeconnect::{KdeAction, KdeConnect};
-use tokio::sync::{mpsc, Mutex};
+use kdeconnect::{device::ConnectedDevice, run_server, KdeConnectAction, KdeConnectClient};
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (action_tx, action_rx) = mpsc::channel(4);
-    let action_rx = Arc::new(Mutex::new(action_rx));
+    let (client_tx, server_rx) = mpsc::unbounded_channel::<KdeConnectAction>();
+    let client = KdeConnectClient::new(client_tx);
 
     tokio::spawn(async move {
-        let kdeconnect = KdeConnect::new().await.unwrap();
-
-        kdeconnect.start(action_rx).await
+        run_server(server_rx).await;
     });
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<ConnectedDevice>();
+
+    let config = client.config.clone();
+    let _ = client
+        .send(KdeConnectAction::StartListener { config, tx })
+        .await?;
 
     let mut action = String::new();
 
-    loop {
-        print!("Pair? [1/2/0]: ");
+    while let Some(device) = rx.recv().await {
+        println!("Connected device: {}", device.id);
+
         action.clear();
         stdin().read_line(&mut action).unwrap();
-
-        match action.trim().parse::<usize>().unwrap() {
-            1 => action_tx.send(KdeAction::Idle).await?,
-            2 => action_tx.send(KdeAction::Pair).await?,
-            0 => break,
-            _ => continue,
-        };
+        println!("Action: {}", action);
     }
 
     Ok(())
