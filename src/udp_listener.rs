@@ -3,13 +3,12 @@ use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddrV4},
     path::PathBuf,
-    sync::Arc,
 };
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpStream, UdpSocket},
-    sync::{mpsc, Mutex},
+    sync::mpsc,
 };
 use tokio_native_tls::{native_tls, TlsAcceptor};
 use tracing::{error, info};
@@ -25,18 +24,18 @@ pub const KDECONNECT_PORT: u16 = 1716;
 pub struct UdpListener {
     udp_socket: UdpSocket,
     tls_acceptor: TlsAcceptor,
-    stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
-    connected_devices: Arc<mpsc::UnboundedSender<ConnectedDevice>>,
+    stream_tx: mpsc::UnboundedSender<DeviceStream>,
+    connected_devices: mpsc::UnboundedSender<ConnectedDevice>,
 }
 
 impl UdpListener {
     pub async fn new(
-        stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
-        tx: Arc<mpsc::UnboundedSender<ConnectedDevice>>,
+        stream_tx: mpsc::UnboundedSender<DeviceStream>,
+        tx: mpsc::UnboundedSender<ConnectedDevice>,
         root_ca: PathBuf,
         key: PathBuf,
     ) -> anyhow::Result<Self> {
-        let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
+        let socket_addr = SocketAddrV4::new(Ipv4Addr::BROADCAST, KDECONNECT_PORT);
         let udp_socket = UdpSocket::bind(socket_addr).await?;
         udp_socket.set_broadcast(true)?;
 
@@ -59,10 +58,10 @@ impl UdpListener {
         })
     }
 
-    pub async fn listen(&mut self, device_id: String, device_name: String) -> anyhow::Result<()> {
+    pub async fn listen(&mut self) -> anyhow::Result<()> {
         info!("[UDP] Listening on socket");
 
-        let mut this_identity = Identity::new(device_id.clone(), device_name, None);
+        let mut this_identity = Identity::default();
         let mut buffer = vec![0; 8192];
 
         loop {
@@ -70,7 +69,7 @@ impl UdpListener {
             if let Ok(packet) = json::from_slice::<IdentityPacket>(&buffer[..len]) {
                 let identity = packet.body;
 
-                if identity.device_id == device_id {
+                if identity.device_id == this_identity.device_id {
                     info!("[UDP] Dont respond to the same device");
                     continue;
                 }
@@ -94,21 +93,20 @@ impl UdpListener {
                 match self.tls_acceptor.accept(stream).await {
                     Ok(stream) => {
                         info!(
-                            "[TCP] Connected with device: {} and IP: {}",
+                            "[via UDP] Connected with device: {} and IP: {}",
                             identity.device_name, addr
                         );
 
-                        let device = Device::new(identity.clone(), stream).await?;
+                        let device = Device::new(stream);
 
                         self.connected_devices.send(ConnectedDevice {
                             id: device.config.device_id.clone(),
                             name: device.config.device_name.clone(),
                         })?;
 
-                        let _ = self.stream_tx.send(HashMap::from([(
-                            device.config.device_id,
-                            Arc::new(Mutex::new(device.stream)),
-                        )]));
+                        let _ = self
+                            .stream_tx
+                            .send(HashMap::from([(device.config.device_id, device.stream)]));
                     }
                     Err(e) => error!("Error while accepting stream: {}", e),
                 }

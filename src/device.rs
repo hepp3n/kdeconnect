@@ -1,19 +1,17 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use serde_json as json;
+use std::collections::{HashMap, HashSet};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncWriteExt, BufReader},
     net::TcpStream,
-    sync::Mutex,
 };
 use tokio_native_tls::TlsStream;
 
-use crate::packets::{DeviceType, Identity, Pair};
+use crate::{
+    packets::{DeviceType, Identity, PacketType, Pair, Ping},
+    KdeConnectAction,
+};
 
-pub type DeviceStream = HashMap<String, Arc<Mutex<TlsStream<BufReader<TcpStream>>>>>;
+pub type DeviceStream = HashMap<String, TlsStream<BufReader<TcpStream>>>;
 pub type ConnectedDevices = HashSet<ConnectedDevice>;
 
 #[derive(Debug)]
@@ -44,18 +42,13 @@ pub struct Device {
 }
 
 impl Device {
-    pub async fn new(
-        identity: Identity,
-        stream: TlsStream<BufReader<TcpStream>>,
-    ) -> anyhow::Result<Device> {
-        let device_id = identity.device_id;
-        let device_name = identity.device_name;
-        let device_type = identity.device_type;
+    pub fn new(stream: TlsStream<BufReader<TcpStream>>) -> Device {
+        let identity = Identity::default();
 
         let config = DeviceConfig {
-            device_id,
-            device_name,
-            device_type,
+            device_id: identity.device_id,
+            device_name: identity.device_name,
+            device_type: identity.device_type,
         };
 
         // if let Some(cert) = stream.get_ref().peer_certificate()? {
@@ -66,38 +59,33 @@ impl Device {
         //     });
         // }
 
-        Ok(Device {
+        Device {
             config,
             stream,
             // _peer_certificate: Vec::new(),
-        })
+        }
     }
 
-    pub async fn inner_task(&mut self, message: &Message) -> anyhow::Result<()> {
+    pub async fn inner_task(&mut self, message: KdeConnectAction) {
         match message {
-            Message::Idle => {
-                println!("Idling...");
-            }
-            Message::Pair => {
+            KdeConnectAction::PairDevice => {
                 let pair_packet = Pair::create_packet(true);
                 let data = json::to_string(&pair_packet).expect("Creating packet") + "\n";
 
-                self.stream
-                    .write_all(data.as_bytes())
-                    .await
-                    .expect("[Packet] Sending");
-
-                let mut buffer = String::new();
-
-                self.stream
-                    .read_to_string(&mut buffer)
-                    .await
-                    .expect("[Packet] Reading...");
-
-                println!("{}", buffer);
+                let _ = self
+                    .stream
+                    .write_all(PacketType::Pair(data).to_data())
+                    .await;
             }
-        };
+            KdeConnectAction::SendPing => {
+                let ping_packet = Ping::create_packet("Hello COSMIC!".into());
+                let data = json::to_string(&ping_packet).expect("Creating packet") + "\n";
 
-        Ok(())
+                let _ = self
+                    .stream
+                    .write_all(PacketType::Ping(data).to_data())
+                    .await;
+            }
+        }
     }
 }

@@ -1,23 +1,13 @@
-use std::io::stdin;
+use std::{io::stdin, sync::Arc};
 
-use kdeconnect::{device::ConnectedDevice, run_server, KdeConnectAction, KdeConnectClient};
+use kdeconnect::{device::ConnectedDevice, KdeConnectAction, KdeConnectClient};
 use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (client_tx, server_rx) = mpsc::unbounded_channel::<KdeConnectAction>();
-    let client = KdeConnectClient::new(client_tx);
-
-    tokio::spawn(async move {
-        run_server(server_rx).await;
-    });
-
     let (tx, mut rx) = mpsc::unbounded_channel::<ConnectedDevice>();
 
-    let config = client.config.clone();
-    let _ = client
-        .send(KdeConnectAction::StartListener { config, tx })
-        .await?;
+    let _client = KdeConnectClient::new(tx);
 
     let mut action = String::new();
 

@@ -2,7 +2,24 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{fmt::Display, str::FromStr, time};
 
+use crate::config::KdeConnectConfig;
+
 pub const PROTOCOL_VERSION: usize = 7;
+
+#[derive(Debug, Clone)]
+pub enum PacketType {
+    Pair(String),
+    Ping(String),
+}
+
+impl PacketType {
+    pub fn to_data(&self) -> &[u8] {
+        match self {
+            PacketType::Pair(content) => content.as_bytes(),
+            PacketType::Ping(content) => content.as_bytes(),
+        }
+    }
+}
 
 struct DeserializeIDVisitor;
 
@@ -106,19 +123,23 @@ pub struct Identity {
     pub tcp_port: Option<u16>,
 }
 
-impl Identity {
-    pub fn new(device_id: String, device_name: String, tcp_port: Option<u16>) -> Self {
+impl Default for Identity {
+    fn default() -> Self {
+        let config = KdeConnectConfig::default();
+
         Self {
-            device_id,
-            device_name,
+            device_id: config.device_id,
+            device_name: config.device_name,
             device_type: DeviceType::Desktop,
             incoming_capabilities: vec!["kdeconnect.ping".into()],
             outgoing_capabilities: vec!["kdeconnect.ping".into()],
             protocol_version: PROTOCOL_VERSION,
-            tcp_port,
+            tcp_port: None,
         }
     }
+}
 
+impl Identity {
     pub fn create_packet(&mut self, port: Option<u16>) -> IdentityPacket {
         if let Some(port) = port {
             self.tcp_port = Some(port);

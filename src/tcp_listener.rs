@@ -4,13 +4,12 @@ use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddrV4},
     path::PathBuf,
-    sync::Arc,
 };
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     net::TcpListener,
-    sync::{mpsc, Mutex},
+    sync::mpsc,
 };
 use tokio_native_tls::{
     native_tls::{self},
@@ -18,7 +17,10 @@ use tokio_native_tls::{
 };
 use tracing::info;
 
-use crate::{device::DeviceStream, packets::IdentityPacket};
+use crate::{
+    device::DeviceStream,
+    packets::{self, IdentityPacket},
+};
 
 pub const KDECONNECT_PORT: u16 = 1716;
 
@@ -26,15 +28,12 @@ pub const KDECONNECT_PORT: u16 = 1716;
 pub struct TcpConnection {
     tcp_listener: TcpListener,
     tls_connector: TlsConnector,
-    stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
+    stream_tx: mpsc::UnboundedSender<DeviceStream>,
+    stream_rx: mpsc::UnboundedReceiver<DeviceStream>,
 }
 
 impl TcpConnection {
-    pub async fn new(
-        stream_tx: Arc<mpsc::UnboundedSender<DeviceStream>>,
-        root_ca: PathBuf,
-        key: PathBuf,
-    ) -> Result<Self> {
+    pub async fn new(root_ca: PathBuf, key: PathBuf) -> Result<Self> {
         let mut connector_builder = native_tls::TlsConnector::builder();
 
         let mut cert_file = File::open(&root_ca).await?;
@@ -49,29 +48,37 @@ impl TcpConnection {
         let tls_connector = TlsConnector::from(tls_connector);
 
         let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
-        let tcp_listener = TcpListener::bind(socket_addr).await?;
+        let tcp_listener = TcpListener::bind(socket_addr)
+            .await
+            .expect("Cannot bind TCP Listener");
+
+        let (stream_tx, stream_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
             stream_tx,
+            stream_rx,
             tcp_listener,
             tls_connector,
         })
     }
 
-    pub async fn listen(&self, device_id: String) -> Result<()> {
+    pub async fn listen(&mut self) -> Result<()> {
         info!("[TCP] Listening on socket");
 
-        while let Ok((stream, _)) = self.tcp_listener.accept().await {
+        while let Ok((stream, addr)) = self.tcp_listener.accept().await {
+            info!("{:?}", stream);
             let mut stream_reader = BufReader::new(stream);
             let mut identity = String::new();
 
             stream_reader.read_line(&mut identity).await?;
 
+            info!("[TCP] {:#?}", identity);
             if let Ok(packet) = json::from_str::<IdentityPacket>(&identity) {
                 let identity = packet.body;
+                let this_device = packets::Identity::default();
 
-                if identity.device_id == device_id {
-                    info!("[UDP] Dont respond to the same device");
+                if identity.device_id == this_device.device_id {
+                    info!("[TCP] Dont respond to the same device");
                     continue;
                 }
 
@@ -80,10 +87,24 @@ impl TcpConnection {
                     .connect(&identity.device_id, stream_reader)
                     .await?;
 
-                let _ = self.stream_tx.send(HashMap::from([(
-                    identity.device_id,
-                    Arc::new(Mutex::new(tls_stream)),
-                )]));
+                info!(
+                    "[via TCP] Connected with device: {} and IP: {}",
+                    identity.device_name, addr
+                );
+
+                let _ = self
+                    .stream_tx
+                    .send(HashMap::from([(identity.device_id, tls_stream)]));
+
+                while let Some(stream) = self.stream_rx.recv().await {
+                    for (_device_id, mut stream) in stream {
+                        let mut buffer = String::new();
+
+                        stream.read_to_string(&mut buffer).await?;
+
+                        println!("{}", buffer);
+                    }
+                }
             }
         }
         Ok(())
