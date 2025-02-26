@@ -18,7 +18,7 @@ use tokio_native_tls::{
 use tracing::info;
 
 use crate::{
-    device::DeviceStream,
+    device::{Device, DeviceStream},
     packets::{self, IdentityPacket},
 };
 
@@ -92,19 +92,21 @@ impl TcpConnection {
                     identity.device_name, addr
                 );
 
+                let device = Device::new(identity, tls_stream);
+
                 let _ = self
                     .stream_tx
-                    .send(HashMap::from([(identity.device_id, tls_stream)]));
+                    .send(HashMap::from([(device.config.device_id.clone(), device)]));
 
-                while let Some(stream) = self.stream_rx.recv().await {
-                    for (_device_id, mut stream) in stream {
-                        let mut buffer = String::new();
+                // while let Some(stream) = self.stream_rx.recv().await {
+                //     for (_device_id, mut stream) in stream {
+                //         let mut buffer = String::new();
 
-                        stream.read_to_string(&mut buffer).await?;
+                //         stream.read_to_string(&mut buffer).await?;
 
-                        println!("{}", buffer);
-                    }
-                }
+                //         println!("{}", buffer);
+                //     }
+                // }
             }
         }
         Ok(())

@@ -69,6 +69,11 @@ impl UdpListener {
             if let Ok(packet) = json::from_slice::<IdentityPacket>(&buffer[..len]) {
                 let identity = packet.body;
 
+                println!(
+                    "found: {}, this: {}",
+                    identity.device_id, this_identity.device_id
+                );
+
                 if identity.device_id == this_identity.device_id {
                     info!("[UDP] Dont respond to the same device");
                     continue;
@@ -97,7 +102,7 @@ impl UdpListener {
                             identity.device_name, addr
                         );
 
-                        let device = Device::new(stream);
+                        let device = Device::new(identity, stream);
 
                         self.connected_devices.send(ConnectedDevice {
                             id: device.config.device_id.clone(),
@@ -106,7 +111,7 @@ impl UdpListener {
 
                         let _ = self
                             .stream_tx
-                            .send(HashMap::from([(device.config.device_id, device.stream)]));
+                            .send(HashMap::from([(device.config.device_id.clone(), device)]));
                     }
                     Err(e) => error!("Error while accepting stream: {}", e),
                 }

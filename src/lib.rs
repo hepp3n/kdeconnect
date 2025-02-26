@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use config::KdeConnectConfig;
-use device::{ConnectedDevice, Device, DeviceStream};
+use device::{ConnectedDevice, DeviceStream};
 use tcp_listener::TcpConnection;
 use tokio::{
     sync::{mpsc, Mutex},
@@ -34,8 +34,8 @@ impl KdeConnectServer {
         message: Arc<Mutex<mpsc::UnboundedReceiver<KdeConnectAction>>>,
     ) {
         while let Some(stream) = receiver.lock().await.recv().await {
-            for (_device_id, stream) in stream.into_iter() {
-                let mut device = Device::new(stream);
+            for (device_id, mut device) in stream.into_iter() {
+                info!("Doing {} inner task.", device_id);
                 while let Some(message) = message.lock().await.recv().await {
                     device.inner_task(message).await;
                 }

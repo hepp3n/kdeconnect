@@ -11,7 +11,7 @@ use crate::{
     KdeConnectAction,
 };
 
-pub type DeviceStream = HashMap<String, TlsStream<BufReader<TcpStream>>>;
+pub type DeviceStream = HashMap<String, Device>;
 pub type ConnectedDevices = HashSet<ConnectedDevice>;
 
 #[derive(Debug)]
@@ -42,9 +42,7 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(stream: TlsStream<BufReader<TcpStream>>) -> Device {
-        let identity = Identity::default();
-
+    pub fn new(identity: Identity, stream: TlsStream<BufReader<TcpStream>>) -> Device {
         let config = DeviceConfig {
             device_id: identity.device_id,
             device_name: identity.device_name,
