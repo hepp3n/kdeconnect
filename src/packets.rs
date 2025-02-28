@@ -140,9 +140,11 @@ impl Default for Identity {
 }
 
 impl Identity {
-    pub fn create_packet(&mut self, port: Option<u16>) -> IdentityPacket {
+    pub fn create_packet(&self, port: Option<u16>) -> IdentityPacket {
+        let mut body = self.clone();
+
         if let Some(port) = port {
-            self.tcp_port = Some(port);
+            body.tcp_port = Some(port);
         }
 
         let id = time::SystemTime::now()
@@ -153,7 +155,7 @@ impl Identity {
         IdentityPacket {
             id,
             packet_type: "kdeconnect.identity".into(),
-            body: self.to_owned(),
+            body,
         }
     }
 }

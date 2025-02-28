@@ -64,7 +64,7 @@ impl Device {
         }
     }
 
-    pub async fn inner_task(&mut self, message: KdeConnectAction) {
+    pub async fn inner_task(&mut self, message: &KdeConnectAction) {
         match message {
             KdeConnectAction::PairDevice => {
                 let pair_packet = Pair::create_packet(true);
