@@ -31,6 +31,7 @@ pub const KDECONNECT_PORT: u16 = 1716;
 
 #[derive(Debug, Clone)]
 pub enum KdeConnectAction {
+    Disconnect,
     PairDevice,
     SendPing,
 }

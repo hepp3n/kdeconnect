@@ -66,6 +66,9 @@ impl Device {
 
     pub async fn inner_task(&mut self, message: &KdeConnectAction) {
         match message {
+            KdeConnectAction::Disconnect => {
+                let _ = self.stream.shutdown().await;
+            }
             KdeConnectAction::PairDevice => {
                 let pair_packet = Pair::create_packet(true);
                 let data = json::to_string(&pair_packet).expect("Creating packet") + "\n";
