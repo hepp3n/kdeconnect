@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddrV4},
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     fs::File,
@@ -67,7 +68,10 @@ impl KdeConnectServer {
         key_file.read_to_end(&mut key).await?;
         let pkcs8 = native_tls::Identity::from_pkcs8(&certs, &key)?;
 
-        let tls_connector = connector_builder.identity(pkcs8.clone()).build()?;
+        let tls_connector = connector_builder
+            .danger_accept_invalid_certs(true)
+            .build()?;
+
         let tls_connector = TlsConnector::from(tls_connector);
 
         let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
@@ -96,17 +100,15 @@ impl KdeConnectServer {
         })
     }
 
-    pub async fn tcp_listener(&self) -> Result<()> {
+    async fn tcp_listener(&self) -> Result<()> {
         info!("[TCP] Listening on socket");
 
         while let Ok((stream, addr)) = self.tcp_listener.accept().await {
-            info!("{:?}", stream);
             let mut stream_reader = BufReader::new(stream);
             let mut identity = String::new();
 
             stream_reader.read_line(&mut identity).await?;
 
-            info!("[TCP] {:#?}", identity);
             if let Ok(packet) = json::from_str::<IdentityPacket>(&identity) {
                 let identity = packet.body;
                 let this_device = packets::Identity::default();
@@ -119,7 +121,8 @@ impl KdeConnectServer {
                 let tls_stream = self
                     .tls_connector
                     .connect(&identity.device_id, stream_reader)
-                    .await?;
+                    .await
+                    .expect("[TCP] Connecting streams");
 
                 info!(
                     "[via TCP] Connected with device: {} and IP: {}",
@@ -137,12 +140,12 @@ impl KdeConnectServer {
         Ok(())
     }
 
-    pub async fn udp_listener(&self) -> Result<()> {
+    async fn udp_listener(&self) -> Result<()> {
         info!("[UDP] Listening on socket");
 
-        let mut buffer = vec![0; 8192];
-
         loop {
+            let mut buffer = vec![0; 8192];
+
             let (len, mut addr) = self.udp_socket.recv_from(&mut buffer).await?;
             if let Ok(packet) = json::from_slice::<IdentityPacket>(&buffer[..len]) {
                 let identity = packet.body;
@@ -200,11 +203,28 @@ impl KdeConnectServer {
         }
     }
 
+    async fn broadcast_identity(&self) -> Result<()> {
+        let packet = self.identity.create_packet(None);
+        let data = json::to_string(&packet).expect("Creating packet") + "\n";
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            self.udp_socket
+                .send_to(
+                    data.as_bytes(),
+                    SocketAddrV4::new(Ipv4Addr::BROADCAST, KDECONNECT_PORT),
+                )
+                .await?;
+        }
+    }
+
     pub async fn start_server(&mut self) -> Result<()> {
         select! {
-            _x = self.udp_listener() => (),
-            _x = self.tcp_listener() => (),
-            _x = self.messenger() => (),
+            _a = self.udp_listener() => (),
+            _b = self.tcp_listener() => (),
+            _c = self.broadcast_identity() => (),
+            _d = self.messenger() => (),
         };
 
         Ok(())
