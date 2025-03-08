@@ -6,7 +6,8 @@ use std::{
 };
 
 use crate::{
-    cert::{generate_cert_and_keypair, CERTIFICATE, PRIVATE_KEY},
+    cert::{generate_cert_and_keypair, CERTIFICATE, PRIVATE_KEY, SIGNED_CERT},
+    packets::Identity,
     utils::{generate_device_id, get_default_devicename},
 };
 
@@ -14,9 +15,9 @@ const CONFIG_FILE: &str = "config.ron";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KdeConnectConfig {
-    pub device_id: String,
-    pub device_name: String,
+    pub identity: Identity,
     pub root_ca: PathBuf,
+    pub signed_ca: PathBuf,
     pub priv_key: PathBuf,
 }
 
@@ -32,6 +33,7 @@ impl Default for KdeConnectConfig {
         let device_name = get_default_devicename();
 
         let root_ca = path.join(CERTIFICATE);
+        let signed_ca = path.join(SIGNED_CERT);
         let priv_key = path.join(PRIVATE_KEY);
 
         if !root_ca.exists() && !priv_key.exists() {
@@ -48,10 +50,12 @@ impl Default for KdeConnectConfig {
             return x;
         }
 
+        let identity = Identity::new(device_id, device_name);
+
         let kdeconnect_config = KdeConnectConfig {
-            device_id,
-            device_name,
+            identity,
             root_ca,
+            signed_ca,
             priv_key,
         };
 

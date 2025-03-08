@@ -13,8 +13,14 @@ use openssl::{
     },
 };
 use std::{fs::File, io::Write, path::Path};
+use tokio_rustls::rustls::{
+    self,
+    client::danger::{ServerCertVerified, ServerCertVerifier},
+    crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider},
+};
 
 pub const CERTIFICATE: &str = "root.ca";
+pub const SIGNED_CERT: &str = "signed.ca";
 pub const PRIVATE_KEY: &str = "privkey.pem";
 
 /// Make a CA certificate and private key
@@ -151,13 +157,69 @@ pub fn generate_cert_and_keypair(org: &str, cn: &str, path: &Path) -> anyhow::Re
     match ca_cert.issued(&cert) {
         X509VerifyResult::OK => {
             let mut ca_file = File::create(path.join(CERTIFICATE))?;
+            let mut sign_file = File::create(path.join(SIGNED_CERT))?;
             let mut key_file = File::create(path.join(PRIVATE_KEY))?;
 
-            ca_file.write_all(&cert.to_pem()?)?;
+            ca_file.write_all(&ca_cert.to_pem()?)?;
+            sign_file.write_all(&cert.to_pem()?)?;
             key_file.write_all(&key_pair.private_key_to_pem_pkcs8()?)?;
         }
         ver_err => println!("Failed to verify certificate: {}", ver_err),
     };
 
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct NoCertificateVerification(pub CryptoProvider);
+
+impl NoCertificateVerification {
+    pub fn new(provider: CryptoProvider) -> Self {
+        Self(provider)
+    }
+}
+
+impl ServerCertVerifier for NoCertificateVerification {
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
 }

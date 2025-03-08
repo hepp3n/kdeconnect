@@ -2,8 +2,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{fmt::Display, str::FromStr, time};
 
-use crate::config::KdeConnectConfig;
-
 pub const PROTOCOL_VERSION: usize = 7;
 
 #[derive(Debug, Clone)]
@@ -123,13 +121,11 @@ pub struct Identity {
     pub tcp_port: Option<u16>,
 }
 
-impl Default for Identity {
-    fn default() -> Self {
-        let config = KdeConnectConfig::default();
-
+impl Identity {
+    pub fn new(device_id: String, device_name: String) -> Self {
         Self {
-            device_id: config.device_id,
-            device_name: config.device_name,
+            device_id,
+            device_name,
             device_type: DeviceType::Desktop,
             incoming_capabilities: vec!["kdeconnect.ping".into()],
             outgoing_capabilities: vec!["kdeconnect.ping".into()],

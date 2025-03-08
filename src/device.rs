@@ -4,7 +4,7 @@ use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
 };
-use tokio_native_tls::TlsStream;
+use tokio_rustls::TlsStream;
 
 use crate::{
     packets::{DeviceType, Identity, PacketType, Pair, Ping},
@@ -25,7 +25,6 @@ pub struct DeviceConfig {
     pub device_id: String,
     pub device_name: String,
     pub device_type: DeviceType,
-    // pub certificate: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,30 +37,33 @@ pub struct ConnectedDevice {
 pub struct Device {
     pub config: DeviceConfig,
     pub stream: TlsStream<BufReader<TcpStream>>,
-    // _peer_certificate: Vec<u8>,
+    pub peer_certificate: Vec<u8>,
 }
 
 impl Device {
-    pub fn new(identity: Identity, stream: TlsStream<BufReader<TcpStream>>) -> Device {
+    pub fn new(
+        identity: Identity,
+        stream: TlsStream<BufReader<TcpStream>>,
+    ) -> anyhow::Result<Device> {
         let config = DeviceConfig {
             device_id: identity.device_id,
             device_name: identity.device_name,
             device_type: identity.device_type,
         };
 
-        // if let Some(cert) = stream.get_ref().peer_certificate()? {
-        //     return Ok(Device {
-        //         config,
-        //         stream,
-        //         _peer_certificate: cert.to_der()?,
-        //     });
-        // }
+        if let Some(cert) = stream.get_ref().1.peer_certificates() {
+            return Ok(Device {
+                config,
+                peer_certificate: cert[0].to_vec(),
+                stream,
+            });
+        }
 
-        Device {
+        Ok(Device {
             config,
             stream,
-            // _peer_certificate: Vec::new(),
-        }
+            peer_certificate: Vec::new(),
+        })
     }
 
     pub async fn inner_task(&mut self, message: &KdeConnectAction) {
