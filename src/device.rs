@@ -1,5 +1,5 @@
 use serde_json as json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
@@ -11,7 +11,6 @@ use crate::{
     KdeConnectAction,
 };
 
-pub type DeviceStream = HashMap<String, Device>;
 pub type ConnectedDevices = HashSet<ConnectedDevice>;
 
 #[derive(Debug)]

@@ -20,24 +20,21 @@ use tokio_rustls::{
 use tracing::info;
 
 use crate::{
-    cert::NoCertificateVerification,
-    config::KdeConnectConfig,
-    device::{Device, DeviceStream},
-    packets::IdentityPacket,
-    KDECONNECT_PORT,
+    cert::NoCertificateVerification, config::KdeConnectConfig, device::Device,
+    packets::IdentityPacket, KDECONNECT_PORT,
 };
 
 pub struct Tcp {
     pub config: KdeConnectConfig,
     pub listener: TcpListener,
     pub connector: TlsConnector,
-    new_device_tx: UnboundedSender<DeviceStream>,
+    new_device_tx: UnboundedSender<Device>,
 }
 
 impl Tcp {
     pub async fn new(
         config: KdeConnectConfig,
-        new_device_tx: UnboundedSender<DeviceStream>,
+        new_device_tx: UnboundedSender<Device>,
     ) -> Result<Tcp> {
         let certs = CertificateDer::from_pem_file(&config.signed_ca)?;
 
@@ -106,9 +103,7 @@ impl Tcp {
                     tokio_rustls::TlsStream::Client(tls_stream),
                 )?;
 
-                let _ = self
-                    .new_device_tx
-                    .send(DeviceStream::from([(identity.device_id, device)]));
+                let _ = self.new_device_tx.send(device);
             };
         }
 

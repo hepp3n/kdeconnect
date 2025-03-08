@@ -1,7 +1,8 @@
 use anyhow::Result;
 use config::KdeConnectConfig;
-use device::{ConnectedDevice, DeviceStream};
+use device::{ConnectedDevice, Device};
 use tokio::sync::mpsc::{self, channel, Receiver, Sender, UnboundedReceiver};
+use tracing::info;
 use udp::UdpListener;
 
 mod cert;
@@ -24,7 +25,7 @@ pub enum KdeConnectAction {
 #[derive(Debug)]
 pub struct KdeConnectServer {
     connected_devices: Sender<ConnectedDevice>,
-    new_device_rx: UnboundedReceiver<DeviceStream>,
+    new_device_rx: UnboundedReceiver<Device>,
     action_rx: Receiver<KdeConnectAction>,
 }
 
@@ -61,20 +62,17 @@ impl KdeConnectServer {
 
     pub async fn send_action(&mut self) -> Result<()> {
         while let Some(mut device) = self.new_device_rx.recv().await {
-            for d in device.iter_mut() {
-                let _ = self
-                    .connected_devices
-                    .send(ConnectedDevice {
-                        id: d.1.config.device_id.clone(),
-                        name: d.1.config.device_name.clone(),
-                    })
-                    .await;
+            info!("[LIB] Add new device: {:#?}", device);
+            let _ = self
+                .connected_devices
+                .send(ConnectedDevice {
+                    id: device.config.device_id.clone(),
+                    name: device.config.device_name.clone(),
+                })
+                .await;
 
-                if &d.1.config.device_id == d.0 {
-                    while let Some(action) = self.action_rx.recv().await {
-                        let _ = d.1.inner_task(&action).await;
-                    }
-                }
+            while let Some(action) = self.action_rx.recv().await {
+                let _ = device.inner_task(&action).await;
             }
         }
 

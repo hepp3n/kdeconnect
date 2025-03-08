@@ -19,24 +19,19 @@ use tokio_rustls::{
 };
 use tracing::{error, info};
 
-use crate::{
-    config::KdeConnectConfig,
-    device::{Device, DeviceStream},
-    packets::IdentityPacket,
-    KDECONNECT_PORT,
-};
+use crate::{config::KdeConnectConfig, device::Device, packets::IdentityPacket, KDECONNECT_PORT};
 
 pub struct UdpListener {
     config: KdeConnectConfig,
     udp_socket: UdpSocket,
     tls_acceptor: TlsAcceptor,
-    new_device_tx: UnboundedSender<DeviceStream>,
+    new_device_tx: UnboundedSender<Device>,
 }
 
 impl UdpListener {
     pub async fn new(
         config: KdeConnectConfig,
-        new_device_tx: UnboundedSender<DeviceStream>,
+        new_device_tx: UnboundedSender<Device>,
     ) -> Result<UdpListener> {
         let socket_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KDECONNECT_PORT);
         let udp_socket = UdpSocket::bind(socket_addr).await?;
@@ -103,10 +98,7 @@ impl UdpListener {
                         let device =
                             Device::new(identity.clone(), tokio_rustls::TlsStream::Server(stream))?;
 
-                        let _ = self
-                            .new_device_tx
-                            .send(DeviceStream::from([(identity.device_id, device)]));
-
+                        let _ = self.new_device_tx.send(device);
                         let _ = self.send_identity(addr).await;
                     }
                     Err(e) => error!("Error while accepting stream: {}", e),
@@ -132,7 +124,7 @@ impl UdpListener {
         let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), KDECONNECT_PORT);
 
         loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(15)).await;
 
             let _ = self.send_identity(socket_addr).await;
 
