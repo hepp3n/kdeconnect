@@ -1,16 +1,15 @@
 use anyhow::Result;
+use backend::{Backend, Connector};
 use config::KdeConnectConfig;
 use device::{ConnectedDevice, Device};
-use tokio::sync::mpsc::{self, channel, Receiver, Sender, UnboundedReceiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender, UnboundedReceiver};
 use tracing::info;
-use udp::UdpListener;
 
+mod backend;
 mod cert;
 mod config;
 pub mod device;
 mod packets;
-mod tcp;
-mod udp;
 mod utils;
 
 pub const KDECONNECT_PORT: u16 = 1716;
@@ -35,23 +34,9 @@ impl KdeConnectServer {
         connected_devices: Sender<ConnectedDevice>,
         action_rx: Receiver<KdeConnectAction>,
     ) -> Result<KdeConnectServer> {
-        let (new_device_tx, new_device_rx) = mpsc::unbounded_channel();
+        let (backend, new_device_rx) = Backend::new(config).await?;
 
-        let udp_listener = UdpListener::new(config.clone(), new_device_tx.clone())
-            .await
-            .expect("[UDP] Error....");
-
-        let tcp_listener = tcp::Tcp::new(config.clone(), new_device_tx.clone())
-            .await
-            .expect("[TCP] Error....");
-
-        tokio::spawn(async move {
-            tokio::select! {
-                _a = tcp_listener.start() => (),
-                _b = udp_listener.start() => (),
-                _c = udp_listener.broadcast_identity() => (),
-            }
-        });
+        tokio::spawn(async move { backend.listen().await });
 
         Ok(KdeConnectServer {
             connected_devices,
