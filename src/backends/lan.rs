@@ -9,9 +9,9 @@ use tokio::net;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use tokio_native_tls::{self, native_tls};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
-use crate::device::{self, NewDevice};
+use crate::device::{self, ConnectionType, NewClient};
 use crate::packet::Identity;
 use crate::{
     backends::{BROADCAST_ADDR, DEFAULT_PORT, LOCALHOST, UNSPECIFIED_ADDR},
@@ -27,9 +27,8 @@ pub(crate) struct LanLinkProvider {
     u_socket: Option<Arc<net::UdpSocket>>,
     disabled: bool,
     test_mode: bool,
-    device_tx: Option<mpsc::UnboundedSender<(String, device::Device)>>,
-    connected_clients: Arc<Mutex<NewDevice>>,
-    connected_servers: Arc<Mutex<NewDevice>>,
+    device_tx: Option<mpsc::UnboundedSender<NewClient>>,
+    connected_clients: Arc<Mutex<Vec<NewClient>>>,
 }
 
 impl LanLinkProvider {
@@ -46,8 +45,7 @@ impl LanLinkProvider {
             disabled: false,
             test_mode: false,
             device_tx: None,
-            connected_clients: Arc::new(Mutex::new(NewDevice::new())),
-            connected_servers: Arc::new(Mutex::new(NewDevice::new())),
+            connected_clients: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -55,10 +53,7 @@ impl LanLinkProvider {
         self.disabled
     }
 
-    pub(crate) async fn on_start(
-        &mut self,
-        device_tx: mpsc::UnboundedSender<(String, device::Device)>,
-    ) {
+    pub(crate) async fn on_start(&mut self, device_tx: mpsc::UnboundedSender<NewClient>) {
         if self.disabled {
             return;
         }
@@ -130,6 +125,13 @@ impl LanLinkProvider {
                     continue;
                 }
 
+                if self.connected_clients.lock().await.iter().any(|client| {
+                    client.0 == identity.device_id && client.1 == ConnectionType::Server
+                }) {
+                    debug!("[TCP] Device already connected: {}", identity.device_id);
+                    continue;
+                }
+
                 if let Some(port) = identity.tcp_port {
                     addr.set_port(port);
                 }
@@ -144,7 +146,7 @@ impl LanLinkProvider {
                             .expect("Failed to create TLS identity"),
                     );
                     connector.danger_accept_invalid_certs(true);
-                    connector.use_sni(true);
+                    connector.use_sni(false);
                     let connector = tokio_native_tls::TlsConnector::from(
                         connector.build().expect("Failed to create TLS connector"),
                     );
@@ -159,6 +161,11 @@ impl LanLinkProvider {
                         .await
                         .expect("[TCP] Failed to write data to TLS stream");
 
+                    tls_stream
+                        .flush()
+                        .await
+                        .expect("[TCP] Failed to flush TLS stream");
+
                     debug!(
                         "New Device Found: {} - {}",
                         identity.device_id, identity.device_name
@@ -169,19 +176,26 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
+                    let new_client = NewClient(
+                        identity.device_id.clone(),
+                        device::ConnectionType::Server,
+                        device.clone(),
+                    );
+
+                    self.connected_clients.lock().await.push(new_client.clone());
+
                     if let Some(tx) = &self.device_tx {
-                        tx.send((identity.device_id.clone(), device.clone()))
-                            .unwrap_or_else(|e| {
-                                warn!("Failed to send device to channel: {}", e);
-                            });
+                        tx.send(new_client).unwrap_or_else(|e| {
+                            warn!("Failed to send device to channel: {}", e);
+                        });
                     } else {
                         warn!("Device channel is not set, cannot send device");
                     }
 
-                    self.connected_clients
-                        .lock()
-                        .await
-                        .insert(identity.device_id.clone(), device);
+                    info!(
+                        "Current clients: {}",
+                        self.connected_clients.lock().await.len()
+                    );
 
                     debug!("Linked as client....");
 
@@ -213,6 +227,13 @@ impl LanLinkProvider {
                     continue;
                 }
 
+                if self.connected_clients.lock().await.iter().any(|client| {
+                    client.0 == identity.device_id && client.1 == ConnectionType::Client
+                }) {
+                    debug!("[TCP] Device already connected: {}", identity.device_id);
+                    continue;
+                }
+
                 let ret = async {
                     if let Some(port) = identity.tcp_port {
                         addr.set_port(port);
@@ -240,10 +261,16 @@ impl LanLinkProvider {
                     );
 
                     let mut tls_stream = tls_acceptor.accept(sock).await.expect("accept error");
+
                     tls_stream
                         .write_all(data.as_bytes())
                         .await
                         .expect("[TCP] Failed to write data to TLS stream");
+
+                    tls_stream
+                        .flush()
+                        .await
+                        .expect("[TCP] Failed to flush TLS stream");
 
                     debug!(
                         "New Device Found: {} - {}",
@@ -255,19 +282,26 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
+                    let new_client = NewClient(
+                        identity.device_id.clone(),
+                        device::ConnectionType::Client,
+                        device.clone(),
+                    );
+
+                    self.connected_clients.lock().await.push(new_client.clone());
+
                     if let Some(tx) = &self.device_tx {
-                        tx.send((identity.device_id.clone(), device.clone()))
-                            .unwrap_or_else(|e| {
-                                warn!("Failed to send device to channel: {}", e);
-                            });
+                        tx.send(new_client).unwrap_or_else(|e| {
+                            warn!("Failed to send device to channel: {}", e);
+                        });
                     } else {
                         warn!("Device channel is not set, cannot send device");
                     }
 
-                    self.connected_servers
-                        .lock()
-                        .await
-                        .insert(identity.device_id.clone(), device);
+                    info!(
+                        "Current clients: {}",
+                        self.connected_clients.lock().await.len()
+                    );
 
                     debug!("New server linked....");
 

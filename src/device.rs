@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{fmt::Display, sync::Arc};
 
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
@@ -14,11 +14,31 @@ use crate::{
     plugins::PluginHandler,
 };
 
+pub type Linked = (ConnectedId, ConnectionType);
+
 pub type ConnectedId = String;
-pub type NewDevice = HashMap<ConnectedId, Device>;
+
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum ConnectionType {
+    Client,
+    Server,
+}
+
+impl Display for ConnectionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionType::Client => write!(f, "Client"),
+            ConnectionType::Server => write!(f, "Server"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NewClient(pub ConnectedId, pub ConnectionType, pub Device);
 
 #[derive(Debug, Clone)]
 pub enum DeviceAction {
+    Disconnect,
     Pair(bool),
     Ping(String),
 }
@@ -26,13 +46,14 @@ pub enum DeviceAction {
 impl Display for DeviceAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DeviceAction::Disconnect => write!(f, "Disconnect action"),
             DeviceAction::Pair(flag) => write!(f, "Pair action: {}", flag),
             DeviceAction::Ping(msg) => write!(f, "Ping action: {}", msg),
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Device {
     reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
     writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
@@ -92,7 +113,7 @@ impl Device {
 
                 match reader.read_line(&mut buffer).await {
                     Ok(0) => {
-                        info!("Connection closed by peer");
+                        info!("EOF reached.");
                         break; // EOF reached
                     }
                     Ok(_) => {
@@ -111,10 +132,24 @@ impl Device {
             debug!("Received action: {}", action);
 
             match action {
+                DeviceAction::Disconnect => {
+                    info!("Disconnect action received. Closing connection.");
+                    let mut writer = self.writer.lock().await;
+                    if let Err(e) = writer.shutdown().await {
+                        error!("Failed to shutdown writer: {}", e);
+                    }
+                    break;
+                }
                 DeviceAction::Pair(flag) => self.pair_handler(flag).await,
                 DeviceAction::Ping(msg) => self.ping(msg).await,
             }
         }
+    }
+
+    pub fn send(&self, action: DeviceAction) {
+        self.action_tx
+            .send(action)
+            .unwrap_or_else(|e| error!("Failed to send action: {}", e));
     }
 
     async fn pair_handler(&self, pair: bool) {

@@ -7,7 +7,7 @@ pub(crate) mod plugins;
 pub(crate) mod ssl;
 
 use backends::start_backends;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     sync::{
         Mutex,
@@ -16,23 +16,23 @@ use tokio::{
     task,
 };
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
-use tracing::debug;
+use tracing::{debug, error};
 
-use crate::device::{ConnectedId, NewDevice};
+use crate::device::{Linked, NewClient};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KdeConnect {
-    devices: Arc<Mutex<NewDevice>>,
-    device_tx: mpsc::UnboundedSender<ConnectedId>,
+    devices: Arc<Mutex<Vec<NewClient>>>,
+    device_tx: mpsc::UnboundedSender<Linked>,
 }
 
 impl KdeConnect {
-    pub fn new() -> (Self, UnboundedReceiverStream<ConnectedId>) {
-        let (conn_tx, conn_rx) = mpsc::unbounded_channel();
+    pub fn new() -> (Self, UnboundedReceiverStream<Linked>) {
+        let (conn_tx, conn_rx) = mpsc::unbounded_channel::<Linked>();
 
         (
             Self {
-                devices: Arc::new(Mutex::new(HashMap::new())),
+                devices: Arc::new(Mutex::new(Vec::new())),
                 device_tx: conn_tx,
             },
             conn_rx.into(),
@@ -55,18 +55,18 @@ impl KdeConnect {
 
         let mut stream = UnboundedReceiverStream::new(rx);
 
-        while let Some(mut data) = stream.next().await {
-            self.devices
-                .lock()
-                .await
-                .insert(data.0.clone(), data.1.clone());
+        while let Some(data) = stream.next().await {
+            self.device_tx
+                .send((data.0.clone(), data.1.clone()))
+                .unwrap_or_else(|e| {
+                    error!("Failed to send device ID: {}", e);
+                });
 
-            self.device_tx.send(data.0.clone()).unwrap_or_else(|e| {
-                tracing::error!("Failed to send device ID: {}", e);
-            });
+            self.devices.lock().await.push(data.clone());
 
             task::spawn(async move {
-                data.1.process_stream().await;
+                let mut device = data.2;
+                device.process_stream().await;
             });
         }
     }
@@ -77,14 +77,13 @@ impl KdeConnect {
         tokio::spawn(async move {
             let guard = devices.lock().await;
 
-            let Some(device) = guard.get(&device_id) else {
-                tracing::warn!("Device with ID {} not found", device_id);
-                return;
-            };
-
-            device.action_tx.send(action).unwrap_or_else(|e| {
-                tracing::error!("Failed to send action to device {}: {}", device_id, e);
-            });
+            for device in guard.iter() {
+                if device.0 == device_id {
+                    device.2.send(action.clone())
+                } else {
+                    error!("Device with ID {} not found", device_id);
+                }
+            }
         });
     }
 }

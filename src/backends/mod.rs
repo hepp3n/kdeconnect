@@ -1,7 +1,7 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::sync::mpsc;
 
-use crate::device;
+use crate::device::NewClient;
 
 pub(crate) mod lan;
 
@@ -13,7 +13,7 @@ pub(crate) const UNSPECIFIED_ADDR: SocketAddr =
 pub(crate) const LOCALHOST: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, DEFAULT_PORT));
 
-pub(crate) async fn start_backends(device_tx: mpsc::UnboundedSender<(String, device::Device)>) {
+pub(crate) async fn start_backends(device_tx: mpsc::UnboundedSender<NewClient>) {
     let mut lan_link_provider = lan::LanLinkProvider::new();
 
     if !lan_link_provider.is_disabled() {
