@@ -144,13 +144,19 @@ pub struct Ping {
 }
 
 impl Ping {
-    pub fn create_packet(message: String) -> PingPacket {
-        let ping = Ping { message };
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
 
+    pub fn create_packet(&self) -> PingPacket {
         PingPacket {
             id: packet_id(),
             packet_type: "kdeconnect.ping".into(),
-            body: ping,
+            body: self.clone(),
         }
+    }
+
+    pub fn to_string(&self) -> String {
+        serde_json::to_string(&self.create_packet()).expect("serializing packet")
     }
 }

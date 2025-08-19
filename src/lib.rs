@@ -1,6 +1,6 @@
 pub(crate) mod backends;
 pub(crate) mod config;
-pub(crate) mod device;
+pub mod device;
 pub(crate) mod helpers;
 pub(crate) mod packet;
 pub(crate) mod plugins;
@@ -8,14 +8,17 @@ pub(crate) mod ssl;
 
 use backends::start_backends;
 use std::{collections::HashMap, sync::Arc};
-use tokio::{sync::mpsc, task};
+use tokio::{
+    sync::{Mutex, mpsc},
+    task,
+};
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 use tracing::debug;
 
 use crate::device::Device;
 
 pub struct KdeConnect {
-    devices: Option<HashMap<String, Arc<Device>>>,
+    devices: Arc<Mutex<HashMap<String, Device>>>,
 }
 
 impl Default for KdeConnect {
@@ -26,12 +29,14 @@ impl Default for KdeConnect {
 
 impl KdeConnect {
     pub fn new() -> Self {
-        Self { devices: None }
+        Self {
+            devices: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
 impl KdeConnect {
-    pub async fn run_server(&mut self) {
+    pub async fn run_server(&self) {
         let (tx, rx) = mpsc::unbounded_channel();
 
         debug!("Starting KDE Connect");
@@ -45,26 +50,28 @@ impl KdeConnect {
 
         let mut stream = UnboundedReceiverStream::new(rx);
 
-        while let Some(device) = stream.next().await {
+        while let Some(data) = stream.next().await {
             debug!("Received device");
-            let dev = Arc::new(device.1);
-            let cloned = Arc::clone(&dev);
+            self.devices.lock().await.insert(data.0, data.1.clone());
 
             task::spawn(async move {
-                cloned.process_stream().await;
+                data.1.process_stream().await;
             });
-
-            self.devices
-                .get_or_insert_with(HashMap::new)
-                .insert(device.0, dev);
         }
     }
 
-    pub fn send_action(&self, device_id: &str, action: device::DeviceAction) {
-        self.devices
-            .as_ref()
-            .and_then(|devices| devices.get(device_id))
-            .expect("Device not found")
-            .send_action(action);
+    pub fn send_action(&self, device_id: String, action: device::DeviceAction) {
+        let devices = Arc::clone(&self.devices);
+
+        tokio::spawn(async move {
+            let guard = devices.lock().await;
+
+            let Some(device) = guard.get(&device_id) else {
+                tracing::warn!("Device with ID {} not found", device_id);
+                return;
+            };
+
+            device.send_action(action);
+        });
     }
 }
