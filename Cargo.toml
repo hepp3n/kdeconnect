@@ -1,0 +1,21 @@
+[package]
+name = "kdeconnect"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dirs = "6.0.0"
+hostname = "0.4.1"
+lazy_static = "1.5.0"
+rcgen = "0.14.2"
+ron = "0.10.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+time = "0.3.41"
+tokio = { version = "1", features = ["full"] }
+tokio-native-tls = { version = "0.3.1", features = ["vendored"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+uuid = { version = "1.17.0", features = ["v4"] }
+webpki-roots = "1.0.1"
