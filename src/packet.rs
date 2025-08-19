@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt::Display;
-
-use crate::helpers::packet_id;
+use std::{fmt::Display, time::SystemTime};
 
 pub const PROTOCOL_VERSION: usize = 8;
 
@@ -49,7 +47,6 @@ impl Display for DeviceType {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IdentityPacket {
-    pub id: u128,
     #[serde(rename = "type")]
     pub packet_type: String,
     pub body: Identity,
@@ -73,8 +70,18 @@ impl Identity {
             device_id,
             device_name,
             device_type: DeviceType::Desktop,
-            incoming_capabilities: vec!["kdeconnect.ping".into()],
-            outgoing_capabilities: vec!["kdeconnect.ping".into()],
+            incoming_capabilities: vec![
+                "kdeconnect.ping".into(),
+                "kdeconnect.notification".into(),
+                "kdeconnect.runcommand".into(),
+                "kdeconnect.runcommand.request".into(),
+            ],
+            outgoing_capabilities: vec![
+                "kdeconnect.ping".into(),
+                "kdeconnect.notification".into(),
+                "kdeconnect.runcommand".into(),
+                "kdeconnect.runcommand.request".into(),
+            ],
             protocol_version: PROTOCOL_VERSION,
             tcp_port: None,
         }
@@ -88,7 +95,6 @@ impl Identity {
         }
 
         IdentityPacket {
-            id: packet_id(),
             packet_type: "kdeconnect.identity".into(),
             body,
         }
@@ -101,7 +107,6 @@ impl Identity {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PairPacket {
-    pub id: u128,
     #[serde(rename = "type")]
     pub packet_type: String,
     pub body: Pair,
@@ -110,16 +115,21 @@ pub struct PairPacket {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Pair {
     pair: bool,
+    timestamp: u64,
 }
 
 impl Pair {
     pub fn new(pair: bool) -> Self {
-        Self { pair }
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+
+        Self { pair, timestamp }
     }
 
     pub fn create_packet(&self) -> PairPacket {
         PairPacket {
-            id: packet_id(),
             packet_type: "kdeconnect.pair".into(),
             body: self.clone(),
         }
@@ -132,7 +142,6 @@ impl Pair {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PingPacket {
-    pub id: u128,
     #[serde(rename = "type")]
     pub packet_type: String,
     pub body: Ping,
@@ -150,7 +159,6 @@ impl Ping {
 
     pub fn create_packet(&self) -> PingPacket {
         PingPacket {
-            id: packet_id(),
             packet_type: "kdeconnect.ping".into(),
             body: self.clone(),
         }

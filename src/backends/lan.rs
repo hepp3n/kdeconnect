@@ -161,11 +161,6 @@ impl LanLinkProvider {
                         .await
                         .expect("[TCP] Failed to write data to TLS stream");
 
-                    tls_stream
-                        .flush()
-                        .await
-                        .expect("[TCP] Failed to flush TLS stream");
-
                     debug!(
                         "New Device Found: {} - {}",
                         identity.device_id, identity.device_name
@@ -266,11 +261,6 @@ impl LanLinkProvider {
                         .write_all(data.as_bytes())
                         .await
                         .expect("[TCP] Failed to write data to TLS stream");
-
-                    tls_stream
-                        .flush()
-                        .await
-                        .expect("[TCP] Failed to flush TLS stream");
 
                     debug!(
                         "New Device Found: {} - {}",

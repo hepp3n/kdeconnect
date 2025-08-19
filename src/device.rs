@@ -1,5 +1,5 @@
+use serde_json as json;
 use std::{fmt::Display, sync::Arc};
-
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -10,7 +10,9 @@ use tokio_native_tls::TlsStream;
 use tracing::{debug, error, info};
 
 use crate::{
-    packet::{Pair, Ping},
+    backends::DEFAULT_PORT,
+    config::CONFIG,
+    packet::{Identity, IdentityPacket, Pair, Ping},
     plugins::PluginHandler,
 };
 
@@ -85,6 +87,19 @@ pub(crate) fn create_device(
 }
 
 impl PluginHandler for Device {
+    async fn pair(&self, flag: bool) {
+        let pair_packet = Pair::new(flag).to_string() + "\n";
+
+        let mut writer = self.writer.lock().await;
+
+        if let Err(e) = writer.write_all(pair_packet.as_bytes()).await {
+            error!("Failed to send Pair packet: {}", e);
+        } else {
+            info!("Pair packet sent successfully");
+            info!("{}", pair_packet);
+        }
+    }
+
     async fn ping(&self, message: String) {
         let ping_packet = Ping::new(message).to_string() + "\n";
 
@@ -103,6 +118,15 @@ impl Device {
     pub(crate) async fn process_stream(&mut self) {
         let c_reader = Arc::clone(&self.reader);
 
+        self.writer
+            .lock()
+            .await
+            .flush()
+            .await
+            .expect("Failed to flush writer");
+
+        let c_writer = Arc::clone(&self.writer);
+
         task::spawn(async move {
             let mut reader = c_reader.lock().await;
 
@@ -117,7 +141,27 @@ impl Device {
                         break; // EOF reached
                     }
                     Ok(_) => {
-                        info!("{}", buffer);
+                        debug!("Received data: {}", buffer);
+
+                        if let Ok(packet) = json::from_str::<IdentityPacket>(&buffer) {
+                            info!("Received IdentityPacket from {}", packet.body.device_name);
+
+                            let my_identity = Identity::new(
+                                CONFIG.device_uuid.clone(),
+                                CONFIG.device_name.clone(),
+                            );
+
+                            let data = my_identity.to_string(Some(DEFAULT_PORT));
+
+                            c_writer
+                                .lock()
+                                .await
+                                .write_all(data.as_bytes())
+                                .await
+                                .expect("Failed to write to stream");
+
+                            info!("Sent IdentityPacket back: {}", data);
+                        }
                     }
                     Err(e) => {
                         error!("Failed to read from stream: {}", e);
@@ -140,7 +184,7 @@ impl Device {
                     }
                     break;
                 }
-                DeviceAction::Pair(flag) => self.pair_handler(flag).await,
+                DeviceAction::Pair(flag) => self.pair(flag).await,
                 DeviceAction::Ping(msg) => self.ping(msg).await,
             }
         }
@@ -150,18 +194,5 @@ impl Device {
         self.action_tx
             .send(action)
             .unwrap_or_else(|e| error!("Failed to send action: {}", e));
-    }
-
-    async fn pair_handler(&self, pair: bool) {
-        let pair_packet = Pair::new(pair).to_string() + "\n";
-
-        let mut writer = self.writer.lock().await;
-
-        if let Err(e) = writer.write_all(pair_packet.as_bytes()).await {
-            error!("Failed to send Pair packet: {}", e);
-        } else {
-            info!("Pair packet sent successfully");
-            info!("{}", pair_packet);
-        }
     }
 }
