@@ -15,22 +15,18 @@ use tokio::{
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 use tracing::debug;
 
-use crate::device::Device;
+use crate::device::{ConnectedId, Device, NewDevice};
 
 pub struct KdeConnect {
-    devices: Arc<Mutex<HashMap<String, Device>>>,
-}
-
-impl Default for KdeConnect {
-    fn default() -> Self {
-        Self::new()
-    }
+    devices: Arc<Mutex<NewDevice>>,
+    device_tx: mpsc::UnboundedSender<ConnectedId>,
 }
 
 impl KdeConnect {
-    pub fn new() -> Self {
+    pub fn new(device_tx: mpsc::UnboundedSender<ConnectedId>) -> Self {
         Self {
             devices: Arc::new(Mutex::new(HashMap::new())),
+            device_tx,
         }
     }
 }
@@ -52,7 +48,14 @@ impl KdeConnect {
 
         while let Some(data) = stream.next().await {
             debug!("Received device");
-            self.devices.lock().await.insert(data.0, data.1.clone());
+            self.devices
+                .lock()
+                .await
+                .insert(data.0.clone(), data.1.clone());
+
+            self.device_tx.send(data.0.clone()).unwrap_or_else(|e| {
+                tracing::error!("Failed to send device ID: {}", e);
+            });
 
             task::spawn(async move {
                 data.1.process_stream().await;

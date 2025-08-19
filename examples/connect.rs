@@ -13,7 +13,9 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let kdeconnect = Arc::new(KdeConnect::default());
+    let (conn_tx, mut conn_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let kdeconnect = Arc::new(KdeConnect::new(conn_tx));
 
     task::spawn({
         let kdeconnect = Arc::clone(&kdeconnect);
@@ -25,7 +27,7 @@ async fn main() {
     let stdin = io::stdin();
     let input = &mut String::new();
 
-    loop {
+    while let Some(device) = conn_rx.recv().await {
         input.clear();
         let _ = stdin.read_line(input);
 
@@ -37,28 +39,19 @@ async fn main() {
             "pair" => {
                 tracing::debug!("Pair action received. Trying to pair.");
                 let pair_action = DeviceAction::Pair(true);
-                kdeconnect.send_action(
-                    String::from("aab467b729ae416f8ac7480afb27d6bc"),
-                    pair_action,
-                );
+                kdeconnect.send_action(device, pair_action);
             }
             "unpair" => {
                 tracing::debug!("UnPair action received. Trying to remove link.");
                 let pair_action = DeviceAction::Pair(false);
-                kdeconnect.send_action(
-                    String::from("aab467b729ae416f8ac7480afb27d6bc"),
-                    pair_action,
-                );
+                kdeconnect.send_action(device, pair_action);
             }
             "ping" => {
                 tracing::debug!("Ping action received. Trying to ping.");
                 let ping_action =
                     DeviceAction::Ping(String::from("Hello from KDE Connect and Rust!"));
 
-                kdeconnect.send_action(
-                    String::from("aab467b729ae416f8ac7480afb27d6bc"),
-                    ping_action,
-                );
+                kdeconnect.send_action(device, ping_action);
             }
             _ => {
                 println!("Unknown command. Type 'exit' or 'quit' to stop the server.");

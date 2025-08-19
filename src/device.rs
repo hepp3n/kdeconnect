@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::{
     io::AsyncWriteExt as _,
@@ -12,6 +12,9 @@ use crate::{
     packet::{Pair, Ping},
     plugins::PluginHandler,
 };
+
+pub type NewDevice = HashMap<String, Device>;
+pub type ConnectedId = String;
 
 pub enum DeviceAction {
     Pair(bool),
