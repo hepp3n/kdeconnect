@@ -1,16 +1,17 @@
-use std::env;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, io};
 
 use serde_json as json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt as _, BufReader};
+use tokio::net;
 use tokio::sync::{Mutex, mpsc};
-use tokio::time::sleep;
-use tokio::{join, net, task};
+use tokio::time::MissedTickBehavior;
 use tokio_native_tls::{self, native_tls};
 use tracing::{debug, warn};
 
-use crate::device;
+use crate::device::{self, NewDevice};
 use crate::packet::Identity;
 use crate::{
     backends::{BROADCAST_ADDR, DEFAULT_PORT, LOCALHOST, UNSPECIFIED_ADDR},
@@ -22,10 +23,13 @@ use crate::{
 
 pub(crate) struct LanLinkProvider {
     identity: Identity,
-    server: Option<Arc<net::TcpListener>>,
+    tpc_server: Option<Arc<net::TcpListener>>,
     u_socket: Option<Arc<net::UdpSocket>>,
     disabled: bool,
     test_mode: bool,
+    device_tx: Option<mpsc::UnboundedSender<(String, device::Device)>>,
+    connected_clients: Arc<Mutex<NewDevice>>,
+    connected_servers: Arc<Mutex<NewDevice>>,
 }
 
 impl LanLinkProvider {
@@ -37,10 +41,13 @@ impl LanLinkProvider {
 
         Self {
             identity,
-            server: None,
+            tpc_server: None,
             u_socket: None,
             disabled: false,
             test_mode: false,
+            device_tx: None,
+            connected_clients: Arc::new(Mutex::new(NewDevice::new())),
+            connected_servers: Arc::new(Mutex::new(NewDevice::new())),
         }
     }
 
@@ -48,23 +55,15 @@ impl LanLinkProvider {
         self.disabled
     }
 
-    pub fn enable(&mut self) {
-        self.disabled = false;
-    }
-
-    pub fn disable(&mut self) {
-        self.disabled = true;
-    }
-
     pub(crate) async fn on_start(
         &mut self,
         device_tx: mpsc::UnboundedSender<(String, device::Device)>,
     ) {
-        // This function can be used to start the server and socket if needed.
-        // For now, it does nothing as the server and socket are initialized lazily.
         if self.disabled {
             return;
         }
+
+        self.device_tx = Some(device_tx);
 
         debug!("Starting LAN Link Provider");
 
@@ -72,6 +71,12 @@ impl LanLinkProvider {
             true => LOCALHOST,
             false => UNSPECIFIED_ADDR,
         };
+
+        self.tpc_server = Some(Arc::new(
+            net::TcpListener::bind(bind_addr)
+                .await
+                .expect("Failed to bind TCP listener"),
+        ));
 
         self.u_socket = Some(Arc::new(
             net::UdpSocket::bind(bind_addr)
@@ -91,53 +96,22 @@ impl LanLinkProvider {
             }
         };
 
-        let arc_ident = Arc::new(self.identity.clone());
+        tokio::select! {
+            _ = self.send_identity_udp() => (),
+            _ = self.server(bind_addr) => (),
+            _ = self.client() => (),
+        };
+    }
 
-        let cloned_ident = Arc::clone(&arc_ident);
-        let cloned_socket = Arc::clone(self.u_socket.as_ref().unwrap());
-
-        let broadcaster = task::spawn(async move {
-            loop {
-                sleep(Duration::from_secs(3)).await;
-
-                Self::broadcast_via_udp(cloned_socket.clone(), cloned_ident.clone()).await;
-            }
-        });
-
-        self.server = Some(Arc::new(
-            net::TcpListener::bind(bind_addr)
-                .await
-                .expect("Failed to bind TCP listener"),
-        ));
-
-        let tcp = match self.server.as_ref() {
+    async fn server(&self, bind_addr: SocketAddr) -> io::Result<()> {
+        let tcp = match self.tpc_server.as_ref() {
             Some(listener) => Arc::clone(listener),
             None => {
                 warn!("Cannot bind TCP server on {}", bind_addr);
-                return;
+                return Ok(());
             }
         };
 
-        let cloned_ident = Arc::clone(&arc_ident);
-        let tx = device_tx.clone();
-        let server = task::spawn(Self::client(tcp, cloned_ident, tx));
-
-        let cloned_socket = Arc::clone(self.u_socket.as_ref().unwrap());
-        let cloned_ident = Arc::clone(&arc_ident);
-        let client = task::spawn(Self::server(
-            cloned_socket.clone(),
-            cloned_ident.clone(),
-            device_tx,
-        ));
-
-        let _ = join!(server, client, broadcaster);
-    }
-
-    async fn client(
-        tcp: Arc<net::TcpListener>,
-        arc_ident: Arc<Identity>,
-        device_tx: mpsc::UnboundedSender<(String, device::Device)>,
-    ) {
         while let Ok((mut socket, mut addr)) = tcp.accept().await {
             let mut buffer = String::new();
             let (reader, _writer) = socket.split();
@@ -151,7 +125,7 @@ impl LanLinkProvider {
             if let Ok(packet) = json::from_str::<IdentityPacket>(&buffer) {
                 let identity = packet.body;
 
-                if identity.device_id == arc_ident.device_id {
+                if identity.device_id == self.identity.device_id {
                     debug!("[TCP] Dont respond to the same device");
                     continue;
                 }
@@ -160,113 +134,155 @@ impl LanLinkProvider {
                     addr.set_port(port);
                 }
 
-                let packet = arc_ident.create_packet(Some(DEFAULT_PORT));
-                let data = json::to_string(&packet).expect("Creating packet") + "\n";
+                let ret = async {
+                    let packet = self.identity.create_packet(Some(DEFAULT_PORT));
+                    let data = json::to_string(&packet).expect("Creating packet") + "\n";
 
-                let mut connector = native_tls::TlsConnector::builder();
-                connector.identity(
-                    native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
-                        .expect("Failed to create TLS identity"),
-                );
-                connector.danger_accept_invalid_certs(true);
-                connector.use_sni(true);
-                let connector = tokio_native_tls::TlsConnector::from(
-                    connector.build().expect("Failed to create TLS connector"),
-                );
+                    let mut connector = native_tls::TlsConnector::builder();
+                    connector.identity(
+                        native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
+                            .expect("Failed to create TLS identity"),
+                    );
+                    connector.danger_accept_invalid_certs(true);
+                    connector.use_sni(true);
+                    let connector = tokio_native_tls::TlsConnector::from(
+                        connector.build().expect("Failed to create TLS connector"),
+                    );
 
-                let mut tls_stream = connector
-                    .connect(&identity.device_id, socket)
-                    .await
-                    .unwrap();
+                    let mut tls_stream = connector
+                        .connect(&identity.device_id, socket)
+                        .await
+                        .unwrap();
 
-                tls_stream
-                    .write_all(data.as_bytes())
-                    .await
-                    .expect("[TCP] Failed to write data to TLS stream");
+                    tls_stream
+                        .write_all(data.as_bytes())
+                        .await
+                        .expect("[TCP] Failed to write data to TLS stream");
 
-                debug!(
-                    "New Device Found: {} - {}",
-                    identity.device_id, identity.device_name
-                );
+                    debug!(
+                        "New Device Found: {} - {}",
+                        identity.device_id, identity.device_name
+                    );
 
-                let device = create_device(Some(Arc::new(Mutex::new(tls_stream))));
+                    let (reader, writer) = tokio::io::split(tls_stream);
 
-                device_tx
-                    .send((identity.device_id, device))
-                    .unwrap_or_else(|e| {
-                        warn!("Failed to send device to channel: {}", e);
-                    });
+                    let device =
+                        create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
-                debug!("Device linked.");
+                    if let Some(tx) = &self.device_tx {
+                        tx.send((identity.device_id.clone(), device.clone()))
+                            .unwrap_or_else(|e| {
+                                warn!("Failed to send device to channel: {}", e);
+                            });
+                    } else {
+                        warn!("Device channel is not set, cannot send device");
+                    }
+
+                    self.connected_clients
+                        .lock()
+                        .await
+                        .insert(identity.device_id.clone(), device);
+
+                    debug!("Linked as client....");
+
+                    Ok(()) as Result<(), io::Error>
+                };
+
+                if let Err(e) = ret.await {
+                    warn!("Failed to handle TCP packet from {}: {}", addr, e);
+                };
             }
         }
+        Ok(())
     }
 
-    async fn server(
-        socket: Arc<net::UdpSocket>,
-        this_device: Arc<Identity>,
-        device_tx: mpsc::UnboundedSender<(String, device::Device)>,
-    ) {
+    async fn client(&self) -> io::Result<()> {
         let mut buf = [0; 8192];
+
+        let Some(socket) = self.u_socket.as_ref() else {
+            warn!("UDP socket is not initialized, cannot start server");
+            return Ok(());
+        };
 
         while let Ok((size, mut addr)) = socket.recv_from(&mut buf).await {
             if let Ok(packet) = json::from_slice::<IdentityPacket>(&buf[..size]) {
                 let identity = packet.body;
 
-                if identity.device_id == this_device.device_id {
+                if identity.device_id == self.identity.device_id {
                     debug!("[UDP] Dont respond to the same device");
                     continue;
                 }
 
-                if let Some(port) = identity.tcp_port {
-                    addr.set_port(port);
-                }
+                let ret = async {
+                    if let Some(port) = identity.tcp_port {
+                        addr.set_port(port);
+                    }
 
-                let packet = this_device.create_packet(Some(DEFAULT_PORT));
-                let data = json::to_string(&packet).expect("Creating packet") + "\n";
+                    let packet = self.identity.create_packet(Some(DEFAULT_PORT));
+                    let data = json::to_string(&packet).expect("Creating packet") + "\n";
 
-                let mut sock = net::TcpStream::connect(addr)
-                    .await
-                    .expect("[TCP] Failed to connect to device");
+                    let mut sock = net::TcpStream::connect(addr)
+                        .await
+                        .expect("[TCP] Failed to connect to device");
 
-                sock.write_all(data.as_bytes())
-                    .await
-                    .expect("[TCP] Failed to write data to socket");
+                    sock.write_all(data.as_bytes())
+                        .await
+                        .expect("[TCP] Failed to write data to socket");
 
-                let cert =
-                    native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair()).unwrap();
+                    let cert =
+                        native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
+                            .unwrap();
 
-                let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
-                    native_tls::TlsAcceptor::builder(cert)
-                        .build()
-                        .expect("Failed to create TLS acceptor"),
-                );
+                    let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
+                        native_tls::TlsAcceptor::builder(cert)
+                            .build()
+                            .expect("Failed to create TLS acceptor"),
+                    );
 
-                let mut tls_stream = tls_acceptor.accept(sock).await.expect("accept error");
-                tls_stream
-                    .write_all(data.as_bytes())
-                    .await
-                    .expect("[TCP] Failed to write data to TLS stream");
+                    let mut tls_stream = tls_acceptor.accept(sock).await.expect("accept error");
+                    tls_stream
+                        .write_all(data.as_bytes())
+                        .await
+                        .expect("[TCP] Failed to write data to TLS stream");
 
-                debug!(
-                    "New Device Found: {} - {}",
-                    identity.device_id, identity.device_name
-                );
+                    debug!(
+                        "New Device Found: {} - {}",
+                        identity.device_id, identity.device_name
+                    );
 
-                let device = create_device(Some(Arc::new(Mutex::new(tls_stream))));
+                    let (reader, writer) = tokio::io::split(tls_stream);
 
-                device_tx
-                    .send((identity.device_id, device))
-                    .unwrap_or_else(|e| {
-                        warn!("Failed to send device to channel: {}", e);
-                    });
+                    let device =
+                        create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
-                debug!("Device linked.");
+                    if let Some(tx) = &self.device_tx {
+                        tx.send((identity.device_id.clone(), device.clone()))
+                            .unwrap_or_else(|e| {
+                                warn!("Failed to send device to channel: {}", e);
+                            });
+                    } else {
+                        warn!("Device channel is not set, cannot send device");
+                    }
+
+                    self.connected_servers
+                        .lock()
+                        .await
+                        .insert(identity.device_id.clone(), device);
+
+                    debug!("New server linked....");
+
+                    Ok(()) as Result<(), io::Error>
+                };
+
+                if let Err(e) = ret.await {
+                    warn!("Failed to handle UDP packet from {}: {}", addr, e);
+                };
             };
         }
+        Ok(())
     }
 
-    async fn broadcast_via_udp(socket: Arc<net::UdpSocket>, identity: Arc<Identity>) {
+    async fn send_identity_udp(&self) {
         if env::var("KDECONNECT_DISABLE_UDP_BROADCAST").is_ok() {
             warn!(
                 "UDP broadcast is disabled by environment variable KDECONNECT_DISABLE_UDP_BROADCAST"
@@ -276,15 +292,28 @@ impl LanLinkProvider {
 
         debug!("Broadcasting UDP identity packet");
 
-        match socket
-            .send_to(
-                identity.to_string(Some(DEFAULT_PORT)).as_bytes(),
-                BROADCAST_ADDR,
-            )
-            .await
-        {
-            Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
-            Err(e) => warn!("Failed to send UDP packet: {}", e),
+        let Some(socket) = self.u_socket.as_ref() else {
+            warn!("UDP socket is not initialized, cannot start server");
+            return;
+        };
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            match socket
+                .send_to(
+                    self.identity.to_string(Some(DEFAULT_PORT)).as_bytes(),
+                    BROADCAST_ADDR,
+                )
+                .await
+            {
+                Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
+                Err(e) => warn!("Failed to send UDP packet: {}", e),
+            }
+
+            interval.tick().await;
         }
     }
 }

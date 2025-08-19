@@ -56,7 +56,6 @@ impl KdeConnect {
         let mut stream = UnboundedReceiverStream::new(rx);
 
         while let Some(mut data) = stream.next().await {
-            debug!("Received device");
             self.devices
                 .lock()
                 .await
