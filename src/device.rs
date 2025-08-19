@@ -16,9 +16,10 @@ use crate::{
     plugins::PluginHandler,
 };
 
-pub type Linked = (ConnectedId, ConnectionType);
+pub type Linked = (ConnectedId, ConnectedDeviceName, ConnectionType);
 
 pub type ConnectedId = String;
+pub type ConnectedDeviceName = String;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum ConnectionType {
@@ -36,7 +37,7 @@ impl Display for ConnectionType {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewClient(pub ConnectedId, pub ConnectionType, pub Device);
+pub struct NewClient(pub Linked, pub Device);
 
 #[derive(Debug, Clone)]
 pub enum DeviceAction {

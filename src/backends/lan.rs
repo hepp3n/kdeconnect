@@ -168,12 +168,15 @@ impl LanLinkProvider {
                         self.connected_clients
                             .lock()
                             .await
-                            .retain(|c| c.0 != identity.device_id);
+                            .retain(|c| c.0.0 != identity.device_id);
                     }
 
                     let new_client = NewClient(
-                        identity.device_id,
-                        device::ConnectionType::Server,
+                        (
+                            identity.device_id,
+                            identity.device_name,
+                            device::ConnectionType::Server,
+                        ),
                         device.clone(),
                     );
 
@@ -269,12 +272,15 @@ impl LanLinkProvider {
                         self.connected_clients
                             .lock()
                             .await
-                            .retain(|c| c.0 != identity.device_id);
+                            .retain(|c| c.0.0 != identity.device_id);
                     }
 
                     let new_client = NewClient(
-                        identity.device_id,
-                        device::ConnectionType::Client,
+                        (
+                            identity.device_id,
+                            identity.device_name,
+                            device::ConnectionType::Server,
+                        ),
                         device.clone(),
                     );
 
