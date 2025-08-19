@@ -24,7 +24,7 @@ pub enum DeviceAction {
 #[derive(Clone)]
 pub struct Device {
     stream: Option<Arc<Mutex<TlsStream<net::TcpStream>>>>,
-    action_tx: mpsc::UnboundedSender<DeviceAction>,
+    pub action_tx: mpsc::UnboundedSender<DeviceAction>,
     action_rx: Arc<Mutex<mpsc::UnboundedReceiver<DeviceAction>>>,
 }
 
@@ -64,7 +64,7 @@ impl PluginHandler for Device {
 }
 
 impl Device {
-    pub(crate) async fn process_stream(&self) {
+    pub(crate) async fn process_stream(&mut self) {
         while let Some(action) = self.action_rx.lock().await.recv().await {
             match action {
                 DeviceAction::Pair(flag) => self.pair_handler(flag).await,
@@ -86,21 +86,6 @@ impl Device {
             }
         } else {
             tracing::warn!("No stream available for pairing");
-        }
-    }
-
-    pub(crate) fn send_action(&self, action: DeviceAction) {
-        match action {
-            DeviceAction::Pair(flag) => {
-                self.action_tx
-                    .send(DeviceAction::Pair(flag))
-                    .expect("Failed to send Pair action");
-            }
-            DeviceAction::Ping(msg) => {
-                self.action_tx
-                    .send(DeviceAction::Ping(msg))
-                    .expect("Failed to send Ping action");
-            }
         }
     }
 }

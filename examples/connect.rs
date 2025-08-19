@@ -1,6 +1,7 @@
-use std::{io, sync::Arc};
-
 use kdeconnect::{self, KdeConnect, device::DeviceAction};
+use tokio_stream::StreamExt;
+
+use std::{io, sync::Arc};
 use tokio::task;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
@@ -13,21 +14,18 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let (conn_tx, mut conn_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (kdeconnect, mut devices) = KdeConnect::new();
+    let kdeconnect = Arc::new(kdeconnect);
+    let arc_kdeconnect = Arc::clone(&kdeconnect);
 
-    let kdeconnect = Arc::new(KdeConnect::new(conn_tx));
-
-    task::spawn({
-        let kdeconnect = Arc::clone(&kdeconnect);
-        async move {
-            kdeconnect.run_server().await;
-        }
+    task::spawn(async move {
+        arc_kdeconnect.run_server().await;
     });
 
     let stdin = io::stdin();
     let input = &mut String::new();
 
-    while let Some(device) = conn_rx.recv().await {
+    while let Some(device) = devices.next().await {
         input.clear();
         let _ = stdin.read_line(input);
 

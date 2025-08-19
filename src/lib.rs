@@ -9,25 +9,34 @@ pub(crate) mod ssl;
 use backends::start_backends;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::{
+        Mutex,
+        mpsc::{self},
+    },
     task,
 };
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 use tracing::debug;
 
-use crate::device::{ConnectedId, Device, NewDevice};
+use crate::device::{ConnectedId, NewDevice};
 
+#[derive(Clone)]
 pub struct KdeConnect {
     devices: Arc<Mutex<NewDevice>>,
     device_tx: mpsc::UnboundedSender<ConnectedId>,
 }
 
 impl KdeConnect {
-    pub fn new(device_tx: mpsc::UnboundedSender<ConnectedId>) -> Self {
-        Self {
-            devices: Arc::new(Mutex::new(HashMap::new())),
-            device_tx,
-        }
+    pub fn new() -> (Self, UnboundedReceiverStream<ConnectedId>) {
+        let (conn_tx, conn_rx) = mpsc::unbounded_channel();
+
+        (
+            Self {
+                devices: Arc::new(Mutex::new(HashMap::new())),
+                device_tx: conn_tx,
+            },
+            conn_rx.into(),
+        )
     }
 }
 
@@ -46,7 +55,7 @@ impl KdeConnect {
 
         let mut stream = UnboundedReceiverStream::new(rx);
 
-        while let Some(data) = stream.next().await {
+        while let Some(mut data) = stream.next().await {
             debug!("Received device");
             self.devices
                 .lock()
@@ -74,7 +83,9 @@ impl KdeConnect {
                 return;
             };
 
-            device.send_action(action);
+            device.action_tx.send(action).unwrap_or_else(|e| {
+                tracing::error!("Failed to send action to device {}: {}", device_id, e);
+            });
         });
     }
 }
