@@ -11,7 +11,7 @@ use tokio::time::MissedTickBehavior;
 use tokio_native_tls::{self, native_tls};
 use tracing::{debug, info, warn};
 
-use crate::device::{self, ConnectionType, NewClient};
+use crate::device::{self, NewClient};
 use crate::packet::Identity;
 use crate::{
     backends::{BROADCAST_ADDR, DEFAULT_PORT, LOCALHOST, UNSPECIFIED_ADDR},
@@ -125,13 +125,6 @@ impl LanLinkProvider {
                     continue;
                 }
 
-                if self.connected_clients.lock().await.iter().any(|client| {
-                    client.0 == identity.device_id && client.1 == ConnectionType::Server
-                }) {
-                    debug!("[TCP] Device already connected: {}", identity.device_id);
-                    continue;
-                }
-
                 if let Some(port) = identity.tcp_port {
                     addr.set_port(port);
                 }
@@ -171,8 +164,15 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
+                    if self.connected_clients.lock().await.len() > 0 {
+                        self.connected_clients
+                            .lock()
+                            .await
+                            .retain(|c| c.0 != identity.device_id);
+                    }
+
                     let new_client = NewClient(
-                        identity.device_id.clone(),
+                        identity.device_id,
                         device::ConnectionType::Server,
                         device.clone(),
                     );
@@ -222,13 +222,6 @@ impl LanLinkProvider {
                     continue;
                 }
 
-                if self.connected_clients.lock().await.iter().any(|client| {
-                    client.0 == identity.device_id && client.1 == ConnectionType::Client
-                }) {
-                    debug!("[TCP] Device already connected: {}", identity.device_id);
-                    continue;
-                }
-
                 let ret = async {
                     if let Some(port) = identity.tcp_port {
                         addr.set_port(port);
@@ -272,8 +265,15 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
+                    if self.connected_clients.lock().await.len() > 0 {
+                        self.connected_clients
+                            .lock()
+                            .await
+                            .retain(|c| c.0 != identity.device_id);
+                    }
+
                     let new_client = NewClient(
-                        identity.device_id.clone(),
+                        identity.device_id,
                         device::ConnectionType::Client,
                         device.clone(),
                     );

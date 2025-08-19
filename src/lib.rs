@@ -7,7 +7,7 @@ pub(crate) mod plugins;
 pub(crate) mod ssl;
 
 use backends::start_backends;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::{
     sync::{
         Mutex,
@@ -18,11 +18,11 @@ use tokio::{
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 use tracing::{debug, error};
 
-use crate::device::{Linked, NewClient};
+use crate::device::{ConnectedId, Linked, NewClient};
 
 #[derive(Debug, Clone)]
 pub struct KdeConnect {
-    devices: Arc<Mutex<Vec<NewClient>>>,
+    devices: Arc<Mutex<HashMap<ConnectedId, NewClient>>>,
     device_tx: mpsc::UnboundedSender<Linked>,
 }
 
@@ -32,7 +32,7 @@ impl KdeConnect {
 
         (
             Self {
-                devices: Arc::new(Mutex::new(Vec::new())),
+                devices: Arc::new(Mutex::new(HashMap::new())),
                 device_tx: conn_tx,
             },
             conn_rx.into(),
@@ -62,11 +62,14 @@ impl KdeConnect {
                     error!("Failed to send device ID: {}", e);
                 });
 
-            self.devices.lock().await.push(data.clone());
+            self.devices
+                .lock()
+                .await
+                .insert(data.0.clone(), data.clone());
 
             task::spawn(async move {
-                let mut device = data.2;
-                device.process_stream().await;
+                let mut client = data.2;
+                client.process_stream().await;
             });
         }
     }
@@ -77,9 +80,9 @@ impl KdeConnect {
         tokio::spawn(async move {
             let guard = devices.lock().await;
 
-            for device in guard.iter() {
-                if device.0 == device_id {
-                    device.2.send(action.clone())
+            for (id, client) in guard.iter() {
+                if id == &device_id {
+                    client.2.send(action.clone())
                 } else {
                     error!("Device with ID {} not found", device_id);
                 }
