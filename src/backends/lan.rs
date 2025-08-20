@@ -164,7 +164,7 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
-                    if self.connected_clients.lock().await.len() > 0 {
+                    if !self.connected_clients.lock().await.is_empty() {
                         self.connected_clients
                             .lock()
                             .await
@@ -268,7 +268,7 @@ impl LanLinkProvider {
                     let device =
                         create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
 
-                    if self.connected_clients.lock().await.len() > 0 {
+                    if !self.connected_clients.lock().await.is_empty() {
                         self.connected_clients
                             .lock()
                             .await
