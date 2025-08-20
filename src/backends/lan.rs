@@ -233,73 +233,78 @@ impl LanLinkProvider {
                     let packet = self.identity.create_packet(Some(DEFAULT_PORT));
                     let data = json::to_string(&packet).expect("Creating packet") + "\n";
 
-                    let mut sock = net::TcpStream::connect(addr)
-                        .await
-                        .expect("[TCP] Failed to connect to device");
-
-                    sock.write_all(data.as_bytes())
-                        .await
-                        .expect("[TCP] Failed to write data to socket");
-
-                    let cert =
-                        native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
-                            .unwrap();
-
-                    let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
-                        native_tls::TlsAcceptor::builder(cert)
-                            .build()
-                            .expect("Failed to create TLS acceptor"),
-                    );
-
-                    let mut tls_stream = tls_acceptor.accept(sock).await.expect("accept error");
-
-                    tls_stream
-                        .write_all(data.as_bytes())
-                        .await
-                        .expect("[TCP] Failed to write data to TLS stream");
-
-                    debug!(
-                        "New Device Found: {} - {}",
-                        identity.device_id, identity.device_name
-                    );
-
-                    let (reader, writer) = tokio::io::split(tls_stream);
-
-                    let device =
-                        create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
-
-                    if !self.connected_clients.lock().await.is_empty() {
-                        self.connected_clients
-                            .lock()
+                    if let Ok(mut sock) = net::TcpStream::connect(addr).await {
+                        sock.write_all(data.as_bytes())
                             .await
-                            .retain(|c| c.0.0 != identity.device_id);
-                    }
+                            .expect("[TCP] Failed to write data to socket");
 
-                    let new_client = NewClient(
-                        (
-                            identity.device_id,
-                            identity.device_name,
-                            device::ConnectionType::Server,
-                        ),
-                        device.clone(),
-                    );
+                        let cert =
+                            native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
+                                .unwrap();
 
-                    self.connected_clients.lock().await.push(new_client.clone());
+                        let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
+                            native_tls::TlsAcceptor::builder(cert)
+                                .build()
+                                .expect("Failed to create TLS acceptor"),
+                        );
 
-                    if let Some(tx) = &self.device_tx {
-                        tx.send(new_client).unwrap_or_else(|e| {
-                            warn!("Failed to send device to channel: {}", e);
-                        });
+                        let mut tls_stream = tls_acceptor.accept(sock).await.expect("accept error");
+
+                        tls_stream
+                            .write_all(data.as_bytes())
+                            .await
+                            .expect("[TCP] Failed to write data to TLS stream");
+
+                        debug!(
+                            "New Device Found: {} - {}",
+                            identity.device_id, identity.device_name
+                        );
+
+                        let (reader, writer) = tokio::io::split(tls_stream);
+
+                        let device = create_device(
+                            Arc::new(Mutex::new(reader)),
+                            Arc::new(Mutex::new(writer)),
+                        );
+
+                        if !self.connected_clients.lock().await.is_empty() {
+                            self.connected_clients
+                                .lock()
+                                .await
+                                .retain(|c| c.0.0 != identity.device_id);
+                        }
+
+                        let new_client = NewClient(
+                            (
+                                identity.device_id,
+                                identity.device_name,
+                                device::ConnectionType::Server,
+                            ),
+                            device.clone(),
+                        );
+
+                        self.connected_clients.lock().await.push(new_client.clone());
+
+                        if let Some(tx) = &self.device_tx {
+                            tx.send(new_client).unwrap_or_else(|e| {
+                                warn!("Failed to send device to channel: {}", e);
+                            });
+                        } else {
+                            warn!("Device channel is not set, cannot send device");
+                        }
+
+                        info!(
+                            "Current clients: {}",
+                            self.connected_clients.lock().await.len()
+                        );
+
+                        debug!("New server linked....");
                     } else {
-                        warn!("Device channel is not set, cannot send device");
-                    }
-
-                    info!(
-                        "Current clients: {}",
-                        self.connected_clients.lock().await.len()
-                    );
-
-                    debug!("New server linked....");
+                        return Err(io::Error::new(
+                            io::ErrorKind::ConnectionRefused,
+                            "Failed to connect to TCP server",
+                        ));
+                    };
 
                     Ok(()) as Result<(), io::Error>
                 };
