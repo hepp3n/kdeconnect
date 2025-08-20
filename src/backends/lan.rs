@@ -5,47 +5,44 @@ use std::{env, io};
 
 use serde_json as json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt as _, BufReader};
-use tokio::net;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
+use tokio::{net, task};
 use tokio_native_tls::{self, native_tls};
 use tracing::{debug, info, warn};
 
 use crate::device::{self, NewClient};
-use crate::packet::Identity;
+use crate::make_packet_str;
+use crate::packet::{Identity, Packet, PacketType};
+use crate::{ClientAction, make_packet};
 use crate::{
-    backends::{BROADCAST_ADDR, DEFAULT_PORT, LOCALHOST, UNSPECIFIED_ADDR},
-    config::CONFIG,
+    backends::{BROADCAST_ADDR, LOCALHOST, UNSPECIFIED_ADDR},
     device::create_device,
-    packet::IdentityPacket,
     ssl::{read_certificate, read_keypair},
 };
 
 pub(crate) struct LanLinkProvider {
-    identity: Identity,
+    network_packet: Packet,
     tpc_server: Option<Arc<net::TcpListener>>,
     u_socket: Option<Arc<net::UdpSocket>>,
     disabled: bool,
     test_mode: bool,
     device_tx: Option<mpsc::UnboundedSender<NewClient>>,
     connected_clients: Arc<Mutex<Vec<NewClient>>>,
+    client_action: Option<Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>>,
 }
 
 impl LanLinkProvider {
-    pub fn new() -> Self {
-        let device_uuid = CONFIG.device_uuid.clone();
-        let device_name = CONFIG.device_name.clone();
-
-        let identity = Identity::new(device_uuid, device_name);
-
+    pub fn new(np: Packet) -> Self {
         Self {
-            identity,
+            network_packet: np,
             tpc_server: None,
             u_socket: None,
             disabled: false,
             test_mode: false,
             device_tx: None,
             connected_clients: Arc::new(Mutex::new(Vec::new())),
+            client_action: None,
         }
     }
 
@@ -53,12 +50,17 @@ impl LanLinkProvider {
         self.disabled
     }
 
-    pub(crate) async fn on_start(&mut self, device_tx: mpsc::UnboundedSender<NewClient>) {
+    pub(crate) async fn on_start(
+        &mut self,
+        client_tx: Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>,
+        device_tx: mpsc::UnboundedSender<NewClient>,
+    ) {
         if self.disabled {
             return;
         }
 
         self.device_tx = Some(device_tx);
+        self.client_action = Some(client_tx);
 
         debug!("Starting LAN Link Provider");
 
@@ -117,10 +119,14 @@ impl LanLinkProvider {
                 .await
                 .expect("Failed to read line");
 
-            if let Ok(packet) = json::from_str::<IdentityPacket>(&buffer) {
-                let identity = packet.body;
+            let this_identity = json::from_value::<Identity>(self.network_packet.body.clone())
+                .expect("Failed to parse identity");
 
-                if identity.device_id == self.identity.device_id {
+            if let Ok(packet) = json::from_str::<Packet>(&buffer) {
+                let identity =
+                    json::from_value::<Identity>(packet.body).expect("Failed to parse identity");
+
+                if identity.device_id == this_identity.device_id {
                     debug!("[TCP] Dont respond to the same device");
                     continue;
                 }
@@ -129,10 +135,10 @@ impl LanLinkProvider {
                     addr.set_port(port);
                 }
 
-                let ret = async {
-                    let packet = self.identity.create_packet(Some(DEFAULT_PORT));
-                    let data = json::to_string(&packet).expect("Creating packet") + "\n";
+                let data =
+                    make_packet_str!(this_identity).expect("Failed to serialize identity packet");
 
+                let ret = async {
                     let mut connector = native_tls::TlsConnector::builder();
                     connector.identity(
                         native_tls::Identity::from_pkcs8(&read_certificate(), &read_keypair())
@@ -217,10 +223,14 @@ impl LanLinkProvider {
         };
 
         while let Ok((size, mut addr)) = socket.recv_from(&mut buf).await {
-            if let Ok(packet) = json::from_slice::<IdentityPacket>(&buf[..size]) {
-                let identity = packet.body;
+            let this_identity = json::from_value::<Identity>(self.network_packet.body.clone())
+                .expect("Failed to parse identity");
 
-                if identity.device_id == self.identity.device_id {
+            if let Ok(packet) = json::from_slice::<Packet>(&buf[..size]) {
+                let identity =
+                    json::from_value::<Identity>(packet.body).expect("Failed to parse identity");
+
+                if identity.device_id == this_identity.device_id {
                     debug!("[UDP] Dont respond to the same device");
                     continue;
                 }
@@ -230,10 +240,10 @@ impl LanLinkProvider {
                         addr.set_port(port);
                     }
 
-                    let packet = self.identity.create_packet(Some(DEFAULT_PORT));
-                    let data = json::to_string(&packet).expect("Creating packet") + "\n";
-
                     if let Ok(mut sock) = net::TcpStream::connect(addr).await {
+                        let data = make_packet_str!(this_identity)
+                            .expect("Failed to serialize identity packet");
+
                         sock.write_all(data.as_bytes())
                             .await
                             .expect("[TCP] Failed to write data to socket");
@@ -332,23 +342,46 @@ impl LanLinkProvider {
             return;
         };
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let this_identity = json::from_value::<Identity>(self.network_packet.body.clone())
+            .expect("Failed to parse identity");
 
-        loop {
-            match socket
-                .send_to(
-                    self.identity.to_string(Some(DEFAULT_PORT)).as_bytes(),
-                    BROADCAST_ADDR,
-                )
-                .await
-            {
-                Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
-                Err(e) => warn!("Failed to send UDP packet: {}", e),
+        let data =
+            Arc::new(make_packet_str!(this_identity).expect("Failed to serialize identity packet"));
+
+        let task_socket = Arc::clone(socket);
+        let task_ident = Arc::clone(&data);
+
+        task::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            loop {
+                match task_socket
+                    .send_to(task_ident.as_bytes(), BROADCAST_ADDR)
+                    .await
+                {
+                    Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
+                    Err(e) => warn!("Failed to send UDP packet: {}", e),
+                }
+
+                interval.tick().await;
             }
+        });
 
-            interval.tick().await;
+        if let Some(client_action) = self.client_action.as_ref() {
+            let mut action = client_action.lock().await;
+
+            while let Some(action) = action.recv().await {
+                match action {
+                    ClientAction::Broadcast => {
+                        match socket.send_to(data.as_bytes(), BROADCAST_ADDR).await {
+                            Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
+                            Err(e) => warn!("Failed to send UDP packet: {}", e),
+                        }
+                    }
+                }
+            }
         }
     }
 }

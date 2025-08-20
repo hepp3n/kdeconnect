@@ -1,12 +1,35 @@
+/// src: https://github.com/r58Playz/kdeconnect/blob/main/kdeconnect/src/packets.rs
+///
+///
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fmt::Display, time::SystemTime};
+use std::fmt::Display;
 
 pub const PROTOCOL_VERSION: usize = 8;
 
+#[allow(dead_code)]
+pub const ALL_CAPABILITIES: &[&str] = &[Ping::TYPE, RunCommand::TYPE, RunCommandRequest::TYPE];
+
+macro_rules! derive_type {
+    ($struct:ty, $type:literal) => {
+        impl PacketType for $struct {
+            fn get_type_self(&self) -> &'static str {
+                $type
+            }
+        }
+        #[allow(dead_code)]
+        impl $struct {
+            pub const TYPE: &'static str = $type;
+        }
+    };
+}
+
+pub(crate) trait PacketType {
+    fn get_type_self(&self) -> &'static str;
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Packet {
-    pub id: u128,
     #[serde(rename = "type")]
     pub packet_type: String,
     pub body: Value,
@@ -46,13 +69,6 @@ impl Display for DeviceType {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct IdentityPacket {
-    #[serde(rename = "type")]
-    pub packet_type: String,
-    pub body: Identity,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
     pub device_id: String,
@@ -63,108 +79,81 @@ pub struct Identity {
     pub protocol_version: usize,
     pub tcp_port: Option<u16>,
 }
+derive_type!(Identity, "kdeconnect.identity");
 
-impl Identity {
-    pub fn new(device_id: String, device_name: String) -> Self {
-        Self {
-            device_id,
-            device_name,
-            device_type: DeviceType::Desktop,
-            incoming_capabilities: vec![
-                "kdeconnect.ping".into(),
-                "kdeconnect.notification".into(),
-                "kdeconnect.runcommand".into(),
-                "kdeconnect.runcommand.request".into(),
-            ],
-            outgoing_capabilities: vec![
-                "kdeconnect.ping".into(),
-                "kdeconnect.notification".into(),
-                "kdeconnect.runcommand".into(),
-                "kdeconnect.runcommand.request".into(),
-            ],
-            protocol_version: PROTOCOL_VERSION,
-            tcp_port: None,
-        }
-    }
-
-    pub fn create_packet(&self, port: Option<u16>) -> IdentityPacket {
-        let mut body = self.clone();
-
-        if let Some(port) = port {
-            body.tcp_port = Some(port);
-        }
-
-        IdentityPacket {
-            packet_type: "kdeconnect.identity".into(),
-            body,
-        }
-    }
-
-    pub(crate) fn to_string(&self, port: Option<u16>) -> String {
-        serde_json::to_string(&self.create_packet(port)).expect("serializing packet")
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PairPacket {
-    #[serde(rename = "type")]
-    pub packet_type: String,
-    pub body: Pair,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct Pair {
-    pair: bool,
-    timestamp: u64,
+    pub pair: bool,
+    pub timestamp: u64,
 }
-
-impl Pair {
-    pub fn new(pair: bool) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs();
-
-        Self { pair, timestamp }
-    }
-
-    pub fn create_packet(&self) -> PairPacket {
-        PairPacket {
-            packet_type: "kdeconnect.pair".into(),
-            body: self.clone(),
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        serde_json::to_string(&self.create_packet()).expect("serializing packet")
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PingPacket {
-    #[serde(rename = "type")]
-    pub packet_type: String,
-    pub body: Ping,
-}
+derive_type!(Pair, "kdeconnect.pair");
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Ping {
-    message: String,
+    pub message: Option<String>,
+}
+derive_type!(Ping, "kdeconnect.ping");
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RunCommand {
+    #[serde(rename = "commandList")]
+    pub command_list: String,
+}
+derive_type!(RunCommand, "kdeconnect.runcommand");
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RunCommandItem {
+    pub name: String,
+    pub command: String,
 }
 
-impl Ping {
-    pub fn new(message: String) -> Self {
-        Self { message }
-    }
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RunCommandRequest {
+    pub key: Option<String>,
+    #[serde(rename = "requestCommandList")]
+    pub request_command_list: Option<bool>,
+}
+derive_type!(RunCommandRequest, "kdeconnect.runcommand.request");
 
-    pub fn create_packet(&self) -> PingPacket {
-        PingPacket {
-            packet_type: "kdeconnect.ping".into(),
-            body: self.clone(),
+// to_value should never fail, as Serialize will always be successful and packets should never
+// contain non-string keys anyway
+#[macro_export]
+macro_rules! make_packet {
+    ($packet:ident) => {
+        Packet {
+            packet_type: $packet.get_type_self().to_string(),
+            body: serde_json::value::to_value($packet).expect("packet was invalid"),
+            payload_size: None,
+            payload_transfer_info: None,
         }
-    }
+    };
+}
 
-    pub fn to_string(&self) -> String {
-        serde_json::to_string(&self.create_packet()).expect("serializing packet")
-    }
+#[macro_export]
+macro_rules! make_packet_payload {
+    ($packet:ident, $payload_size:expr, $payload_port:expr) => {
+        Packet {
+            packet_type: $packet.get_type_self().to_string(),
+            body: serde_json::value::to_value($packet).expect("packet was invalid"),
+            payload_size: Some($payload_size),
+            payload_transfer_info: Some(PacketPayloadTransferInfo {
+                port: $payload_port,
+            }),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! make_packet_str {
+    ($packet:ident) => {
+        serde_json::to_string(&make_packet!($packet)).map(|x| x + "\n")
+    };
+}
+
+#[macro_export]
+macro_rules! make_packet_str_payload {
+    ($packet:ident, $payload_size:expr, $payload_port:expr) => {
+        serde_json::to_string(&make_packet_payload!($packet, $payload_size, $payload_port))
+            .map(|x| x + "\n")
+    };
 }

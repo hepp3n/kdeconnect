@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json as json;
 use std::{fmt::Display, sync::Arc};
 use tokio::{
@@ -10,9 +11,9 @@ use tokio_native_tls::TlsStream;
 use tracing::{debug, error, info};
 
 use crate::{
-    backends::DEFAULT_PORT,
-    config::CONFIG,
-    packet::{Identity, IdentityPacket, Pair, Ping},
+    helpers::pair_timestamp,
+    make_packet, make_packet_str,
+    packet::{Packet, PacketType, Pair, Ping},
     plugins::PluginHandler,
 };
 
@@ -21,7 +22,7 @@ pub type Linked = (ConnectedId, ConnectedDeviceName, ConnectionType);
 pub type ConnectedId = String;
 pub type ConnectedDeviceName = String;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub enum ConnectionType {
     Client,
     Server,
@@ -89,7 +90,11 @@ pub(crate) fn create_device(
 
 impl PluginHandler for Device {
     async fn pair(&self, flag: bool) {
-        let pair_packet = Pair::new(flag).to_string() + "\n";
+        let pair = Pair {
+            pair: flag,
+            timestamp: pair_timestamp(),
+        };
+        let pair_packet = make_packet_str!(pair).expect("Failed to create Pair packet");
 
         let mut writer = self.writer.lock().await;
 
@@ -102,7 +107,11 @@ impl PluginHandler for Device {
     }
 
     async fn ping(&self, message: String) {
-        let ping_packet = Ping::new(message).to_string() + "\n";
+        let ping = Ping {
+            message: Some(message),
+        };
+
+        let ping_packet = make_packet_str!(ping).expect("Failed to create Ping packet");
 
         let mut writer = self.writer.lock().await;
 
@@ -126,8 +135,6 @@ impl Device {
             .await
             .expect("Failed to flush writer");
 
-        let c_writer = Arc::clone(&self.writer);
-
         task::spawn(async move {
             let mut reader = c_reader.lock().await;
 
@@ -142,26 +149,8 @@ impl Device {
                         break; // EOF reached
                     }
                     Ok(_) => {
-                        debug!("Received data: {}", buffer);
-
-                        if let Ok(packet) = json::from_str::<IdentityPacket>(&buffer) {
-                            info!("Received IdentityPacket from {}", packet.body.device_name);
-
-                            let my_identity = Identity::new(
-                                CONFIG.device_uuid.clone(),
-                                CONFIG.device_name.clone(),
-                            );
-
-                            let data = my_identity.to_string(Some(DEFAULT_PORT));
-
-                            c_writer
-                                .lock()
-                                .await
-                                .write_all(data.as_bytes())
-                                .await
-                                .expect("Failed to write to stream");
-
-                            info!("Sent IdentityPacket back: {}", data);
+                        if let Ok(packet) = json::from_str::<Packet>(&buffer) {
+                            debug!("Received NetworkPacket {}", packet.body);
                         }
                     }
                     Err(e) => {

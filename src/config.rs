@@ -10,6 +10,7 @@ use tracing::error;
 
 use crate::{
     helpers::{default_hostname, generate_device_uuid},
+    packet::DeviceType,
     ssl::{certificate_generator, store_certificate_files},
 };
 
@@ -27,6 +28,7 @@ pub(crate) const KEY_PAIR: &str = "key_pair.pem";
 pub(crate) struct KdeConnectConfig {
     pub(crate) device_name: String,
     pub(crate) device_uuid: String,
+    pub(crate) device_type: DeviceType,
     signed_ca: PathBuf,
     priv_key: PathBuf,
 }
@@ -76,6 +78,7 @@ impl Default for KdeConnectConfig {
             priv_key: keypair_path,
             device_name,
             device_uuid,
+            device_type: DeviceType::Desktop,
         };
 
         if !path.join(CONFIG_FILE).exists() {
