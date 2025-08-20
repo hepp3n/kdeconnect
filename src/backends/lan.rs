@@ -11,7 +11,7 @@ use tokio::{net, task};
 use tokio_native_tls::{self, native_tls};
 use tracing::{debug, info, warn};
 
-use crate::device::{self, NewClient};
+use crate::device::{self, DeviceId, Linked, NewClient};
 use crate::make_packet_str;
 use crate::packet::{Identity, Packet, PacketType};
 use crate::{ClientAction, make_packet};
@@ -167,24 +167,30 @@ impl LanLinkProvider {
 
                     let (reader, writer) = tokio::io::split(tls_stream);
 
-                    let device =
-                        create_device(Arc::new(Mutex::new(reader)), Arc::new(Mutex::new(writer)));
+                    let device_id = DeviceId {
+                        id: identity.device_id.clone(),
+                        name: identity.device_name.clone(),
+                    };
 
                     if !self.connected_clients.lock().await.is_empty() {
                         self.connected_clients
                             .lock()
                             .await
-                            .retain(|c| c.0.0 != identity.device_id);
+                            .retain(|c| c.linked.id.id != identity.device_id);
                     }
-
-                    let new_client = NewClient(
-                        (
-                            identity.device_id,
-                            identity.device_name,
-                            device::ConnectionType::Server,
-                        ),
-                        device.clone(),
+                    let device = create_device(
+                        Arc::new(device_id.clone()),
+                        Arc::new(Mutex::new(reader)),
+                        Arc::new(Mutex::new(writer)),
                     );
+
+                    let new_client = NewClient {
+                        linked: Linked {
+                            id: device_id.clone(),
+                            connection_type: device::ConnectionType::Server,
+                        },
+                        device: device.clone(),
+                    };
 
                     self.connected_clients.lock().await.push(new_client.clone());
 
@@ -272,26 +278,30 @@ impl LanLinkProvider {
 
                         let (reader, writer) = tokio::io::split(tls_stream);
 
-                        let device = create_device(
-                            Arc::new(Mutex::new(reader)),
-                            Arc::new(Mutex::new(writer)),
-                        );
+                        let device_id = DeviceId {
+                            id: identity.device_id.clone(),
+                            name: identity.device_name.clone(),
+                        };
 
                         if !self.connected_clients.lock().await.is_empty() {
                             self.connected_clients
                                 .lock()
                                 .await
-                                .retain(|c| c.0.0 != identity.device_id);
+                                .retain(|c| c.linked.id.id != identity.device_id);
                         }
-
-                        let new_client = NewClient(
-                            (
-                                identity.device_id,
-                                identity.device_name,
-                                device::ConnectionType::Server,
-                            ),
-                            device.clone(),
+                        let device = create_device(
+                            Arc::new(device_id.clone()),
+                            Arc::new(Mutex::new(reader)),
+                            Arc::new(Mutex::new(writer)),
                         );
+
+                        let new_client = NewClient {
+                            linked: Linked {
+                                id: device_id.clone(),
+                                connection_type: device::ConnectionType::Client,
+                            },
+                            device: device.clone(),
+                        };
 
                         self.connected_clients.lock().await.push(new_client.clone());
 

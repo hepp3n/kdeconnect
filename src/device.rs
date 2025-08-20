@@ -1,23 +1,31 @@
+use notify_rust::{Hint, Notification};
 use serde::{Deserialize, Serialize};
 use serde_json as json;
-use std::{fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     net::TcpStream,
     sync::{Mutex, mpsc},
-    task,
+    task::{self, JoinHandle},
 };
 use tokio_native_tls::TlsStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     helpers::pair_timestamp,
     make_packet, make_packet_str,
-    packet::{Packet, PacketType, Pair, Ping},
+    packet::{
+        Battery, ConnectivityReport, MprisPlayer, Packet, PacketType, Pair, Ping, RunCommandItem,
+        SystemVolumeStream,
+    },
     plugins::PluginHandler,
 };
 
-pub type Linked = (ConnectedId, ConnectedDeviceName, ConnectionType);
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+pub struct Linked {
+    pub id: DeviceId,
+    pub connection_type: ConnectionType,
+}
 
 pub type ConnectedId = String;
 pub type ConnectedDeviceName = String;
@@ -38,7 +46,10 @@ impl Display for ConnectionType {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewClient(pub Linked, pub Device);
+pub struct NewClient {
+    pub linked: Linked,
+    pub device: Device,
+}
 
 #[derive(Debug, Clone)]
 pub enum DeviceAction {
@@ -57,22 +68,31 @@ impl Display for DeviceAction {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+pub struct DeviceId {
+    pub id: ConnectedId,
+    pub name: ConnectedDeviceName,
+}
+
 #[derive(Debug, Clone)]
 pub struct Device {
+    pub id: Arc<DeviceId>,
     reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
     writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
-    pub action_tx: mpsc::UnboundedSender<DeviceAction>,
+    pub(crate) action_tx: mpsc::UnboundedSender<DeviceAction>,
     action_rx: Arc<Mutex<mpsc::UnboundedReceiver<DeviceAction>>>,
 }
 
 impl Device {
     pub fn new(
+        id: Arc<DeviceId>,
         reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
         writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
     ) -> Self {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
 
         Self {
+            id,
             reader,
             writer,
             action_tx,
@@ -82,10 +102,11 @@ impl Device {
 }
 
 pub(crate) fn create_device(
+    id: Arc<DeviceId>,
     reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
     writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
 ) -> Device {
-    Device::new(reader, writer)
+    Device::new(id, reader, writer)
 }
 
 impl PluginHandler for Device {
@@ -127,6 +148,7 @@ impl PluginHandler for Device {
 impl Device {
     pub(crate) async fn process_stream(&mut self) {
         let c_reader = Arc::clone(&self.reader);
+        let id = Arc::clone(&self.id);
 
         self.writer
             .lock()
@@ -134,6 +156,8 @@ impl Device {
             .flush()
             .await
             .expect("Failed to flush writer");
+
+        let handler = Arc::clone(&Arc::new(self.clone()));
 
         task::spawn(async move {
             let mut reader = c_reader.lock().await;
@@ -150,7 +174,47 @@ impl Device {
                     }
                     Ok(_) => {
                         if let Ok(packet) = json::from_str::<Packet>(&buffer) {
-                            debug!("Received NetworkPacket {}", packet.body);
+                            match packet.packet_type.as_str() {
+                                Ping::TYPE => {
+                                    info!("Received Ping packet: {}", buffer);
+
+                                    Notification::new()
+                                        .appname("KDE Connect")
+                                        .summary("KDE Connect")
+                                        .body("Ping!")
+                                        .icon("display-symbolic")
+                                        .show()
+                                        .expect("Showing notification failed");
+                                }
+                                Pair::TYPE => {
+                                    info!("Received Pair packet: {}", buffer);
+
+                                    let mut pair_status = false;
+                                    let label = format!(
+                                        "The {} wants to Pair this device. Click this notification to accept and allow pairing.",
+                                        id.name
+                                    );
+
+                                    Notification::new()
+                                        .appname("KDE Connect")
+                                        .summary("KDE Connect")
+                                        .body(&label)
+                                        .action("clicked", "Accept") // IDENTIFIER, LABEL
+                                        .hint(Hint::Resident(true))
+                                        .show()
+                                        .unwrap()
+                                        .wait_for_action(|action| match action {
+                                            "clicked" => pair_status = true,
+                                            "__closed" => pair_status = false,
+                                            _ => (),
+                                        });
+
+                                    handler.pair(pair_status).await;
+                                }
+                                _ => {
+                                    warn!("Received unknown packet type: {}", packet.packet_type);
+                                }
+                            }
                         }
                     }
                     Err(e) => {
@@ -185,4 +249,16 @@ impl Device {
             .send(action)
             .unwrap_or_else(|e| error!("Failed to send action: {}", e));
     }
+}
+
+type DeviceStatePlayers = HashMap<String, (MprisPlayer, Option<String>, Option<JoinHandle<()>>)>;
+
+#[derive(Default)]
+pub struct DeviceState {
+    pub battery: Option<Battery>,
+    pub clipboard: Option<String>,
+    pub connectivity: Option<ConnectivityReport>,
+    pub systemvolume: Option<Vec<SystemVolumeStream>>,
+    pub players: DeviceStatePlayers,
+    pub commands: HashMap<String, RunCommandItem>,
 }

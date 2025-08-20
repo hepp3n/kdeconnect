@@ -76,17 +76,19 @@ impl KdeConnect {
         let mut stream = UnboundedReceiverStream::new(rx);
 
         while let Some(mut data) = stream.next().await {
-            self.device_tx.send(data.0.clone()).unwrap_or_else(|e| {
-                error!("Failed to send device ID: {}", e);
-            });
+            self.device_tx
+                .send(data.linked.clone())
+                .unwrap_or_else(|e| {
+                    error!("Failed to send device ID: {}", e);
+                });
 
             self.devices
                 .lock()
                 .await
-                .insert(data.0.0.clone(), data.clone());
+                .insert(data.linked.id.id.clone(), data.clone());
 
             task::spawn(async move {
-                data.1.process_stream().await;
+                data.device.process_stream().await;
             });
         }
     }
@@ -99,7 +101,7 @@ impl KdeConnect {
 
             for (id, client) in guard.iter() {
                 if id == &device_id {
-                    client.1.send(action.clone())
+                    client.device.send(action.clone())
                 } else {
                     error!("Device with ID {} not found", device_id);
                 }
