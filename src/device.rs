@@ -335,6 +335,19 @@ impl Device {
                                             );
                                             task_state.pairing_state = PairingState::Paired;
                                         }
+
+                                        if !pair.pair {
+                                            debug!(
+                                                "Device {} sent reject for pairing, setting state to NotPaired.",
+                                                &task_self.id
+                                            );
+                                            task_state.pairing_state = PairingState::NotPaired;
+                                            action.send(DeviceAction::UnPair).unwrap_or_else(|e| {
+                                                error!("Failed to send Pair action: {}", e);
+                                            });
+
+                                            break; // Exit on reject
+                                        }
                                     } else {
                                         warn!("Failed to parse Pair data");
                                     }
@@ -395,6 +408,15 @@ impl Device {
                         error!("Failed to send device refresh response: {}", e);
                     });
             }
+
+            task_response
+                .send(DeviceResponse::Refresh((
+                    task_self.clone(),
+                    task_state.clone(),
+                )))
+                .unwrap_or_else(|e| {
+                    error!("Failed to send device refresh response: {}", e);
+                });
         });
 
         device_response
@@ -442,25 +464,28 @@ impl Device {
                             debug!("Received pairing request from peer: {}", packet.packet_type);
 
                             if let Ok(pair) = json::from_value::<Pair>(packet.body.clone()) {
-                                if pair.pair {
-                                    if let Some(_timestamp) = pair.timestamp {
-                                        debug!(
-                                            "Setting pairing state to RequestedByPeer for device: {}",
-                                            self.id
-                                        );
-                                        self.pairing_handler.pairing_state =
-                                            PairingState::RequestedByPeer;
-                                    }
-                                } else {
+                                if pair.pair
+                                    && let Some(_timestamp) = pair.timestamp
+                                {
+                                    debug!(
+                                        "Setting pairing state to RequestedByPeer for device: {}",
+                                        self.id
+                                    );
+                                    self.pairing_handler.pairing_state =
+                                        PairingState::RequestedByPeer;
+
+                                    self.pairing_handler.request_pairing().await;
+                                    device_state.pairing_state = PairingState::Paired;
+                                };
+
+                                if !pair.pair {
                                     debug!(
                                         "Pairing request not accepted, setting state to NotPaired for device: {}",
                                         self.id
                                     );
                                     self.pairing_handler.pairing_state = PairingState::NotPaired;
-                                }
-
-                                self.pairing_handler.request_pairing().await;
-                                device_state.pairing_state = PairingState::Paired;
+                                    self.pairing_handler.unpair().await;
+                                };
                             } else {
                                 warn!("Failed to parse Pair data");
                             }

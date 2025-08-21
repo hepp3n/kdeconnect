@@ -126,12 +126,6 @@ impl PairingHandlerExt for PairingHandler {
             .await
             .expect("Failed to send Pair packet");
 
-        CONFIG
-            .lock()
-            .await
-            .update_pair(Some((self.device.clone(), self.pairing_state.clone())))
-            .expect("Failed to update paired device in config");
-
         return self.pairing_done(true).await;
     }
 
@@ -149,12 +143,6 @@ impl PairingHandlerExt for PairingHandler {
             .write_all(packet.as_bytes())
             .await
             .expect("Failed to send Pair packet");
-
-        CONFIG
-            .lock()
-            .await
-            .update_pair(None)
-            .expect("Failed to update paired device in config");
 
         warn!("Pairing cancelled by user");
 
@@ -178,15 +166,9 @@ impl PairingHandlerExt for PairingHandler {
             .await
             .expect("Failed to send Pair packet");
 
-        CONFIG
-            .lock()
-            .await
-            .update_pair(None)
-            .expect("Failed to update paired device in config");
-
         warn!("Unpairing device: {}", self.device.id);
 
-        true
+        self.pairing_done(false).await
     }
 
     async fn pairing_done(&mut self, is_paired: bool) -> bool {
@@ -202,6 +184,12 @@ impl PairingHandlerExt for PairingHandler {
             self.pairing_state = PairingState::NotPaired;
             warn!("Device {} is now unpaired", self.device.id);
         }
+
+        CONFIG
+            .lock()
+            .await
+            .update_pair(Some((self.device.clone(), self.pairing_state.clone())))
+            .expect("Failed to update paired device in config");
 
         is_paired
     }
