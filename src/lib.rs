@@ -3,11 +3,12 @@ pub(crate) mod config;
 pub mod device;
 pub(crate) mod helpers;
 pub(crate) mod packet;
+pub(crate) mod pairing_handler;
 pub(crate) mod plugins;
 pub(crate) mod ssl;
 
 use backends::start_backends;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     sync::{
         Mutex,
@@ -16,12 +17,12 @@ use tokio::{
     task,
 };
 use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::{
     backends::DEFAULT_PORT,
     config::CONFIG,
-    device::{ConnectedId, Linked, NewClient},
+    device::DeviceResponse,
     packet::{Identity, PROTOCOL_VERSION, Packet, PacketType, Ping, RunCommand, RunCommandRequest},
 };
 
@@ -32,28 +33,26 @@ pub enum ClientAction {
 
 #[derive(Debug, Clone)]
 pub struct KdeConnect {
-    devices: Arc<Mutex<HashMap<ConnectedId, NewClient>>>,
-    device_tx: mpsc::UnboundedSender<Linked>,
     client_action: Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>,
+    device_response: mpsc::UnboundedSender<DeviceResponse>,
 }
 
 impl KdeConnect {
     pub fn new() -> (
         Self,
-        UnboundedReceiverStream<Linked>,
         UnboundedSender<ClientAction>,
+        UnboundedReceiverStream<DeviceResponse>,
     ) {
-        let (conn_tx, conn_rx) = mpsc::unbounded_channel::<Linked>();
         let (client_action_tx, client_action_rx) = mpsc::unbounded_channel::<ClientAction>();
+        let (device_response_tx, device_response_rx) = mpsc::unbounded_channel::<DeviceResponse>();
 
         (
             Self {
-                devices: Arc::new(Mutex::new(HashMap::new())),
-                device_tx: conn_tx,
                 client_action: Arc::new(Mutex::new(client_action_rx)),
+                device_response: device_response_tx,
             },
-            conn_rx.into(),
             client_action_tx,
+            device_response_rx.into(),
         )
     }
 }
@@ -61,7 +60,7 @@ impl KdeConnect {
 impl KdeConnect {
     pub async fn run_server(&self) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let identity_packet = self.make_identity(Some(DEFAULT_PORT));
+        let identity_packet = self.make_identity(Some(DEFAULT_PORT)).await;
         let client_action = Arc::clone(&self.client_action);
 
         debug!("Starting KDE Connect");
@@ -76,43 +75,20 @@ impl KdeConnect {
         let mut stream = UnboundedReceiverStream::new(rx);
 
         while let Some(mut data) = stream.next().await {
-            self.device_tx
-                .send(data.linked.clone())
-                .unwrap_or_else(|e| {
-                    error!("Failed to send device ID: {}", e);
-                });
+            debug!("Received data from device: {:?}", data);
 
-            self.devices
-                .lock()
-                .await
-                .insert(data.linked.id.id.clone(), data.clone());
+            let responder = self.device_response.clone();
 
             task::spawn(async move {
-                data.device.process_stream().await;
+                data.process_stream(responder).await;
             });
         }
     }
 
-    pub fn send_action(&self, device_id: String, action: device::DeviceAction) {
-        let devices = Arc::clone(&self.devices);
-
-        tokio::spawn(async move {
-            let guard = devices.lock().await;
-
-            for (id, client) in guard.iter() {
-                if id == &device_id {
-                    client.device.send(action.clone())
-                } else {
-                    error!("Device with ID {} not found", device_id);
-                }
-            }
-        });
-    }
-
-    fn make_identity(&self, tcp_port: Option<u16>) -> Packet {
-        let device_id = CONFIG.device_uuid.clone();
-        let device_name = CONFIG.device_name.clone();
-        let device_type = CONFIG.device_type;
+    async fn make_identity(&self, tcp_port: Option<u16>) -> Packet {
+        let device_id = CONFIG.lock().await.device_uuid.clone();
+        let device_name = CONFIG.lock().await.device_name.clone();
+        let device_type = CONFIG.lock().await.device_type;
 
         let incoming_capabilities = vec![Ping::TYPE.to_string()];
 

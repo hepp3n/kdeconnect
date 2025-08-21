@@ -6,16 +6,18 @@ use std::{
 
 use rcgen::KeyPair;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::{
+    device::{DeviceId, PairingState},
     helpers::{default_hostname, generate_device_uuid},
     packet::DeviceType,
     ssl::{certificate_generator, store_certificate_files},
 };
 
 lazy_static::lazy_static! {
-    pub(crate) static ref CONFIG: KdeConnectConfig = KdeConnectConfig::default();
+    pub(crate) static ref CONFIG: Mutex<KdeConnectConfig> = Mutex::new(KdeConnectConfig::default());
 }
 
 pub(crate) const CONFIG_DIR: &str = "kdeconnect";
@@ -29,6 +31,7 @@ pub(crate) struct KdeConnectConfig {
     pub(crate) device_name: String,
     pub(crate) device_uuid: String,
     pub(crate) device_type: DeviceType,
+    pub(crate) paired: Option<(DeviceId, PairingState)>,
     signed_ca: PathBuf,
     priv_key: PathBuf,
 }
@@ -79,6 +82,7 @@ impl Default for KdeConnectConfig {
             device_name,
             device_uuid,
             device_type: DeviceType::Desktop,
+            paired: None,
         };
 
         if !path.join(CONFIG_FILE).exists() {
@@ -90,7 +94,7 @@ impl Default for KdeConnectConfig {
 }
 
 impl KdeConnectConfig {
-    pub fn store_config(&self) -> io::Result<()> {
+    fn store_config(&self) -> io::Result<()> {
         let path = dirs::config_dir()
             .expect("cant find config directory")
             .join("kdeconnect");
@@ -104,5 +108,13 @@ impl KdeConnectConfig {
         };
 
         Ok(())
+    }
+
+    pub(crate) fn update_pair(
+        &mut self,
+        device: Option<(DeviceId, PairingState)>,
+    ) -> io::Result<()> {
+        self.paired = device;
+        self.store_config()
     }
 }

@@ -11,7 +11,7 @@ use tokio::{net, task};
 use tokio_native_tls::{self, native_tls};
 use tracing::{debug, info, warn};
 
-use crate::device::{self, DeviceId, Linked, NewClient};
+use crate::device::{Device, DeviceId};
 use crate::make_packet_str;
 use crate::packet::{Identity, Packet, PacketType};
 use crate::{ClientAction, make_packet};
@@ -27,8 +27,8 @@ pub(crate) struct LanLinkProvider {
     u_socket: Option<Arc<net::UdpSocket>>,
     disabled: bool,
     test_mode: bool,
-    device_tx: Option<mpsc::UnboundedSender<NewClient>>,
-    connected_clients: Arc<Mutex<Vec<NewClient>>>,
+    device_tx: Option<mpsc::UnboundedSender<Device>>,
+    connected_clients: Arc<Mutex<Vec<Device>>>,
     client_action: Option<Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>>,
 }
 
@@ -53,7 +53,7 @@ impl LanLinkProvider {
     pub(crate) async fn on_start(
         &mut self,
         client_tx: Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>,
-        device_tx: mpsc::UnboundedSender<NewClient>,
+        device_tx: mpsc::UnboundedSender<Device>,
     ) {
         if self.disabled {
             return;
@@ -176,26 +176,19 @@ impl LanLinkProvider {
                         self.connected_clients
                             .lock()
                             .await
-                            .retain(|c| c.linked.id.id != identity.device_id);
+                            .retain(|c| c.id.id != identity.device_id);
                     }
                     let device = create_device(
-                        Arc::new(device_id.clone()),
+                        device_id.clone(),
                         Arc::new(Mutex::new(reader)),
                         Arc::new(Mutex::new(writer)),
-                    );
+                    )
+                    .await;
 
-                    let new_client = NewClient {
-                        linked: Linked {
-                            id: device_id.clone(),
-                            connection_type: device::ConnectionType::Server,
-                        },
-                        device: device.clone(),
-                    };
-
-                    self.connected_clients.lock().await.push(new_client.clone());
+                    self.connected_clients.lock().await.push(device.clone());
 
                     if let Some(tx) = &self.device_tx {
-                        tx.send(new_client).unwrap_or_else(|e| {
+                        tx.send(device).unwrap_or_else(|e| {
                             warn!("Failed to send device to channel: {}", e);
                         });
                     } else {
@@ -287,26 +280,19 @@ impl LanLinkProvider {
                             self.connected_clients
                                 .lock()
                                 .await
-                                .retain(|c| c.linked.id.id != identity.device_id);
+                                .retain(|c| c.id.id != identity.device_id);
                         }
                         let device = create_device(
-                            Arc::new(device_id.clone()),
+                            device_id.clone(),
                             Arc::new(Mutex::new(reader)),
                             Arc::new(Mutex::new(writer)),
-                        );
+                        )
+                        .await;
 
-                        let new_client = NewClient {
-                            linked: Linked {
-                                id: device_id.clone(),
-                                connection_type: device::ConnectionType::Client,
-                            },
-                            device: device.clone(),
-                        };
-
-                        self.connected_clients.lock().await.push(new_client.clone());
+                        self.connected_clients.lock().await.push(device.clone());
 
                         if let Some(tx) = &self.device_tx {
-                            tx.send(new_client).unwrap_or_else(|e| {
+                            tx.send(device).unwrap_or_else(|e| {
                                 warn!("Failed to send device to channel: {}", e);
                             });
                         } else {

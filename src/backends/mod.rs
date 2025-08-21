@@ -4,7 +4,7 @@ use std::{
 };
 use tokio::sync::{Mutex, mpsc};
 
-use crate::{ClientAction, device::NewClient, packet::Packet};
+use crate::{ClientAction, device::Device, packet::Packet};
 
 pub(crate) mod lan;
 
@@ -18,7 +18,7 @@ pub(crate) const LOCALHOST: SocketAddr =
 
 pub(crate) async fn start_backends(
     client_tx: Arc<Mutex<mpsc::UnboundedReceiver<ClientAction>>>,
-    device_tx: mpsc::UnboundedSender<NewClient>,
+    device_tx: mpsc::UnboundedSender<Device>,
     identity_packet: Packet,
 ) {
     let mut lan_link_provider = lan::LanLinkProvider::new(identity_packet);

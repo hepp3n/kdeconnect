@@ -8,7 +8,21 @@ use std::{collections::HashMap, fmt::Display};
 pub const PROTOCOL_VERSION: usize = 8;
 
 #[allow(dead_code)]
-pub const ALL_CAPABILITIES: &[&str] = &[Ping::TYPE, RunCommand::TYPE, RunCommandRequest::TYPE];
+pub const ALL_CAPABILITIES: &[&str] = &[
+    Battery::TYPE,
+    BatteryRequest::TYPE,
+    Clipboard::TYPE,
+    ClipboardConnect::TYPE,
+    ConnectivityReport::TYPE,
+    ConnectivityReportRequest::TYPE,
+    Mpris::TYPE,
+    MprisRequest::TYPE,
+    Ping::TYPE,
+    RunCommand::TYPE,
+    RunCommandRequest::TYPE,
+    SystemVolume::TYPE,
+    SystemVolumeRequest::TYPE,
+];
 
 macro_rules! derive_type {
     ($struct:ty, $type:literal) => {
@@ -84,7 +98,8 @@ derive_type!(Identity, "kdeconnect.identity");
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct Pair {
     pub pair: bool,
-    pub timestamp: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
 }
 derive_type!(Pair, "kdeconnect.pair");
 
@@ -211,6 +226,29 @@ pub enum ConnectivityReportNetworkType {
     #[serde(rename = "Unknown")]
     Unknown,
 }
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+pub struct ConnectivityReportRequest {}
+derive_type!(
+    ConnectivityReportRequest,
+    "kdeconnect.connectivity_report.request"
+);
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum SystemVolume {
+    List {
+        #[serde(rename = "sinkList")]
+        sink_list: Vec<SystemVolumeStream>,
+    },
+    Update {
+        name: String,
+        enabled: Option<bool>,
+        muted: Option<bool>,
+        volume: Option<i32>,
+    },
+}
+derive_type!(SystemVolume, "kdeconnect.systemvolume");
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

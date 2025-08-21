@@ -15,14 +15,14 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let (kdeconnect, mut devices) = KdeConnect::new();
+    let (kdeconnect, mut devices, _, _) = KdeConnect::new();
     let kconnect = kdeconnect.clone();
 
     task::spawn(async move {
         kconnect.run_server().await;
     });
 
-    while let Some((device_id, connection)) = devices.next().await {
+    while let Some(linked) = devices.next().await {
         let stdin = io::stdin();
         let input = &mut String::new();
 
@@ -31,7 +31,12 @@ async fn main() {
 
         let action = input.trim();
 
-        info!("Sendind action {} to via {}", action, connection);
+        info!(
+            "Sendind action {} to via {}",
+            action, linked.connection_type
+        );
+
+        let device_id = linked.id.id.clone();
 
         match action {
             "exit" | "quit" => {
