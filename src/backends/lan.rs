@@ -219,17 +219,18 @@ impl LanLinkProvider {
 
                             if identity.device_id == this_identity.device_id {
                                 debug!("[TCP] Dont respond to the same device");
+
                                 continue;
                             }
 
-                            if let Some(port) = identity.tcp_port {
-                                addr.set_port(port);
-                            }
-
-                            let data = make_packet_str!(this_identity)
-                                .expect("Failed to serialize identity packet");
-
                             let ret = async {
+                                if let Some(port) = identity.tcp_port {
+                                    addr.set_port(port);
+                                }
+
+                                let data = make_packet_str!(this_identity)
+                                    .expect("Failed to serialize identity packet");
+
                                 let mut connector = native_tls::TlsConnector::builder();
                                 connector.identity(
                                     native_tls::Identity::from_pkcs8(
