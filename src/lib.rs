@@ -58,7 +58,7 @@ impl KdeConnect {
 }
 
 impl KdeConnect {
-    pub async fn run_server(&self) {
+    pub async fn run_server(&mut self) {
         let (tx, rx) = mpsc::unbounded_channel();
         let identity_packet = self.make_identity(Some(DEFAULT_PORT)).await;
         let client_action = Arc::clone(&self.client_action);
@@ -74,14 +74,10 @@ impl KdeConnect {
 
         let mut stream = UnboundedReceiverStream::new(rx);
 
-        while let Some(mut data) = stream.next().await {
-            debug!("Received data from device: {:?}", data);
+        while let Some(device) = stream.next().await {
+            let device_response = self.device_response.clone();
 
-            let responder = self.device_response.clone();
-
-            task::spawn(async move {
-                data.process_stream(responder).await;
-            });
+            task::spawn(device.handler(device_response));
         }
     }
 

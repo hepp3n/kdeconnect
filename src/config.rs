@@ -52,17 +52,20 @@ impl Default for KdeConnectConfig {
         let device_uuid = generate_device_uuid();
         let device_name = default_hostname();
 
-        if let Ok(keypair) = KeyPair::generate()
-            && !self_signed_path.exists()
-            && !keypair_path.exists()
-        {
-            match certificate_generator(&keypair, &device_uuid) {
-                Ok(cert) => {
-                    let _ =
-                        store_certificate_files(&cert, &self_signed_path, &keypair, &keypair_path)
-                            .is_ok();
+        if let Ok(keypair) = KeyPair::generate() {
+            if !self_signed_path.exists() && !keypair_path.exists() {
+                match certificate_generator(&keypair, &device_uuid) {
+                    Ok(cert) => {
+                        let _ = store_certificate_files(
+                            &cert,
+                            &self_signed_path,
+                            &keypair,
+                            &keypair_path,
+                        )
+                        .is_ok();
+                    }
+                    Err(e) => error!("{e:?}"),
                 }
-                Err(e) => error!("{e:?}"),
             }
         };
 

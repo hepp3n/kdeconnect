@@ -227,6 +227,24 @@ pub enum ConnectivityReportNetworkType {
     Unknown,
 }
 
+impl Display for ConnectivityReportNetworkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectivityReportNetworkType::Gsm => write!(f, "GSM"),
+            ConnectivityReportNetworkType::Cdma => write!(f, "CDMA"),
+            ConnectivityReportNetworkType::Iden => write!(f, "iDEN"),
+            ConnectivityReportNetworkType::Umts => write!(f, "UMTS"),
+            ConnectivityReportNetworkType::Cdma2000 => write!(f, "CDMA2000"),
+            ConnectivityReportNetworkType::Edge => write!(f, "EDGE"),
+            ConnectivityReportNetworkType::Gprs => write!(f, "GPRS"),
+            ConnectivityReportNetworkType::Hspa => write!(f, "HSPA"),
+            ConnectivityReportNetworkType::Lte => write!(f, "LTE"),
+            ConnectivityReportNetworkType::FiveG => write!(f, "5G"),
+            ConnectivityReportNetworkType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct ConnectivityReportRequest {}
 derive_type!(

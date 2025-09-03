@@ -15,54 +15,54 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let (kdeconnect, mut devices, _, _) = KdeConnect::new();
-    let kconnect = kdeconnect.clone();
+    // let (kdeconnect, mut devices, _, _) = KdeConnect::new();
+    // let kconnect = kdeconnect.clone();
 
-    task::spawn(async move {
-        kconnect.run_server().await;
-    });
+    // task::spawn(async move {
+    //     kconnect.run_server().await;
+    // });
 
-    while let Some(linked) = devices.next().await {
-        let stdin = io::stdin();
-        let input = &mut String::new();
+    // while let Some(linked) = devices.next().await {
+    //     let stdin = io::stdin();
+    //     let input = &mut String::new();
 
-        input.clear();
-        let _ = stdin.read_line(input);
+    //     input.clear();
+    //     let _ = stdin.read_line(input);
 
-        let action = input.trim();
+    //     let action = input.trim();
 
-        info!(
-            "Sendind action {} to via {}",
-            action, linked.connection_type
-        );
+    //     info!(
+    //         "Sendind action {} to via {}",
+    //         action, linked.connection_type
+    //     );
 
-        let device_id = linked.id.id.clone();
+    //     let device_id = linked.id.id.clone();
 
-        match action {
-            "exit" | "quit" => {
-                println!("Exiting KDE Connect server...");
-                break;
-            }
-            "pair" => {
-                tracing::debug!("Pair action received. Trying to pair.");
-                let pair_action = DeviceAction::Pair(true);
-                kdeconnect.send_action(device_id, pair_action);
-            }
-            "unpair" => {
-                tracing::debug!("UnPair action received. Trying to remove link.");
-                let pair_action = DeviceAction::Pair(false);
-                kdeconnect.send_action(device_id, pair_action);
-            }
-            "ping" => {
-                tracing::debug!("Ping action received. Trying to ping.");
-                let ping_action =
-                    DeviceAction::Ping(String::from("Hello from KDE Connect and Rust!"));
+    //     match action {
+    //         "exit" | "quit" => {
+    //             println!("Exiting KDE Connect server...");
+    //             break;
+    //         }
+    //         "pair" => {
+    //             tracing::debug!("Pair action received. Trying to pair.");
+    //             let pair_action = DeviceAction::Pair(true);
+    //             kdeconnect.send_action(device_id, pair_action);
+    //         }
+    //         "unpair" => {
+    //             tracing::debug!("UnPair action received. Trying to remove link.");
+    //             let pair_action = DeviceAction::Pair(false);
+    //             kdeconnect.send_action(device_id, pair_action);
+    //         }
+    //         "ping" => {
+    //             tracing::debug!("Ping action received. Trying to ping.");
+    //             let ping_action =
+    //                 DeviceAction::Ping(String::from("Hello from KDE Connect and Rust!"));
 
-                kdeconnect.send_action(device_id, ping_action);
-            }
-            _ => {
-                println!("Unknown command. Type 'exit' or 'quit' to stop the server.");
-            }
-        };
-    }
+    //             kdeconnect.send_action(device_id, ping_action);
+    //         }
+    //         _ => {
+    //             println!("Unknown command. Type 'exit' or 'quit' to stop the server.");
+    //         }
+    //     };
+    // }
 }

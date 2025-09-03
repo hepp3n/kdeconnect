@@ -7,12 +7,11 @@ use tokio::{
     net::TcpStream,
     sync::{
         Mutex,
-        mpsc::{self},
+        mpsc::{self, UnboundedReceiver},
     },
-    task::{self, JoinHandle},
+    task::JoinHandle,
 };
 use tokio_native_tls::TlsStream;
-use tokio_stream::{StreamExt as _, wrappers::UnboundedReceiverStream};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -49,7 +48,7 @@ impl Display for PairingState {
 
 #[derive(Debug, Clone)]
 pub enum DeviceResponse {
-    Refresh((Box<Device>, Box<DeviceState>)),
+    Refresh(Box<DeviceState>),
     SyncClipboard(String),
 }
 
@@ -117,14 +116,12 @@ impl Display for DeviceId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Device {
-    pub id: DeviceId,
+    pub state: DeviceState,
     pub(crate) reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
     pub(crate) writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
-    action_tx: mpsc::UnboundedSender<DeviceAction>,
-    action_rx: Arc<Mutex<UnboundedReceiverStream<DeviceAction>>>,
-    state: Arc<Mutex<DeviceState>>,
+    action_rx: UnboundedReceiver<DeviceAction>,
     pairing_handler: PairingHandler,
 }
 
@@ -149,29 +146,33 @@ impl Device {
                 }
             })
             .unwrap_or(PairingState::NotPaired);
-        let device_state = DeviceState::new(id.clone(), pairing_state.clone());
+        let device_state = DeviceState::new(action_tx, id.clone(), pairing_state.clone());
         let pairing_handler = PairingHandler::new(&id, writer.clone(), pairing_state);
 
-        let action_rx = UnboundedReceiverStream::new(action_rx);
-
         Self {
-            id: id.clone(),
             reader,
             writer,
-            action_tx,
-            action_rx: Arc::new(Mutex::new(action_rx)),
-            state: Arc::new(Mutex::new(device_state)),
+            action_rx,
+            state: device_state,
             pairing_handler,
         }
     }
-}
 
-pub(crate) async fn create_device(
-    id: DeviceId,
-    reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
-    writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
-) -> Device {
-    Device::new(id, reader, writer).await
+    pub(crate) async fn handler(self, device_response: mpsc::UnboundedSender<DeviceResponse>) {
+        let state = self.state.clone();
+        let reader = self.reader.clone();
+        let mut reader = reader.lock().await;
+        let reader = BufReader::new(&mut *reader);
+
+        tokio::select! {
+            _ = process_stream(state, reader, device_response.clone()) => {
+                debug!("process_stream task ended");
+            }
+            _ = handle_actions(self, device_response.clone()) => {
+                debug!("handle_actions task ended");
+            }
+        }
+    }
 }
 
 impl PluginHandler for Device {
@@ -193,352 +194,253 @@ impl PluginHandler for Device {
     }
 }
 
-impl Device {
-    pub(crate) async fn process_stream(
-        &mut self,
-        device_response: mpsc::UnboundedSender<DeviceResponse>,
-    ) {
-        let c_reader = Arc::clone(&self.reader);
-        let id = self.id.clone();
-
-        self.writer
-            .lock()
-            .await
-            .flush()
-            .await
-            .expect("Failed to flush writer");
-
-        let action = self.action_tx.clone();
-        let responsder = device_response.clone();
-
-        let mut device_state = Box::new(self.state.lock().await.clone());
-        let task_response = device_response.clone();
-        let boxed_self = Box::new(self.to_owned());
-        let task_self = Box::clone(&boxed_self);
-        let mut task_state = Box::clone(&device_state);
-
-        task::spawn(async move {
-            let mut reader = c_reader.lock().await;
-            let mut reader = BufReader::new(Box::new(&mut *reader));
-
-            loop {
-                let mut buffer = String::new();
-
-                match reader.read_line(&mut buffer).await {
-                    Ok(0) => {
-                        error!("EOF reached.");
-                        action.send(DeviceAction::Disconnect).unwrap_or_else(|e| {
-                            error!("Failed to send Disconnect action: {}", e);
-                        });
-                        break; // Exit on EOF
-                    }
-                    Ok(_) => {
-                        if let Ok(packet) = json::from_str::<Packet>(&buffer) {
-                            match packet.packet_type.as_str() {
-                                Battery::TYPE => {
-                                    debug!("Received Battery packet: {}", buffer);
-
-                                    if let Ok(battery) = json::from_value::<Battery>(packet.body) {
-                                        task_state.battery = Some(battery);
-                                        info!("Battery state updated: {:?}", task_state.battery);
-                                    } else {
-                                        warn!("Failed to parse Battery data");
-                                    }
-                                }
-                                Clipboard::TYPE => {
-                                    debug!("Received Clipboard packet: {}", buffer);
-
-                                    if let Ok(clipboard) =
-                                        json::from_value::<Clipboard>(packet.body)
-                                    {
-                                        task_state.clipboard = Some(clipboard.content.clone());
-
-                                        responsder
-                                            .send(DeviceResponse::SyncClipboard(
-                                                clipboard.content.clone(),
-                                            ))
-                                            .unwrap_or_else(|e| {
-                                                error!(
-                                                    "Failed to send SyncClipboard response: {}",
-                                                    e
-                                                );
-                                            });
-
-                                        info!(
-                                            "Clipboard state updated: {:?}",
-                                            task_state.clipboard
-                                        );
-                                    } else {
-                                        warn!("Failed to parse Battery data");
-                                    }
-                                }
-                                ClipboardConnect::TYPE => {
-                                    debug!("Received ClipboardConnect packet: {}", buffer);
-                                }
-                                ConnectivityReport::TYPE => {
-                                    debug!("Received ConnectivityReport packet: {}", buffer);
-
-                                    if let Ok(connectivity) =
-                                        json::from_value::<ConnectivityReport>(packet.body)
-                                    {
-                                        task_state.connectivity = Some(connectivity);
-                                        info!(
-                                            "Connectivity state updated: {:?}",
-                                            task_state.connectivity
-                                        );
-                                    } else {
-                                        warn!("Failed to parse ConnectivityReport data");
-                                    }
-                                }
-                                Mpris::TYPE => {
-                                    debug!("Received Mpris packet: {}", buffer);
-
-                                    if let Ok(mpris) = json::from_value::<Mpris>(packet.body) {
-                                        match mpris {
-                                            Mpris::List {
-                                                player_list,
-                                                supports_album_art_payload,
-                                            } => warn!("not implemented yet"),
-                                            Mpris::TransferringArt {
-                                                player,
-                                                album_art_url,
-                                                transferring_album_art,
-                                            } => warn!("not implemented yet"),
-                                            Mpris::Info(mpris_player) => {
-                                                info!(
-                                                    "Received Mpris player info: {:?}",
-                                                    mpris_player
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        warn!("Failed to parse Mpris data");
-                                    }
-                                }
-                                Pair::TYPE => {
-                                    debug!("Received Pair packet: {}", buffer);
-
-                                    if let Ok(pair) = json::from_value::<Pair>(packet.body.clone())
-                                    {
-                                        if pair.timestamp.is_some() {
-                                            action
-                                                .send(DeviceAction::RequestedPairByPeer(packet))
-                                                .unwrap_or_else(|e| {
-                                                    error!("Failed to send Pair action: {}", e);
-                                                });
-                                        }
-
-                                        if pair.pair {
-                                            debug!(
-                                                "Device {} sent accept for pairing we can assume success.",
-                                                &task_self.id
-                                            );
-                                            task_state.pairing_state = PairingState::Paired;
-                                        }
-
-                                        if !pair.pair {
-                                            debug!(
-                                                "Device {} sent reject for pairing, setting state to NotPaired.",
-                                                &task_self.id
-                                            );
-                                            task_state.pairing_state = PairingState::NotPaired;
-                                            action.send(DeviceAction::UnPair).unwrap_or_else(|e| {
-                                                error!("Failed to send Pair action: {}", e);
-                                            });
-
-                                            break; // Exit on reject
-                                        }
-                                    } else {
-                                        warn!("Failed to parse Pair data");
-                                    }
-                                }
-                                Ping::TYPE => {
-                                    debug!("Received Ping packet: {}", buffer);
-
-                                    Notification::new()
-                                        .appname("KDE Connect")
-                                        .summary("KDE Connect")
-                                        .body("Ping!")
-                                        .icon("display-symbolic")
-                                        .show()
-                                        .expect("Showing notification failed");
-                                }
-                                RunCommandRequest::TYPE => {
-                                    debug!("Received RunCommandRequest packet: {}", buffer);
-                                }
-                                SystemVolume::TYPE => {
-                                    debug!("Received SystemVolume packet: {}", buffer);
-
-                                    if let Ok(system_volume) =
-                                        json::from_value::<SystemVolume>(packet.body)
-                                    {
-                                        match system_volume {
-                                            SystemVolume::List { sink_list } => {
-                                                task_state.systemvolume = Some(sink_list);
-                                            }
-                                            SystemVolume::Update {
-                                                name,
-                                                enabled,
-                                                muted,
-                                                volume,
-                                            } => todo!(),
-                                        }
-                                    } else {
-                                        warn!("Failed to parse SystemVolume data");
-                                    }
-                                }
-                                _ => {
-                                    warn!("Received unknown packet type: {}", packet.packet_type);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to read from stream: {}", e);
-                        break; // Exit on read error
-                    }
-                }
-                buffer.clear(); // Clear the buffer for the next read
-                task_response
-                    .send(DeviceResponse::Refresh((
-                        task_self.clone(),
-                        task_state.clone(),
-                    )))
-                    .unwrap_or_else(|e| {
-                        error!("Failed to send device refresh response: {}", e);
-                    });
-            }
-
-            task_response
-                .send(DeviceResponse::Refresh((
-                    task_self.clone(),
-                    task_state.clone(),
-                )))
-                .unwrap_or_else(|e| {
-                    error!("Failed to send device refresh response: {}", e);
-                });
+pub(crate) async fn process_stream(
+    mut state: DeviceState,
+    mut reader: BufReader<&mut ReadHalf<TlsStream<TcpStream>>>,
+    device_response: mpsc::UnboundedSender<DeviceResponse>,
+) {
+    device_response
+        .send(DeviceResponse::Refresh(state.clone().into()))
+        .unwrap_or_else(|e| {
+            error!("Failed to send device refresh response: {}", e);
         });
 
-        device_response
-            .send(DeviceResponse::Refresh((
-                boxed_self.clone(),
-                device_state.clone(),
-            )))
-            .unwrap_or_else(|e| {
-                error!("Failed to send device refresh response: {}", e);
-            });
+    loop {
+        let mut buffer = String::new();
+        debug!("Waiting for data from device...");
 
-        loop {
-            match self.action_rx.lock().await.next().await {
-                Some(action) => {
-                    debug!("Received action: {}", &action);
-                    match &action {
-                        DeviceAction::Disconnect => {
-                            info!("Disconnecting device: {}", self.id);
+        match reader.read_line(&mut buffer).await {
+            Ok(0) => {
+                error!("EOF reached.");
+                state.send(DeviceAction::Disconnect);
+                break; // Exit on EOF
+            }
+            Ok(_) => {
+                if let Ok(packet) = json::from_str::<Packet>(&buffer) {
+                    match packet.packet_type.as_str() {
+                        Battery::TYPE => {
+                            debug!("Received Battery packet: {}", buffer);
 
-                            self.writer
-                                .lock()
-                                .await
-                                .shutdown()
-                                .await
-                                .unwrap_or_else(|e| {
-                                    error!("Failed to shutdown writer: {}", e);
-                                });
+                            if let Ok(battery) = json::from_value::<Battery>(packet.body) {
+                                state.battery = Some(battery);
 
-                            drop(boxed_self); // Drop the boxed self to close the stream
-
-                            break; // Exit the loop on disconnect
+                                info!("Battery state updated");
+                            } else {
+                                warn!("Failed to parse Battery data");
+                            }
                         }
-                        DeviceAction::Refresh => {
-                            debug!("Refreshing device state: {}", self.id);
-                            device_response
-                                .send(DeviceResponse::Refresh((
-                                    boxed_self.clone(),
-                                    device_state.clone(),
-                                )))
-                                .unwrap_or_else(|e| {
-                                    error!("Failed to send device refresh response: {}", e);
-                                });
+                        Clipboard::TYPE => {
+                            debug!("Received Clipboard packet: {}", buffer);
+
+                            if let Ok(clipboard) = json::from_value::<Clipboard>(packet.body) {
+                                state.clipboard = Some(clipboard.content.clone());
+
+                                device_response
+                                    .send(DeviceResponse::SyncClipboard(clipboard.content.clone()))
+                                    .unwrap_or_else(|e| {
+                                        error!("Failed to send SyncClipboard response: {}", e);
+                                    });
+
+                                info!("Clipboard state updated",);
+                            } else {
+                                warn!("Failed to parse Battery data");
+                            }
                         }
-                        DeviceAction::RequestedPairByPeer(packet) => {
-                            debug!("Received pairing request from peer: {}", packet.packet_type);
+                        ClipboardConnect::TYPE => {
+                            debug!("Received ClipboardConnect packet: {}", buffer);
+                        }
+                        ConnectivityReport::TYPE => {
+                            debug!("Received ConnectivityReport packet: {}", buffer);
+
+                            if let Ok(connectivity) =
+                                json::from_value::<ConnectivityReport>(packet.body)
+                            {
+                                state.connectivity = Some(connectivity);
+                                info!("Connectivity state updated",);
+                            } else {
+                                warn!("Failed to parse ConnectivityReport data");
+                            }
+                        }
+                        Mpris::TYPE => {
+                            debug!("Received Mpris packet: {}", buffer);
+
+                            if let Ok(mpris) = json::from_value::<Mpris>(packet.body) {
+                                match mpris {
+                                    Mpris::List {
+                                        player_list,
+                                        supports_album_art_payload,
+                                    } => warn!("not implemented yet"),
+                                    Mpris::TransferringArt {
+                                        player,
+                                        album_art_url,
+                                        transferring_album_art,
+                                    } => warn!("not implemented yet"),
+                                    Mpris::Info(mpris_player) => {
+                                        info!("Received Mpris player info: {:?}", mpris_player);
+                                    }
+                                }
+                            } else {
+                                warn!("Failed to parse Mpris data");
+                            }
+                        }
+                        Pair::TYPE => {
+                            debug!("Received Pair packet: {}", buffer);
 
                             if let Ok(pair) = json::from_value::<Pair>(packet.body.clone()) {
-                                if pair.pair
-                                    && let Some(_timestamp) = pair.timestamp
-                                {
-                                    debug!(
-                                        "Setting pairing state to RequestedByPeer for device: {}",
-                                        self.id
-                                    );
-                                    self.pairing_handler.pairing_state =
-                                        PairingState::RequestedByPeer;
+                                if pair.timestamp.is_some() {
+                                    state.send(DeviceAction::RequestedPairByPeer(packet));
+                                }
 
-                                    self.pairing_handler.request_pairing().await;
-                                    device_state.pairing_state = PairingState::Paired;
-                                };
+                                if pair.pair {
+                                    debug!("Device sent accept for pairing we can assume success.",);
+                                    state.pairing_state = PairingState::Paired;
+                                }
 
                                 if !pair.pair {
                                     debug!(
-                                        "Pairing request not accepted, setting state to NotPaired for device: {}",
-                                        self.id
+                                        "Device sent reject for pairing, setting state to NotPaired.",
                                     );
-                                    self.pairing_handler.pairing_state = PairingState::NotPaired;
-                                    self.pairing_handler.unpair().await;
-                                };
+                                    state.pairing_state = PairingState::NotPaired;
+                                    state.send(DeviceAction::UnPair);
+
+                                    break; // Exit on reject
+                                }
                             } else {
                                 warn!("Failed to parse Pair data");
                             }
                         }
-                        DeviceAction::Pair => {
-                            self.pairing_handler.pairing_state = PairingState::Requested;
-                            self.pairing_handler.request_pairing().await;
-                            device_state.pairing_state = PairingState::Paired;
-                        }
-                        DeviceAction::UnPair => {
-                            self.pairing_handler.unpair().await;
-                            device_state.pairing_state = PairingState::NotPaired;
+                        Ping::TYPE => {
+                            debug!("Received Ping packet: {}", buffer);
 
-                            debug!("Unpairing finished: {}", id);
+                            Notification::new()
+                                .appname("KDE Connect")
+                                .summary("KDE Connect")
+                                .body("Ping!")
+                                .icon("display-symbolic")
+                                .show()
+                                .expect("Showing notification failed");
                         }
-                        DeviceAction::Ping(msg) => {
-                            self.ping(msg.clone()).await;
+                        RunCommandRequest::TYPE => {
+                            debug!("Received RunCommandRequest packet: {}", buffer);
+                        }
+                        SystemVolume::TYPE => {
+                            debug!("Received SystemVolume packet: {}", buffer);
+
+                            if let Ok(system_volume) = json::from_value::<SystemVolume>(packet.body)
+                            {
+                                match system_volume {
+                                    SystemVolume::List { sink_list } => {
+                                        state.systemvolume = Some(sink_list);
+                                    }
+                                    SystemVolume::Update {
+                                        name,
+                                        enabled,
+                                        muted,
+                                        volume,
+                                    } => todo!(),
+                                }
+                            } else {
+                                warn!("Failed to parse SystemVolume data");
+                            }
+                        }
+                        _ => {
+                            warn!("Received unknown packet type: {}", packet.packet_type);
                         }
                     }
-
-                    debug!("Action processed: {}", action);
-                }
-                None => {
-                    debug!("No more actions to process, exiting loop");
-                    break; // Exit if no more actions
                 }
             }
-
-            device_response
-                .send(DeviceResponse::Refresh((
-                    boxed_self.clone(),
-                    device_state.clone(),
-                )))
-                .unwrap_or_else(|e| {
-                    error!("Failed to send device refresh response: {}", e);
-                });
+            Err(e) => {
+                error!("Failed to read from stream: {}", e);
+                break; // Exit on read error
+            }
         }
+
+        buffer.clear(); // Clear the buffer for the next read
+
+        device_response
+            .send(DeviceResponse::Refresh(state.clone().into()))
+            .unwrap_or_else(|e| {
+                error!("Failed to send device refresh response: {}", e);
+            });
     }
+}
 
-    pub fn send(&self, action: DeviceAction) {
-        if let Err(e) = self.action_tx.send(action) {
-            error!("Failed to send action: {}", e);
-        } else {
-            debug!("Action sent successfully");
-        }
+pub(crate) async fn handle_actions(
+    mut device: Device,
+    device_response: mpsc::UnboundedSender<DeviceResponse>,
+) {
+    while let Some(action) = device.action_rx.recv().await {
+        debug!("Received action: {}", &action);
+        match &action {
+            DeviceAction::Disconnect => {
+                device
+                    .writer
+                    .lock()
+                    .await
+                    .shutdown()
+                    .await
+                    .unwrap_or_else(|e| {
+                        error!("Failed to shutdown writer: {}", e);
+                    });
+
+                break; // Exit the loop on disconnect
+            }
+            DeviceAction::Refresh => {
+                device_response
+                    .send(DeviceResponse::Refresh(Box::new(device.state.clone())))
+                    .unwrap_or_else(|e| {
+                        error!("Failed to send device refresh response: {}", e);
+                    });
+            }
+            DeviceAction::RequestedPairByPeer(packet) => {
+                debug!("Received pairing request from peer: {}", packet.packet_type);
+
+                if let Ok(pair) = json::from_value::<Pair>(packet.body.clone()) {
+                    if let Some(_timestamp) = pair.timestamp {
+                        if pair.pair {
+                            debug!("Setting pairing state to RequestedByPeer for device",);
+                            device.pairing_handler.pairing_state = PairingState::RequestedByPeer;
+
+                            device.pairing_handler.request_pairing().await;
+                            device.pairing_handler.pairing_state = PairingState::Paired;
+                        }
+                    };
+
+                    if !pair.pair {
+                        debug!(
+                            "Pairing request not accepted, setting state to NotPaired for device",
+                        );
+                        device.pairing_handler.pairing_state = PairingState::NotPaired;
+                        device.pairing_handler.unpair().await;
+                    };
+                } else {
+                    warn!("Failed to parse Pair data");
+                }
+            }
+            DeviceAction::Pair => {
+                device.pairing_handler.pairing_state = PairingState::Requested;
+                device.pairing_handler.request_pairing().await;
+                device.pairing_handler.pairing_state = PairingState::Paired;
+            }
+            DeviceAction::UnPair => {
+                device.pairing_handler.unpair().await;
+                device.pairing_handler.pairing_state = PairingState::NotPaired;
+
+                debug!("Unpairing finished");
+            }
+            DeviceAction::Ping(msg) => {
+                device.ping(msg.clone()).await;
+            }
+        };
     }
 }
 
 type DeviceStatePlayers =
     HashMap<String, (MprisPlayer, Option<String>, Option<Arc<JoinHandle<()>>>)>;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DeviceState {
+    action_tx: mpsc::UnboundedSender<DeviceAction>,
     pub device_id: DeviceId,
     pub battery: Option<Battery>,
     pub clipboard: Option<String>,
@@ -550,8 +452,13 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
-    pub fn new(device_id: DeviceId, pairing_state: PairingState) -> Self {
+    pub fn new(
+        action: mpsc::UnboundedSender<DeviceAction>,
+        device_id: DeviceId,
+        pairing_state: PairingState,
+    ) -> Self {
         Self {
+            action_tx: action,
             device_id,
             battery: None,
             clipboard: None,
@@ -560,6 +467,14 @@ impl DeviceState {
             players: HashMap::new(),
             commands: HashMap::new(),
             pairing_state,
+        }
+    }
+
+    pub fn send(&self, action: DeviceAction) {
+        if let Err(e) = self.action_tx.send(action) {
+            error!("Failed to send action: {}", e);
+        } else {
+            debug!("Action sent successfully");
         }
     }
 }

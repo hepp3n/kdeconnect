@@ -1,6 +1,6 @@
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, io};
 
 use serde_json as json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt as _, BufReader};
@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use tokio::{net, task};
 use tokio_native_tls::{self, native_tls};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::device::{Device, DeviceId};
 use crate::make_packet_str;
@@ -17,7 +17,6 @@ use crate::packet::{Identity, Packet, PacketType};
 use crate::{ClientAction, make_packet};
 use crate::{
     backends::{BROADCAST_ADDR, LOCALHOST, UNSPECIFIED_ADDR},
-    device::create_device,
     ssl::{read_certificate, read_keypair},
 };
 
@@ -28,7 +27,6 @@ pub(crate) struct LanLinkProvider {
     disabled: bool,
     test_mode: bool,
     device_tx: Option<mpsc::UnboundedSender<Device>>,
-    connected_clients: Vec<Device>,
 }
 
 impl LanLinkProvider {
@@ -40,7 +38,6 @@ impl LanLinkProvider {
             disabled: false,
             test_mode: false,
             device_tx: None,
-            connected_clients: Vec::new(),
         }
     }
 
@@ -79,7 +76,9 @@ impl LanLinkProvider {
                 if let Err(e) = socket.set_broadcast(true) {
                     eprintln!("Failed to set broadcast on UDP socket: {}", e);
                 }
+
                 debug!("UDP socket bound to {}", bind_addr);
+
                 task::spawn(send_identity_udp(
                     socket.clone(),
                     self.network_packet.clone(),
@@ -110,85 +109,64 @@ impl LanLinkProvider {
                                 continue;
                             }
 
-                            let ret = async {
-                                if let Some(port) = identity.tcp_port {
-                                    addr.set_port(port);
-                                }
+                            if let Some(port) = identity.tcp_port {
+                                addr.set_port(port);
+                            }
 
-                                if let Ok(mut sock) = net::TcpStream::connect(addr).await {
-                                    let data = make_packet_str!(this_identity)
-                                        .expect("Failed to serialize identity packet");
+                            if let Ok(mut sock) = net::TcpStream::connect(addr).await {
+                                let data = make_packet_str!(this_identity)
+                                    .expect("Failed to serialize identity packet");
 
-                                    sock.write_all(data.as_bytes())
-                                        .await
-                                        .expect("[TCP] Failed to write data to socket");
+                                sock.write_all(data.as_bytes())
+                                    .await
+                                    .expect("[TCP] Failed to write data to socket");
 
-                                    let cert = native_tls::Identity::from_pkcs8(
-                                        &read_certificate(),
-                                        &read_keypair(),
-                                    )
-                                    .unwrap();
+                                let cert = native_tls::Identity::from_pkcs8(
+                                    &read_certificate(),
+                                    &read_keypair(),
+                                )
+                                .unwrap();
 
-                                    let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
-                                        native_tls::TlsAcceptor::builder(cert)
-                                            .build()
-                                            .expect("Failed to create TLS acceptor"),
-                                    );
+                                let tls_acceptor = tokio_native_tls::TlsAcceptor::from(
+                                    native_tls::TlsAcceptor::builder(cert)
+                                        .build()
+                                        .expect("Failed to create TLS acceptor"),
+                                );
 
-                                    let mut tls_stream =
-                                        tls_acceptor.accept(sock).await.expect("accept error");
+                                let mut tls_stream =
+                                    tls_acceptor.accept(sock).await.expect("accept error");
 
-                                    tls_stream
-                                        .write_all(data.as_bytes())
-                                        .await
-                                        .expect("[TCP] Failed to write data to TLS stream");
+                                tls_stream
+                                    .write_all(data.as_bytes())
+                                    .await
+                                    .expect("[TCP] Failed to write data to TLS stream");
 
-                                    debug!(
-                                        "New Device Found: {} - {}",
-                                        identity.device_id, identity.device_name
-                                    );
+                                debug!(
+                                    "New Device Found: {} - {}",
+                                    identity.device_id, identity.device_name
+                                );
 
-                                    let (reader, writer) = tokio::io::split(tls_stream);
+                                let (reader, writer) = tokio::io::split(tls_stream);
 
-                                    let device_id = DeviceId {
-                                        id: identity.device_id.clone(),
-                                        name: identity.device_name.clone(),
-                                    };
-
-                                    if !self.connected_clients.is_empty() {
-                                        self.connected_clients
-                                            .retain(|c| c.id.id != identity.device_id);
-                                    }
-                                    let device = create_device(
-                                        device_id.clone(),
-                                        Arc::new(Mutex::new(reader)),
-                                        Arc::new(Mutex::new(writer)),
-                                    )
-                                    .await;
-
-                                    self.connected_clients.push(device.clone());
-
-                                    if let Some(tx) = &self.device_tx {
-                                        tx.send(device).unwrap_or_else(|e| {
-                                            warn!("Failed to send device to channel: {}", e);
-                                        });
-                                    } else {
-                                        warn!("Device channel is not set, cannot send device");
-                                    }
-
-                                    info!("Current clients: {}", self.connected_clients.len());
-                                } else {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::ConnectionRefused,
-                                        "Failed to connect to TCP server",
-                                    ));
+                                let device_id = DeviceId {
+                                    id: identity.device_id.clone(),
+                                    name: identity.device_name.clone(),
                                 };
 
-                                Ok(()) as Result<(), io::Error>
-                            };
+                                let device = Device::new(
+                                    device_id.clone(),
+                                    Arc::new(Mutex::new(reader)),
+                                    Arc::new(Mutex::new(writer)),
+                                )
+                                .await;
 
-                            if let Err(e) = ret.await {
-                                warn!("Failed to handle UDP packet from {}: {}", addr, e);
+                                if let Some(tx) = &self.device_tx {
+                                    tx.send(device).unwrap_or_else(|e| {
+                                        warn!("Failed to send device to channel: {}", e);
+                                    });
+                                } else {
+                                    warn!("Device channel is not set, cannot send device");
+                                }
                             };
                         };
                     }
@@ -223,80 +201,63 @@ impl LanLinkProvider {
                                 continue;
                             }
 
-                            let ret = async {
-                                if let Some(port) = identity.tcp_port {
-                                    addr.set_port(port);
-                                }
+                            if let Some(port) = identity.tcp_port {
+                                addr.set_port(port);
+                            }
 
-                                let data = make_packet_str!(this_identity)
-                                    .expect("Failed to serialize identity packet");
+                            let data = make_packet_str!(this_identity)
+                                .expect("Failed to serialize identity packet");
 
-                                let mut connector = native_tls::TlsConnector::builder();
-                                connector.identity(
-                                    native_tls::Identity::from_pkcs8(
-                                        &read_certificate(),
-                                        &read_keypair(),
-                                    )
-                                    .expect("Failed to create TLS identity"),
-                                );
-                                connector.danger_accept_invalid_certs(true);
-                                connector.use_sni(false);
-                                let connector = tokio_native_tls::TlsConnector::from(
-                                    connector.build().expect("Failed to create TLS connector"),
-                                );
-
-                                let mut tls_stream = connector
-                                    .connect(&identity.device_id, socket)
-                                    .await
-                                    .unwrap();
-
-                                tls_stream
-                                    .write_all(data.as_bytes())
-                                    .await
-                                    .expect("[TCP] Failed to write data to TLS stream");
-
-                                debug!(
-                                    "New Device Found: {} - {}",
-                                    identity.device_id, identity.device_name
-                                );
-
-                                let (reader, writer) = tokio::io::split(tls_stream);
-
-                                let device_id = DeviceId {
-                                    id: identity.device_id.clone(),
-                                    name: identity.device_name.clone(),
-                                };
-
-                                if !self.connected_clients.is_empty() {
-                                    self.connected_clients
-                                        .retain(|c| c.id.id != identity.device_id);
-                                }
-
-                                let device = create_device(
-                                    device_id.clone(),
-                                    Arc::new(Mutex::new(reader)),
-                                    Arc::new(Mutex::new(writer)),
+                            let mut connector = native_tls::TlsConnector::builder();
+                            connector.identity(
+                                native_tls::Identity::from_pkcs8(
+                                    &read_certificate(),
+                                    &read_keypair(),
                                 )
-                                .await;
+                                .expect("Failed to create TLS identity"),
+                            );
+                            connector.danger_accept_invalid_certs(true);
+                            connector.use_sni(false);
+                            let connector = tokio_native_tls::TlsConnector::from(
+                                connector.build().expect("Failed to create TLS connector"),
+                            );
 
-                                self.connected_clients.push(device.clone());
+                            let mut tls_stream = connector
+                                .connect(&identity.device_id, socket)
+                                .await
+                                .unwrap();
 
-                                if let Some(tx) = &self.device_tx {
-                                    tx.send(device).unwrap_or_else(|e| {
-                                        warn!("Failed to send device to channel: {}", e);
-                                    });
-                                } else {
-                                    warn!("Device channel is not set, cannot send device");
-                                }
+                            tls_stream
+                                .write_all(data.as_bytes())
+                                .await
+                                .expect("[TCP] Failed to write data to TLS stream");
 
-                                info!("Current clients: {}", self.connected_clients.len());
+                            debug!(
+                                "New Device Found: {} - {}",
+                                identity.device_id, identity.device_name
+                            );
 
-                                Ok(()) as Result<(), io::Error>
+                            let (reader, writer) = tokio::io::split(tls_stream);
+
+                            let device_id = DeviceId {
+                                id: identity.device_id.clone(),
+                                name: identity.device_name.clone(),
                             };
 
-                            if let Err(e) = ret.await {
-                                warn!("Failed to handle TCP packet from {}: {}", addr, e);
-                            };
+                            let device = Device::new(
+                                device_id.clone(),
+                                Arc::new(Mutex::new(reader)),
+                                Arc::new(Mutex::new(writer)),
+                            )
+                            .await;
+
+                            if let Some(tx) = &self.device_tx {
+                                tx.send(device).unwrap_or_else(|e| {
+                                    warn!("Failed to send device to channel: {}", e);
+                                });
+                            } else {
+                                warn!("Device channel is not set, cannot send device");
+                            }
                         };
                     }
                 }
