@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=COSMIC Ext Connect
+Exec=cosmic-ext-applet-connect
+Terminal=false
+Type=Application
+StartupNotify=true
+Icon=display-symbolic
+Categories=COSMIC;Utility;
+Keywords=Network;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto

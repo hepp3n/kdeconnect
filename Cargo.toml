@@ -1,0 +1,15 @@
+[workspace]
+members = ["cosmic-ext-applet-connect", "kdeconnect-cli", "kdeconnect-core", "kdeconnect-dbus"]
+default-members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
+resolver = "3"
+
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["full"] }
+tracing = "0.1"
+zbus = { version = "5.12", features = ["tokio"] }

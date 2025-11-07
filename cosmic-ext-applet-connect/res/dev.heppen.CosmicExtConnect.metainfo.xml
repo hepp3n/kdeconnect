@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.heppen.CosmicExtConnect</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <project_group>COSMIC</project_group>
+  <developer_name>hepp3n</developer_name>
+  <update_contact>hepp3n@email.com</update_contact>
+  <url type="homepage"></url>
+  <url type="bugtracker"></url>
+  <name>COSMIC Ext Connect</name>
+  <summary>KDE Connect implementation for COSMIC Desktop</summary>
+  <description>
+    <p>KDE Connect allows you connect to your devices and share files, messages, and more.</p>
+  </description>
+  <launchable type="desktop-id">dev.heppen.CosmicExtConnect.desktop</launchable>
+  <screenshots>
+  </screenshots>
+  <provides>
+    <mimetypes>
+      <mimetype>text/plain</mimetype>
+    </mimetypes>
+    <binaries>
+      <binary>cosmic-ext-applet-connect</binary>
+    </binaries>
+  </provides>
+</component>
