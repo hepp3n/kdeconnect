@@ -6,7 +6,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum CoreEvent {
     DeviceDiscovered(Device),
-    DevicePaired(DeviceId),
+    DevicePaired((DeviceId, Device)),
     DevicePairCancelled(DeviceId),
     PacketReceived {
         device: DeviceId,
@@ -25,6 +25,7 @@ pub enum AppEvent {
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     Connected((DeviceId, Device)),
+    DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),
     StateUpdated(DeviceState),
 }

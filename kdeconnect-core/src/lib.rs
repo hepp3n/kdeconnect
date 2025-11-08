@@ -143,7 +143,6 @@ impl KdeConnectCore {
                             info!("Core channel closed");
                             break;
                         }
-
                     }
                 }
                 maybe_event = self.transport_rx.recv() => {
@@ -171,6 +170,8 @@ impl KdeConnectCore {
     }
 
     async fn core_events(&self, event: CoreEvent) {
+        let guard = self.writer_map.lock().await;
+
         match event {
             CoreEvent::PacketReceived { device, packet } => {
                 info!("[core] packet received.");
@@ -186,10 +187,9 @@ impl KdeConnectCore {
                     device,
                 )));
             }
-            CoreEvent::DevicePaired(device_id) => {
+            CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired.");
 
-                let guard = self.writer_map.lock().await;
                 let sender = guard.get(&device_id);
 
                 let pair = Pair::new(true);
@@ -200,12 +200,13 @@ impl KdeConnectCore {
                     sender.send(pair_packet).unwrap();
                 }
 
-                drop(guard);
+                let _ = self
+                    .conn_tx
+                    .send(ConnectionEvent::DevicePaired((device_id, device)));
             }
             CoreEvent::DevicePairCancelled(device_id) => {
                 info!("[core] device pair cancelled.");
 
-                let guard = self.writer_map.lock().await;
                 let sender = guard.get(&device_id);
 
                 let pair = Pair::new(false);
@@ -216,7 +217,7 @@ impl KdeConnectCore {
                     sender.send(pair_packet).unwrap();
                 }
 
-                drop(guard);
+                let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
             }
             CoreEvent::Error(e) => {
                 tracing::error!("Core error: {}", e);
@@ -263,7 +264,6 @@ impl KdeConnectCore {
                         if pkt.packet_type == "kdeconnect.pair" {
                             if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
                                 && pair_body.timestamp.is_some()
-                                && pair_body.pair
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 let _ = self

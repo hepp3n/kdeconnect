@@ -14,7 +14,6 @@ use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
 use kdeconnect_core::event::{AppEvent, ConnectionEvent};
 use tokio::sync::mpsc;
-use tracing::info;
 
 use crate::config::ConnectConfig;
 use crate::{APP_ID, fl};
@@ -103,9 +102,15 @@ impl Application for CosmicConnect {
 
                 while let Some(event) = connection_rx.recv().await {
                     match event {
-                        ConnectionEvent::Connected(device_id) => {
-                            info!("new connection found for device: {:?}", device_id.1);
-                            let _ = output.send(Message::NewConnection(device_id)).await;
+                        ConnectionEvent::Connected((device_id, device)) => {
+                            let _ = output
+                                .send(Message::NewConnection((device_id, device)))
+                                .await;
+                        }
+                        ConnectionEvent::DevicePaired((device_id, device)) => {
+                            let _ = output
+                                .send(Message::NewConnection((device_id, device)))
+                                .await;
                         }
                         ConnectionEvent::Disconnected(device_id) => {
                             let _ = output.send(Message::Disconnected(device_id)).await;
@@ -243,10 +248,12 @@ impl Application for CosmicConnect {
             Message::KdeConnectStarted(sender) => {
                 self.event_sender = Some(sender);
             }
-            Message::NewConnection((device_id, state)) => {
-                self.connections.insert(device_id, state);
+            Message::NewConnection((device_id, device)) => {
+                self.connections.entry(device_id).or_insert(device);
             }
-            Message::Disconnected(_device_id) => {}
+            Message::Disconnected(device_id) => {
+                self.connections.remove_entry(&device_id);
+            }
             Message::SendEvent(event) => match event {
                 CosmicEvent::Pair(device_id) => {
                     if let Some(sender) = self.event_sender.as_ref() {
@@ -255,7 +262,7 @@ impl Application for CosmicConnect {
                 }
                 CosmicEvent::Unpair(device_id) => {
                     if let Some(sender) = self.event_sender.as_ref() {
-                        let _ = sender.send(AppEvent::Pair(device_id));
+                        let _ = sender.send(AppEvent::Unpair(device_id));
                     }
                 }
                 CosmicEvent::SendPing((device_id, msg)) => {

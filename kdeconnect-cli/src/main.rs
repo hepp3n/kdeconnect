@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
     while let Some(event) = conn_rx.recv().await {
         match event {
             ConnectionEvent::Connected(_) => todo!(),
+            ConnectionEvent::DevicePaired((_, _)) => todo!(),
             ConnectionEvent::Disconnected(_device_id) => todo!(),
             ConnectionEvent::StateUpdated(_state) => todo!(),
         }

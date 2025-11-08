@@ -85,10 +85,6 @@ impl Device {
         let mut data = self.clone();
         data.pair_state = pair_state;
 
-        if data.pair_state != PairState::Paired {
-            return Ok(());
-        }
-
         if let Ok(file_content) = ron::ser::to_string_pretty(&data, PrettyConfig::new()) {
             let config_dir = dirs::config_dir().unwrap().join(CONFIG_DIR);
             let file_path = config_dir.join(format!("{}.ron", self.device_id));
@@ -138,13 +134,16 @@ impl DeviceManager {
 
         if let Some(device) = guard.get(id) {
             if flag {
-                let _ = self
-                    .event_tx
-                    .send(CoreEvent::DevicePaired(device.device_id.clone()));
+                let _ = self.event_tx.send(CoreEvent::DevicePaired((
+                    device.device_id.clone(),
+                    device.clone(),
+                )));
+                let _ = device.update_pair_state(PairState::Paired).await;
             } else {
                 let _ = self
                     .event_tx
                     .send(CoreEvent::DevicePairCancelled(device.device_id.clone()));
+                let _ = device.update_pair_state(PairState::NotPaired).await;
             }
         }
     }
@@ -153,7 +152,7 @@ impl DeviceManager {
         let guard = self.devices.write().await;
 
         if let Some(device) = guard.get(id) {
-            device.update_pair_state(state).await;
+            let _ = device.update_pair_state(state).await;
         }
     }
 }
