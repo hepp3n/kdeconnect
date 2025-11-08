@@ -11,8 +11,8 @@ use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::widget::{self, settings};
 use cosmic::{Application, Element};
 use kdeconnect_core::KdeConnectCore;
-use kdeconnect_core::device::{Device, DeviceId, PairState};
-use kdeconnect_core::event::{ConnectionEvent, KdeEvent};
+use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
+use kdeconnect_core::event::{AppEvent, ConnectionEvent};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -23,8 +23,9 @@ pub struct CosmicConnect {
     core: Core,
     popup: Option<Id>,
     config: ConnectConfig,
-    event_sender: Option<Arc<mpsc::UnboundedSender<KdeEvent>>>,
+    event_sender: Option<Arc<mpsc::UnboundedSender<AppEvent>>>,
     connections: HashMap<DeviceId, Device>,
+    device_state: Option<DeviceState>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,10 +40,11 @@ pub enum Message {
     TogglePopup,
     PopupClosed(Id),
     UpdateConfig(ConnectConfig),
-    KdeConnectStarted(Arc<mpsc::UnboundedSender<KdeEvent>>),
+    KdeConnectStarted(Arc<mpsc::UnboundedSender<AppEvent>>),
     NewConnection((DeviceId, Device)),
     Disconnected(DeviceId),
     SendEvent(CosmicEvent),
+    UpdatedState(DeviceState),
 }
 
 impl Application for CosmicConnect {
@@ -71,6 +73,7 @@ impl Application for CosmicConnect {
             config,
             event_sender: None,
             connections: HashMap::new(),
+            device_state: None,
         };
 
         (app, Task::none())
@@ -106,6 +109,9 @@ impl Application for CosmicConnect {
                         }
                         ConnectionEvent::Disconnected(device_id) => {
                             let _ = output.send(Message::Disconnected(device_id)).await;
+                        }
+                        ConnectionEvent::StateUpdated(state) => {
+                            let _ = output.send(Message::UpdatedState(state)).await;
                         }
                     }
                 }
@@ -162,6 +168,38 @@ impl Application for CosmicConnect {
                     ))))
                     .into(),
             ]));
+
+            let mut section = settings::section().title(device.device_id.to_string());
+
+            // if let Some(networks) = state.connectivity.as_ref() {
+            //     for (_, network) in &networks.signal_strengths {
+            //         section = section.add(settings::item(
+            //             format!("Network ({})", network.network_type),
+            //             widget::text(format!("Signal: {}", network.signal_strength)),
+            //         ));
+            //     }
+            // };
+
+            if let Some(state) = &self.device_state {
+                section = section.add_maybe(if self.device_state.is_some() {
+                    Some(settings::item(
+                        "Battery",
+                        widget::text(format!(
+                            "{}% [{}]",
+                            state.battery.unwrap().charge,
+                            if state.battery.unwrap().is_charging {
+                                "Charging"
+                            } else {
+                                "Discharging"
+                            }
+                        )),
+                    ))
+                } else {
+                    None
+                });
+
+                content_list = content_list.add(section);
+            }
         }
 
         self.core
@@ -212,20 +250,23 @@ impl Application for CosmicConnect {
             Message::SendEvent(event) => match event {
                 CosmicEvent::Pair(device_id) => {
                     if let Some(sender) = self.event_sender.as_ref() {
-                        let _ = sender.send(KdeEvent::Pair(device_id));
+                        let _ = sender.send(AppEvent::Pair(device_id));
                     }
                 }
                 CosmicEvent::Unpair(device_id) => {
                     if let Some(sender) = self.event_sender.as_ref() {
-                        let _ = sender.send(KdeEvent::Pair(device_id));
+                        let _ = sender.send(AppEvent::Pair(device_id));
                     }
                 }
                 CosmicEvent::SendPing((device_id, msg)) => {
                     if let Some(sender) = self.event_sender.as_ref() {
-                        let _ = sender.send(KdeEvent::Ping((device_id, msg)));
+                        let _ = sender.send(AppEvent::Ping((device_id, msg)));
                     }
                 }
             },
+            Message::UpdatedState(state) => {
+                self.device_state = Some(state);
+            }
         }
         Task::none()
     }

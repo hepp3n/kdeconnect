@@ -1,5 +1,5 @@
 use crate::{
-    device::{Device, DeviceId},
+    device::{Device, DeviceId, DeviceState},
     protocol::ProtocolPacket,
 };
 
@@ -16,7 +16,7 @@ pub enum CoreEvent {
 }
 
 #[derive(Debug, Clone)]
-pub enum KdeEvent {
+pub enum AppEvent {
     Pair(DeviceId),
     Ping((DeviceId, String)),
     Unpair(DeviceId),
@@ -26,4 +26,5 @@ pub enum KdeEvent {
 pub enum ConnectionEvent {
     Connected((DeviceId, Device)),
     Disconnected(DeviceId),
+    StateUpdated(DeviceState),
 }

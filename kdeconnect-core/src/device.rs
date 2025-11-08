@@ -13,9 +13,11 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{config::CONFIG_DIR, event::CoreEvent, transport::DEFAULT_LISTEN_PORT};
+use crate::{
+    config::CONFIG_DIR, event::CoreEvent, plugins::battery::Battery, transport::DEFAULT_LISTEN_PORT,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub String);
 
 impl Display for DeviceId {
@@ -24,15 +26,21 @@ impl Display for DeviceId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PairState {
+    #[default]
     NotPaired,
     Requesting,
     Requested,
     Paired,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceState {
+    pub battery: Option<Battery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Device {
     pub name: String,
     pub device_id: DeviceId,
@@ -43,10 +51,10 @@ pub struct Device {
 impl Default for Device {
     fn default() -> Self {
         Self {
-            name: Default::default(),
-            device_id: DeviceId(Default::default()),
+            name: String::new(),
+            device_id: DeviceId(String::new()),
             address: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, DEFAULT_LISTEN_PORT)),
-            pair_state: PairState::NotPaired,
+            pair_state: PairState::default(),
         }
     }
 }

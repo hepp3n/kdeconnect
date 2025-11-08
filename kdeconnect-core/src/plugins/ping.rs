@@ -4,7 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
-use crate::{device::DeviceId, plugin_interface::Plugin, protocol::ProtocolPacket};
+use crate::{
+    device::{Device, DeviceId},
+    plugin_interface::Plugin,
+    protocol::ProtocolPacket,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Ping {
@@ -29,7 +33,7 @@ impl Plugin for PingPlugin {
         "kdeconnect.ping"
     }
 
-    async fn handle_packet(&self, device_id: &DeviceId, packet: ProtocolPacket) {
+    async fn handle_packet(&self, device: Device, packet: ProtocolPacket) {
         let value = serde_json::to_value(Ping {
             message: Some("Pong".to_string()),
         })
@@ -44,10 +48,10 @@ impl Plugin for PingPlugin {
                 payload_transfer_info: None,
             };
 
-            if let Some(tx) = self.writer_map.lock().await.get(device_id) {
+            if let Some(tx) = self.writer_map.lock().await.get(&device.device_id) {
                 let _ = tx.send(reply);
             } else {
-                info!("No writer found for device {}", device_id);
+                info!("No writer found for device {}", device.device_id);
             }
         }
     }

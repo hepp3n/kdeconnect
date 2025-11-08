@@ -3,8 +3,8 @@
 use std::sync::LazyLock;
 
 use i18n_embed::{
-    fluent::{fluent_language_loader, FluentLanguageLoader},
     LanguageLoader,
+    fluent::{FluentLanguageLoader, fluent_language_loader},
 };
 use rust_embed::RustEmbed;
 

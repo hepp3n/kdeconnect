@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId};
-use kdeconnect_core::event::{ConnectionEvent, KdeEvent};
+use kdeconnect_core::event::{AppEvent, ConnectionEvent};
 use tokio::io::{self, AsyncBufReadExt as _, BufReader};
 use tokio::sync::Mutex;
 
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 "pair" => {
                     let device_id = DeviceId(line);
-                    let _ = sender.send(KdeEvent::Pair(device_id));
+                    let _ = sender.send(AppEvent::Pair(device_id));
                 }
                 _ => {}
             }
@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         match event {
             ConnectionEvent::Connected(_) => todo!(),
             ConnectionEvent::Disconnected(_device_id) => todo!(),
+            ConnectionEvent::StateUpdated(_state) => todo!(),
         }
     }
 

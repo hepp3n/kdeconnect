@@ -7,7 +7,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager},
-    event::{ConnectionEvent, CoreEvent, KdeEvent},
+    event::{AppEvent, ConnectionEvent, CoreEvent},
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
     plugins::ping::Ping,
@@ -37,8 +37,8 @@ pub struct KdeConnectCore {
     transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
     udp_transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
     // channel for 3rd party communication
-    out_tx: Arc<mpsc::UnboundedSender<KdeEvent>>,
-    in_rx: Arc<Mutex<mpsc::UnboundedReceiver<KdeEvent>>>,
+    out_tx: Arc<mpsc::UnboundedSender<AppEvent>>,
+    in_rx: mpsc::UnboundedReceiver<AppEvent>,
     conn_tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
 }
 
@@ -63,6 +63,8 @@ impl KdeConnectCore {
         // register plugins
         let ping_plugin = plugins::ping::PingPlugin::new(writer_map.clone());
         plugin_registry.register(Arc::new(ping_plugin)).await;
+        let battery_plugin = plugins::battery::BatteryPlugin::new();
+        plugin_registry.register(Arc::new(battery_plugin)).await;
 
         Ok((
             Self {
@@ -77,51 +79,11 @@ impl KdeConnectCore {
                 transport: Arc::new(Mutex::new(Some(Box::new(transport)))),
                 udp_transport: Arc::new(Mutex::new(Some(Box::new(udp_transport)))),
                 out_tx: Arc::new(out_tx),
-                in_rx: Arc::new(Mutex::new(in_rx)),
+                in_rx,
                 conn_tx: Arc::new(conn_tx),
             },
             conn_rx,
         ))
-    }
-
-    pub async fn start(&mut self) -> anyhow::Result<()> {
-        let in_rx = self.in_rx.clone();
-        let pairing = self.pairing.clone();
-        let device_manager = self.device_manager.clone();
-        let plugin_registry = self.plugin_registry.clone();
-
-        tokio::spawn(async move {
-            loop {
-                match in_rx.lock().await.recv().await {
-                    Some(event) => match event {
-                        KdeEvent::Pair(device_id) => {
-                            info!("frontend sent pair event to device: {}", device_id);
-                            let _ = pairing.request_pairing(device_id).await;
-                        }
-                        KdeEvent::Ping((device_id, msg)) => {
-                            info!("frontend sent ping event to device: {}", device_id);
-
-                            let value = serde_json::to_value(Ping { message: Some(msg) })
-                                .expect("fail serializing packet body");
-                            let pkt = ProtocolPacket::new("kdeconnect.ping", value);
-
-                            if let Some(dev) = device_manager.get_device(&device_id).await {
-                                plugin_registry.send_back(dev.clone(), pkt).await;
-                            };
-                        }
-                        KdeEvent::Unpair(device_id) => {
-                            info!("frontend sent pair event to device: {}", device_id);
-                            let _ = pairing.cancel_pairing(device_id).await;
-                        }
-                    },
-                    None => todo!(),
-                }
-            }
-        });
-
-        info!("Starting KDE Connect Core module");
-
-        Ok(())
     }
 
     pub async fn stop(&self) -> anyhow::Result<()> {
@@ -168,154 +130,195 @@ impl KdeConnectCore {
         }
 
         info!("Starting KdeConnect event loop");
-        let _ = self.start().await;
 
         loop {
             select! {
-                    maybe = rx.recv() => {
-                        match maybe {
-                            Ok(event) => {
-                                match event {
-                                    CoreEvent::PacketReceived { device, packet } => {
-                                        info!("[core] packet received.");
-                                        if let Some(dev) = self.device_manager.get_device(&device).await {
-                                            // dispatch to plugins
-                                            self.plugin_registry.dispatch(dev.clone(), packet.clone()).await;
-                                        };
-                                    }
-                                    CoreEvent::DeviceDiscovered(device) => {
-                                            info!("[core] device discovered.");
-                                            let _ = self.conn_tx.send(ConnectionEvent::Connected((device.device_id.clone(), device)));
-                                    },
-                                    CoreEvent::DevicePaired(device_id) => {
-                                        info!("[core] device paired.");
+                maybe = rx.recv() => {
+                    match maybe {
+                        Ok(event) => self.core_events(event).await,
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            error!("Event loop lagged by {} messages", n);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            info!("Core channel closed");
+                            break;
+                        }
 
-                                        let guard = self.writer_map.lock().await;
-                                        let sender = guard.get(&device_id);
-
-                                        let pair = Pair::new(true);
-                                        let value = serde_json::to_value(pair).expect("failed serialize packet");
-                                        let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
-
-                                        if let Some(sender) = sender {
-                                            sender.send(pair_packet).unwrap();
-                                        }
-
-                                        drop(guard);
-
-                                    }
-                                    CoreEvent::DevicePairCancelled(device_id) => {
-                                        info!("[core] device pair cancelled.");
-
-                                        let guard = self.writer_map.lock().await;
-                                        let sender = guard.get(&device_id);
-
-
-                                        let pair = Pair::new(false);
-                                        let value = serde_json::to_value(pair).expect("failed serialize packet");
-                                        let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
-
-                                        if let Some(sender) = sender {
-                                            sender.send(pair_packet).unwrap();
-                                        }
-
-                                        drop(guard);
-                                    }
-                                    CoreEvent::Error(e) => {
-                                        tracing::error!("Core error: {}", e);
-                                    }
-                                }
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                error!("Event loop lagged by {} messages", n);
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                info!("Event channel closed");
-                                break;
-                            }
-
+                    }
+                }
+                maybe_event = self.transport_rx.recv() => {
+                    match maybe_event {
+                        Some(event) => self.transport_events(event).await,
+                        None => {
+                            let _ = self.event_tx.send(CoreEvent::Error("Transport channel closed".to_string()));
                         }
                     }
-
-            maybe_event = self.transport_rx.recv() => {
-                match maybe_event {
-                    Some(event) => {
-                        match event {
-                            TransportEvent::NewConnection {
-                                addr,
-                                id,
-                                name,
-                                write_tx,
-                            } => {
-                                // store write_tx for this addr
-                                debug!("[core] new connection from: {}", addr);
-
-                                // create device entry
-                                let device = Device::new(id.0.clone(), name, addr)
-                                    .await
-                                    .expect("cannot create new device from metadata");
-
-                                tracing::info!("new connection sent to frontend");
-
-                                self.device_manager.add_or_update_device(id.clone(), device.clone()).await;
-
-                                let _ = self.conn_tx.send(ConnectionEvent::Connected((id.clone(), device.clone())));
-
-
-                                {
-                                    self.writer_map.lock().await.insert(id, write_tx.clone());
-                                }
-                            }
-                            TransportEvent::IncomingPacket { addr, id, raw } => {
-                                info!("[core] incoming packet.");
-                                match serde_json::from_str::<ProtocolPacket>(&raw) {
-                                    Ok(pkt) => {
-                                        // if packet is type `pair` handle it immediately
-                                        if pkt.packet_type == "kdeconnect.pair" {
-                                            if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
-                                                    && pair_body.timestamp.is_some() && pair_body.pair
-                                                        && let Some(device) = self.device_manager.get_device(&id).await
-                                                        {
-
-                                                            let _ = self.pairing.handle_pair_request(
-                                                                    device.device_id,
-                                                                    device.name,
-                                                                    device.address,
-                                                                    pkt,
-                                                                )
-                                                                .await;
-                                                        }
-                                        } else {
-                                            let _ = self.event_tx.send(CoreEvent::PacketReceived {
-                                                device: id.clone(),
-                                                packet: pkt.clone(),
-                                            });
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = self.event_tx.send(CoreEvent::Error(format!(
-                                            "Invalid packet from {}: {}",
-                                            addr, e
-                                        )));
-                                    }
-                                }
-                            }
+                }
+                maybe_kde = self.in_rx.recv() => {
+                    match maybe_kde {
+                        Some(event) => self.kde_events(event).await,
+                        None => {
+                            let _ = self.event_tx.send(CoreEvent::Error("KdeEvent channel closed".to_string()));
                         }
                     }
-                    None => {
-                        let _ = self.event_tx.send(CoreEvent::Error("Event channel closed".to_string()));
-                    }
+                }
+                _ = &mut shutdown_rx => {
+                    info!("Event loop received shutdown");
+                    break;
                 }
             }
-                    _ = &mut shutdown_rx => {
-                        info!("Event loop received shutdown");
-                        break;
-                    }
-                }
         }
     }
 
-    pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<KdeEvent>> {
+    async fn core_events(&self, event: CoreEvent) {
+        match event {
+            CoreEvent::PacketReceived { device, packet } => {
+                info!("[core] packet received.");
+                if let Some(dev) = self.device_manager.get_device(&device).await {
+                    // dispatch to plugins
+                    self.plugin_registry.dispatch(dev, packet.clone()).await;
+                };
+            }
+            CoreEvent::DeviceDiscovered(device) => {
+                info!("[core] device discovered.");
+                let _ = self.conn_tx.send(ConnectionEvent::Connected((
+                    device.device_id.clone(),
+                    device,
+                )));
+            }
+            CoreEvent::DevicePaired(device_id) => {
+                info!("[core] device paired.");
+
+                let guard = self.writer_map.lock().await;
+                let sender = guard.get(&device_id);
+
+                let pair = Pair::new(true);
+                let value = serde_json::to_value(pair).expect("failed serialize packet");
+                let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
+
+                if let Some(sender) = sender {
+                    sender.send(pair_packet).unwrap();
+                }
+
+                drop(guard);
+            }
+            CoreEvent::DevicePairCancelled(device_id) => {
+                info!("[core] device pair cancelled.");
+
+                let guard = self.writer_map.lock().await;
+                let sender = guard.get(&device_id);
+
+                let pair = Pair::new(false);
+                let value = serde_json::to_value(pair).expect("failed serialize packet");
+                let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
+
+                if let Some(sender) = sender {
+                    sender.send(pair_packet).unwrap();
+                }
+
+                drop(guard);
+            }
+            CoreEvent::Error(e) => {
+                tracing::error!("Core error: {}", e);
+            }
+        }
+    }
+
+    async fn transport_events(&self, event: TransportEvent) {
+        match event {
+            TransportEvent::NewConnection {
+                addr,
+                id,
+                name,
+                write_tx,
+            } => {
+                // store write_tx for this addr
+                debug!("[core] new connection from: {}", addr);
+
+                // create device entry
+                let device = Device::new(id.0.clone(), name, addr)
+                    .await
+                    .expect("cannot create new device from metadata");
+
+                tracing::info!("new connection sent to frontend");
+
+                self.device_manager
+                    .add_or_update_device(id.clone(), device.clone())
+                    .await;
+
+                let _ = self
+                    .conn_tx
+                    .send(ConnectionEvent::Connected((id.clone(), device.clone())));
+
+                {
+                    self.writer_map.lock().await.insert(id, write_tx.clone());
+                }
+            }
+            TransportEvent::IncomingPacket { addr, id, raw } => {
+                info!("[core] incoming packet.");
+                match serde_json::from_str::<ProtocolPacket>(&raw) {
+                    Ok(pkt) => {
+                        info!("[core] packet type: {}", pkt.packet_type);
+                        // if packet is type `pair` handle it immediately
+                        if pkt.packet_type == "kdeconnect.pair" {
+                            if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
+                                && pair_body.timestamp.is_some()
+                                && pair_body.pair
+                                && let Some(device) = self.device_manager.get_device(&id).await
+                            {
+                                let _ = self
+                                    .pairing
+                                    .handle_pair_request(
+                                        device.device_id,
+                                        device.name,
+                                        device.address,
+                                        pkt,
+                                    )
+                                    .await;
+                            }
+                        } else {
+                            let _ = self.event_tx.send(CoreEvent::PacketReceived {
+                                device: id.clone(),
+                                packet: pkt.clone(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        let _ = self.event_tx.send(CoreEvent::Error(format!(
+                            "Invalid packet from {}: {}",
+                            addr, e
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    async fn kde_events(&self, event: AppEvent) {
+        match event {
+            AppEvent::Pair(device_id) => {
+                info!("frontend sent pair event to device: {}", device_id);
+                let _ = self.pairing.request_pairing(device_id).await;
+            }
+            AppEvent::Ping((device_id, msg)) => {
+                info!("frontend sent ping event to device: {}", device_id);
+
+                let value = serde_json::to_value(Ping { message: Some(msg) })
+                    .expect("fail serializing packet body");
+                let pkt = ProtocolPacket::new("kdeconnect.ping", value);
+
+                if let Some(dev) = self.device_manager.get_device(&device_id).await {
+                    self.plugin_registry.send_back(dev.clone(), pkt).await;
+                };
+            }
+            AppEvent::Unpair(device_id) => {
+                info!("frontend sent pair event to device: {}", device_id);
+                let _ = self.pairing.cancel_pairing(device_id).await;
+            }
+        };
+    }
+
+    pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {
         self.out_tx.clone()
     }
 }

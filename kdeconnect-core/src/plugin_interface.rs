@@ -13,11 +13,11 @@ use crate::{
 /// Plugins are loaded into the core and can react to incoming packets.
 #[async_trait]
 pub trait Plugin: Send + Sync {
-    /// Unique identifier of the plugin (used for logging & debugging).
+    /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
 
     /// Called by the core when a packet arrives for a device.
-    async fn handle_packet(&self, device_id: &DeviceId, packet: ProtocolPacket);
+    async fn handle_packet(&self, device: Device, packet: ProtocolPacket);
     async fn send_packet(&self, device_id: &DeviceId, packet: ProtocolPacket);
 }
 
@@ -51,7 +51,7 @@ impl PluginRegistry {
             let packet = packet.clone();
 
             tokio::spawn(async move {
-                plugin.handle_packet(&device.device_id, packet).await;
+                plugin.handle_packet(device, packet).await;
             });
         }
     }
