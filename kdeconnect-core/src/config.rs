@@ -26,6 +26,11 @@ impl Config {
         let config_dir = dirs::config_dir()
             .expect("cannot find config dir")
             .join(CONFIG_DIR);
+
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir).expect("cannot create config dir");
+        }
+
         let id_file = config_dir.join(DEVICE_ID_STORE);
 
         let identity = match id_file.exists() {
