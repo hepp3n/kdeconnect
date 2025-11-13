@@ -13,9 +13,7 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{
-    config::CONFIG_DIR, event::CoreEvent, plugins::battery::Battery, transport::DEFAULT_LISTEN_PORT,
-};
+use crate::{config::CONFIG_DIR, event::CoreEvent, transport::DEFAULT_LISTEN_PORT};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub String);
@@ -33,11 +31,6 @@ pub enum PairState {
     Requesting,
     Requested,
     Paired,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceState {
-    pub battery: Option<Battery>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

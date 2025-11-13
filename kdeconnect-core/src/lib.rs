@@ -177,7 +177,9 @@ impl KdeConnectCore {
                 info!("[core] packet received.");
                 if let Some(dev) = self.device_manager.get_device(&device).await {
                     // dispatch to plugins
-                    self.plugin_registry.dispatch(dev, packet.clone()).await;
+                    self.plugin_registry
+                        .dispatch(dev, packet.clone(), self.conn_tx.clone())
+                        .await;
                 };
             }
             CoreEvent::DeviceDiscovered(device) => {

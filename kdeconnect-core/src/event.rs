@@ -1,5 +1,5 @@
 use crate::{
-    device::{Device, DeviceId, DeviceState},
+    device::{Device, DeviceId},
     protocol::ProtocolPacket,
 };
 
@@ -28,4 +28,9 @@ pub enum ConnectionEvent {
     DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),
     StateUpdated(DeviceState),
+}
+
+#[derive(Debug, Clone)]
+pub enum DeviceState {
+    Battery { level: u8, charging: bool },
 }

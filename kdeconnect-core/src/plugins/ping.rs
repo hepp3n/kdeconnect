@@ -33,7 +33,12 @@ impl Plugin for PingPlugin {
         "kdeconnect.ping"
     }
 
-    async fn handle_packet(&self, device: Device, packet: ProtocolPacket) {
+    async fn handle_packet(
+        &self,
+        device: Device,
+        packet: ProtocolPacket,
+        _tx: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
+    ) {
         let value = serde_json::to_value(Ping {
             message: Some("Pong".to_string()),
         })

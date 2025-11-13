@@ -11,12 +11,18 @@ use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::widget::{self, settings};
 use cosmic::{Application, Element};
 use kdeconnect_core::KdeConnectCore;
-use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
-use kdeconnect_core::event::{AppEvent, ConnectionEvent};
+use kdeconnect_core::device::{Device, DeviceId, PairState};
+use kdeconnect_core::event::{AppEvent, ConnectionEvent, DeviceState};
 use tokio::sync::mpsc;
 
 use crate::config::ConnectConfig;
 use crate::{APP_ID, fl};
+
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    pub battery_level: Option<u8>,
+    pub is_charging: Option<bool>,
+}
 
 pub struct CosmicConnect {
     core: Core,
@@ -24,7 +30,7 @@ pub struct CosmicConnect {
     config: ConnectConfig,
     event_sender: Option<Arc<mpsc::UnboundedSender<AppEvent>>>,
     connections: HashMap<DeviceId, Device>,
-    device_state: Option<DeviceState>,
+    device_state: State,
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +78,7 @@ impl Application for CosmicConnect {
             config,
             event_sender: None,
             connections: HashMap::new(),
-            device_state: None,
+            device_state: State::default(),
         };
 
         (app, Task::none())
@@ -185,26 +191,19 @@ impl Application for CosmicConnect {
             //     }
             // };
 
-            if let Some(state) = &self.device_state {
-                section = section.add_maybe(if self.device_state.is_some() {
-                    Some(settings::item(
-                        "Battery",
-                        widget::text(format!(
-                            "{}% [{}]",
-                            state.battery.unwrap().charge,
-                            if state.battery.unwrap().is_charging {
-                                "Charging"
-                            } else {
-                                "Discharging"
-                            }
-                        )),
-                    ))
-                } else {
-                    None
-                });
-
-                content_list = content_list.add(section);
-            }
+            section = section.add(settings::item(
+                "Battery",
+                widget::text(format!(
+                    "{}% [{}]",
+                    self.device_state.battery_level.unwrap_or(0),
+                    if self.device_state.is_charging.unwrap_or(false) {
+                        "Charging"
+                    } else {
+                        "Discharging"
+                    }
+                )),
+            ));
+            content_list = content_list.add(section);
         }
 
         self.core
@@ -271,9 +270,12 @@ impl Application for CosmicConnect {
                     }
                 }
             },
-            Message::UpdatedState(state) => {
-                self.device_state = Some(state);
-            }
+            Message::UpdatedState(state) => match state {
+                DeviceState::Battery { level, charging } => {
+                    self.device_state.battery_level = Some(level);
+                    self.device_state.is_charging = Some(charging);
+                }
+            },
         }
         Task::none()
     }

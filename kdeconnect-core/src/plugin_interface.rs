@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tracing::info;
 
 use crate::{
     device::{Device, DeviceId},
+    event::ConnectionEvent,
     protocol::ProtocolPacket,
 };
 
@@ -17,7 +18,12 @@ pub trait Plugin: Send + Sync {
     fn id(&self) -> &'static str;
 
     /// Called by the core when a packet arrives for a device.
-    async fn handle_packet(&self, device: Device, packet: ProtocolPacket);
+    async fn handle_packet(
+        &self,
+        device: Device,
+        packet: ProtocolPacket,
+        tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+    );
     async fn send_packet(&self, device_id: &DeviceId, packet: ProtocolPacket);
 }
 
@@ -42,16 +48,22 @@ impl PluginRegistry {
     }
 
     /// Dispatches a packet to all registered plugins concurrently.
-    pub async fn dispatch(&self, device: Device, packet: ProtocolPacket) {
+    pub async fn dispatch(
+        &self,
+        device: Device,
+        packet: ProtocolPacket,
+        tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+    ) {
         let plugins = self.plugins.read().await;
 
         for plugin in plugins.iter() {
             let plugin = plugin.clone();
             let device = device.clone();
             let packet = packet.clone();
+            let tx = tx.clone();
 
             tokio::spawn(async move {
-                plugin.handle_packet(device, packet).await;
+                plugin.handle_packet(device, packet, tx).await;
             });
         }
     }
