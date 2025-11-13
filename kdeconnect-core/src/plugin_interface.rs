@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{RwLock, mpsc};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
-    device::{Device, DeviceId},
+    device::Device,
     event::ConnectionEvent,
-    protocol::ProtocolPacket,
+    plugins::{battery::Battery, clipboard::Clipboard},
+    protocol::{PacketType, ProtocolPacket},
 };
 
 /// All plugins must implement this trait.
@@ -16,15 +17,6 @@ use crate::{
 pub trait Plugin: Send + Sync {
     /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
-
-    /// Called by the core when a packet arrives for a device.
-    async fn handle_packet(
-        &self,
-        device: Device,
-        packet: ProtocolPacket,
-        tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-    );
-    async fn send_packet(&self, device_id: &DeviceId, packet: ProtocolPacket);
 }
 
 /// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
@@ -47,7 +39,7 @@ impl PluginRegistry {
         plugins.push(plugin);
     }
 
-    /// Dispatches a packet to all registered plugins concurrently.
+    /// Dispatches an incoming packet to the appropriate plugin based on its type.
     pub async fn dispatch(
         &self,
         device: Device,
@@ -57,30 +49,59 @@ impl PluginRegistry {
         let plugins = self.plugins.read().await;
 
         for plugin in plugins.iter() {
-            let plugin = plugin.clone();
-            let device = device.clone();
-            let packet = packet.clone();
-            let tx = tx.clone();
+            let body = packet.body.clone();
 
-            tokio::spawn(async move {
-                plugin.handle_packet(device, packet, tx).await;
-            });
+            match packet.packet_type {
+                // if it's indentity we can skip
+                PacketType::Identity => continue,
+                // if it's pair we can also skip because we handle it elsewhere
+                PacketType::Pair => continue,
+
+                // handle other plugins
+                PacketType::Battery => {
+                    // handle battery packet
+                    if let Ok(bat_body) = serde_json::from_value::<Battery>(body) {
+                        let _ = tx.send(ConnectionEvent::StateUpdated(
+                            crate::event::DeviceState::Battery {
+                                level: bat_body.charge as u8,
+                                charging: bat_body.is_charging,
+                            },
+                        ));
+                    }
+                }
+                PacketType::BatteryRequest => todo!(),
+                PacketType::Clipboard => {
+                    // Handle clipboard packet
+                    if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
+                        let _ = tx.send(ConnectionEvent::ClipboardReceived(clipboard.content));
+                    }
+                }
+                PacketType::ClipboardConnect => {
+                    if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
+                        && let Some(timestamp) = clipboard.timestamp
+                    {
+                        if timestamp > 0 {
+                            info!("Clipboard sync requested with timestamp: {}", timestamp);
+                            let _ = tx.send(ConnectionEvent::ClipboardReceived(clipboard.content));
+                        } else {
+                            info!("Clipboard sync requested without timestamp. Ignoring");
+                        }
+                    }
+                }
+                PacketType::Ping => todo!(),
+                _ => {
+                    warn!(
+                        "No plugin found to handle packet type: {:?}",
+                        packet.packet_type
+                    );
+                }
+            }
         }
     }
 
     /// Use for handling frontend packet to send to device.
-    pub async fn send_back(&self, device: Device, packet: ProtocolPacket) {
+    pub async fn send_plugin(&self, device: Device, packet: ProtocolPacket) {
         let plugins = self.plugins.read().await;
-
-        for plugin in plugins.iter() {
-            let plugin = plugin.clone();
-            let device = device.clone();
-            let packet = packet.clone();
-
-            tokio::spawn(async move {
-                plugin.send_packet(&device.device_id, packet).await;
-            });
-        }
     }
 
     /// Returns a list of registered plugin IDs.

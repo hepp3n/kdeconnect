@@ -47,6 +47,7 @@ pub enum Message {
     UpdateConfig(ConnectConfig),
     KdeConnectStarted(Arc<mpsc::UnboundedSender<AppEvent>>),
     NewConnection((DeviceId, Device)),
+    ClipboardReceived(String),
     Disconnected(DeviceId),
     SendEvent(CosmicEvent),
     UpdatedState(DeviceState),
@@ -108,6 +109,9 @@ impl Application for CosmicConnect {
 
                 while let Some(event) = connection_rx.recv().await {
                     match event {
+                        ConnectionEvent::ClipboardReceived(content) => {
+                            let _ = output.send(Message::ClipboardReceived(content)).await;
+                        }
                         ConnectionEvent::Connected((device_id, device)) => {
                             let _ = output
                                 .send(Message::NewConnection((device_id, device)))
@@ -249,6 +253,10 @@ impl Application for CosmicConnect {
             }
             Message::NewConnection((device_id, device)) => {
                 self.connections.entry(device_id).or_insert(device);
+            }
+            Message::ClipboardReceived(content) => {
+                // Handle clipboard content received from device
+                return cosmic::iced::clipboard::write(content);
             }
             Message::Disconnected(device_id) => {
                 self.connections.remove_entry(&device_id);

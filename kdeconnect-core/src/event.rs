@@ -24,6 +24,7 @@ pub enum AppEvent {
 
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
+    ClipboardReceived(String),
     Connected((DeviceId, Device)),
     DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),

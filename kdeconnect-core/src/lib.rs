@@ -11,7 +11,7 @@ use crate::{
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
     plugins::ping::Ping,
-    protocol::{Pair, ProtocolPacket},
+    protocol::{PacketType, Pair, ProtocolPacket},
     transport::{TcpTransport, Transport, TransportEvent, UdpTransport},
 };
 
@@ -65,6 +65,8 @@ impl KdeConnectCore {
         plugin_registry.register(Arc::new(ping_plugin)).await;
         let battery_plugin = plugins::battery::BatteryPlugin::new();
         plugin_registry.register(Arc::new(battery_plugin)).await;
+        let clipboard_plugin = plugins::clipboard::ClipboardPlugin::new(writer_map.clone());
+        plugin_registry.register(Arc::new(clipboard_plugin)).await;
 
         Ok((
             Self {
@@ -174,7 +176,8 @@ impl KdeConnectCore {
 
         match event {
             CoreEvent::PacketReceived { device, packet } => {
-                info!("[core] packet received.");
+                info!("[core] packet received: {}", packet.packet_type);
+
                 if let Some(dev) = self.device_manager.get_device(&device).await {
                     // dispatch to plugins
                     self.plugin_registry
@@ -196,7 +199,7 @@ impl KdeConnectCore {
 
                 let pair = Pair::new(true);
                 let value = serde_json::to_value(pair).expect("failed serialize packet");
-                let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
+                let pair_packet = ProtocolPacket::new(PacketType::Pair, value);
 
                 if let Some(sender) = sender {
                     sender.send(pair_packet).unwrap();
@@ -213,7 +216,7 @@ impl KdeConnectCore {
 
                 let pair = Pair::new(false);
                 let value = serde_json::to_value(pair).expect("failed serialize packet");
-                let pair_packet = ProtocolPacket::new("kdeconnect.pair", value);
+                let pair_packet = ProtocolPacket::new(PacketType::Pair, value);
 
                 if let Some(sender) = sender {
                     sender.send(pair_packet).unwrap();
@@ -261,9 +264,8 @@ impl KdeConnectCore {
                 info!("[core] incoming packet.");
                 match serde_json::from_str::<ProtocolPacket>(&raw) {
                     Ok(pkt) => {
-                        info!("[core] packet type: {}", pkt.packet_type);
                         // if packet is type `pair` handle it immediately
-                        if pkt.packet_type == "kdeconnect.pair" {
+                        if let PacketType::Pair = pkt.packet_type {
                             if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
                                 && pair_body.timestamp.is_some()
                                 && let Some(device) = self.device_manager.get_device(&id).await
@@ -307,10 +309,10 @@ impl KdeConnectCore {
 
                 let value = serde_json::to_value(Ping { message: Some(msg) })
                     .expect("fail serializing packet body");
-                let pkt = ProtocolPacket::new("kdeconnect.ping", value);
+                let pkt = ProtocolPacket::new(PacketType::Ping, value);
 
                 if let Some(dev) = self.device_manager.get_device(&device_id).await {
-                    self.plugin_registry.send_back(dev.clone(), pkt).await;
+                    self.plugin_registry.send_plugin(dev.clone(), pkt).await;
                 };
             }
             AppEvent::Unpair(device_id) => {

@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::Config,
     device::DeviceId,
-    protocol::{Identity, ProtocolPacket},
+    protocol::{Identity, PacketType, ProtocolPacket},
 };
 
 pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(30);
@@ -177,7 +177,7 @@ impl Transport for TcpTransport {
             tls_stream
                 .write_all(
                     ProtocolPacket::new(
-                        "kdeconnect.identity",
+                        PacketType::Identity,
                         serde_json::to_value(&*identity).unwrap(),
                     )
                     .as_raw()
@@ -244,7 +244,7 @@ impl UdpTransport {
         let udp_socket = socket.clone();
 
         let packet = ProtocolPacket::new(
-            "kdeconnect.identity",
+            PacketType::Identity,
             serde_json::to_value(&*self.identity).unwrap(),
         )
         .as_raw()
@@ -341,7 +341,7 @@ impl Transport for UdpTransport {
 
         if let Ok(mut socket) = TcpStream::connect(peer).await {
             let identity_packet = ProtocolPacket::new(
-                "kdeconnect.identity",
+                PacketType::Identity,
                 serde_json::to_value(&*self.identity).unwrap(),
             );
 
