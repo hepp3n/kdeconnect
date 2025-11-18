@@ -20,16 +20,55 @@ impl Plugin for Ping {
         "kdeconnect.ping"
     }
 
-    fn received(
+    async fn received(
         &self,
-        _device: &Device,
+        device: &Device,
         _event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        _core_event: Arc<broadcast::Sender<CoreEvent>>,
+        core_event: Arc<broadcast::Sender<CoreEvent>>,
     ) {
-        // Ping plugin does not send events on its own
+        let device_id = device.device_id.clone();
+        let event = core_event.clone();
+
+        let packet = ProtocolPacket::new(
+            crate::protocol::PacketType::Ping,
+            serde_json::to_value(Self {
+                message: Some("Pong!".into()),
+            })
+            .unwrap_or_default(),
+        );
+
+        let summary = self.message.clone().unwrap_or_else(|| "Ping!".into());
+
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut reply = false;
+
+            notify_rust::Notification::new()
+                .summary("KDE Connect")
+                .body(&summary)
+                .action("clicked", "Click to reply")
+                .hint(notify_rust::Hint::Resident(true))
+                .show()
+                .unwrap()
+                .wait_for_action(|action| match action {
+                    "clicked" => {
+                        reply = true;
+                    }
+                    // here "__closed" is a hard coded keyword
+                    "__closed" => println!("the notification was closed"),
+                    _ => (),
+                });
+
+            if reply {
+                let _ = event.send(CoreEvent::SendPacket {
+                    device: device_id,
+                    packet,
+                });
+            }
+        })
+        .await;
     }
 
-    fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) {
+    async fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) {
         let packet = ProtocolPacket::new(
             crate::protocol::PacketType::Ping,
             serde_json::to_value(self).unwrap_or_default(),

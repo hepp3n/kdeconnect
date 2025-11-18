@@ -129,7 +129,7 @@ impl Plugin for Mpris {
         "kdeconnect.mpris"
     }
 
-    fn received(
+    async fn received(
         &self,
         _device: &Device,
         _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
@@ -138,7 +138,11 @@ impl Plugin for Mpris {
         // MPRIS plugin does not send events on its own
     }
 
-    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+    async fn send(
+        &self,
+        _device: &Device,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
         // MPRIS plugin does not send events on its own
     }
 }
@@ -166,7 +170,7 @@ impl Plugin for MprisRequest {
         "kdeconnect.mpris.request"
     }
 
-    fn received(
+    async fn received(
         &self,
         device: &Device,
         _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
@@ -284,7 +288,11 @@ impl Plugin for MprisRequest {
         }
     }
 
-    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+    async fn send(
+        &self,
+        _device: &Device,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
         // MPRIS Request plugin does not send events on its own
     }
 }

@@ -48,7 +48,7 @@ impl Plugin for Battery {
     fn id(&self) -> &'static str {
         "kdeconnect.battery"
     }
-    fn received(
+    async fn received(
         &self,
         _device: &Device,
         event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
@@ -64,7 +64,11 @@ impl Plugin for Battery {
             .unwrap();
     }
 
-    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+    async fn send(
+        &self,
+        _device: &Device,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
         // Battery plugin does not send events on its own
     }
 }

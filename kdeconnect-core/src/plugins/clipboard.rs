@@ -17,7 +17,7 @@ impl Plugin for Clipboard {
         "kdeconnect.clipboard"
     }
 
-    fn received(
+    async fn received(
         &self,
         _device: &crate::device::Device,
         event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
@@ -28,7 +28,7 @@ impl Plugin for Clipboard {
         ));
     }
 
-    fn send(
+    async fn send(
         &self,
         _device: &crate::device::Device,
         _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,

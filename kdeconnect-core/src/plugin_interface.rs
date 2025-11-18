@@ -22,14 +22,14 @@ pub trait Plugin: Send + Sync {
     /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
     /// Called when a packet is received that this plugin can handle.
-    fn received(
+    async fn received(
         &self,
         device: &Device,
         connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
         core_event: Arc<broadcast::Sender<CoreEvent>>,
     ) -> ();
     /// Called to send a packet using this plugin.
-    fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) -> ();
+    async fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) -> ();
 }
 
 /// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
@@ -76,13 +76,13 @@ impl PluginRegistry {
                 // handle other plugins
                 PacketType::Battery => {
                     if let Ok(battery) = serde_json::from_value::<Battery>(body) {
-                        battery.received(&device, connection_tx, core_tx);
+                        battery.received(&device, connection_tx, core_tx).await;
                     }
                 }
                 PacketType::BatteryRequest => todo!(),
                 PacketType::Clipboard => {
                     if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
-                        clipboard.received(&device, connection_tx, core_tx);
+                        clipboard.received(&device, connection_tx, core_tx).await;
                     }
                 }
                 PacketType::ClipboardConnect => {
@@ -91,7 +91,7 @@ impl PluginRegistry {
                     {
                         if timestamp > 0 {
                             info!("Clipboard sync requested with timestamp: {}", timestamp);
-                            clipboard.received(&device, connection_tx, core_tx);
+                            clipboard.received(&device, connection_tx, core_tx).await;
                         } else {
                             info!("Clipboard sync requested without timestamp. Ignoring");
                         }
@@ -104,12 +104,14 @@ impl PluginRegistry {
                 }
                 PacketType::MprisRequest => {
                     if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
-                        mpris_request.received(&device, connection_tx, core_tx);
+                        mpris_request
+                            .received(&device, connection_tx, core_tx)
+                            .await;
                     }
                 }
                 PacketType::Ping => {
                     if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                        ping.received(&device, connection_tx, core_tx);
+                        ping.received(&device, connection_tx, core_tx).await;
                     }
                 }
                 _ => {
@@ -138,7 +140,7 @@ impl PluginRegistry {
             match packet.packet_type {
                 PacketType::Ping => {
                     if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                        ping.send(&device, core_event);
+                        ping.send(&device, core_event).await;
                     }
                 }
                 _ => {
