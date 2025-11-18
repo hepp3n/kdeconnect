@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tokio::sync::{broadcast, mpsc};
 
-use crate::plugin_interface::Plugin;
+use crate::{device::Device, event::ConnectionEvent, plugin_interface::Plugin};
 
 fn serialize_threshold<S>(x: &bool, s: S) -> Result<S::Ok, S::Error>
 where
@@ -26,10 +29,10 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Battery {
     #[serde(rename = "currentCharge")]
-    pub charge: i32,
+    pub charge: u8,
     #[serde(rename = "isCharging")]
     pub is_charging: bool,
     #[serde(
@@ -40,17 +43,28 @@ pub struct Battery {
     pub under_threshold: bool,
 }
 
-pub struct BatteryPlugin {}
-
-impl BatteryPlugin {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
 #[async_trait]
-impl Plugin for BatteryPlugin {
+impl Plugin for Battery {
     fn id(&self) -> &'static str {
         "kdeconnect.battery"
+    }
+    fn received(
+        &self,
+        _device: &Device,
+        event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
+        event
+            .send(ConnectionEvent::StateUpdated(
+                crate::event::DeviceState::Battery {
+                    level: self.charge,
+                    charging: self.is_charging,
+                },
+            ))
+            .unwrap();
+    }
+
+    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+        // Battery plugin does not send events on its own
     }
 }

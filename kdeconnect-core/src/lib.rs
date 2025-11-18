@@ -61,11 +61,11 @@ impl KdeConnectCore {
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
 
         // register plugins
-        let ping_plugin = plugins::ping::PingPlugin::new(writer_map.clone());
+        let ping_plugin = plugins::ping::Ping::default();
         plugin_registry.register(Arc::new(ping_plugin)).await;
-        let battery_plugin = plugins::battery::BatteryPlugin::new();
+        let battery_plugin = plugins::battery::Battery::default();
         plugin_registry.register(Arc::new(battery_plugin)).await;
-        let clipboard_plugin = plugins::clipboard::ClipboardPlugin::new(writer_map.clone());
+        let clipboard_plugin = plugins::clipboard::Clipboard::default();
         plugin_registry.register(Arc::new(clipboard_plugin)).await;
 
         Ok((
@@ -319,8 +319,10 @@ impl KdeConnectCore {
                     .expect("fail serializing packet body");
                 let pkt = ProtocolPacket::new(PacketType::Ping, value);
 
-                if let Some(dev) = self.device_manager.get_device(&device_id).await {
-                    self.plugin_registry.send_plugin(dev.clone(), pkt).await;
+                if let Some(device) = self.device_manager.get_device(&device_id).await {
+                    self.plugin_registry
+                        .send(device.clone(), pkt, self.event_tx.clone().into())
+                        .await;
                 };
             }
             AppEvent::Unpair(device_id) => {

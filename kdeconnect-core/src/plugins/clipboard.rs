@@ -1,64 +1,65 @@
-use std::{collections::HashMap, sync::Arc};
+use crate::plugin_interface::Plugin;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, mpsc};
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc};
 
-use crate::{
-    device::DeviceId,
-    plugin_interface::Plugin,
-    protocol::{PacketType, ProtocolPacket},
-};
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Clipboard {
     pub content: String,
     pub timestamp: Option<u64>,
 }
 
-pub struct ClipboardPlugin {
-    writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
-}
-
-impl ClipboardPlugin {
-    pub fn new(
-        writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
-    ) -> Self {
-        Self { writer_map }
-    }
-}
-
 #[async_trait]
-impl Plugin for ClipboardPlugin {
+impl Plugin for Clipboard {
     fn id(&self) -> &'static str {
         "kdeconnect.clipboard"
     }
-}
 
-impl ClipboardPlugin {
-    pub async fn send_clipboard(
+    fn received(
         &self,
-        device_id: &DeviceId,
-        content: String,
-    ) -> Result<(), String> {
-        let clipboard = Clipboard {
-            content,
-            timestamp: None,
-        };
+        _device: &crate::device::Device,
+        event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
+        let _ = event.send(crate::event::ConnectionEvent::ClipboardReceived(
+            self.content.clone(),
+        ));
+    }
 
-        let packet = ProtocolPacket::new(
-            PacketType::Clipboard,
-            serde_json::to_value(clipboard).map_err(|e| e.to_string())?,
-        );
-
-        let writer_map = self.writer_map.lock().await;
-        if let Some(sender) = writer_map.get(device_id) {
-            sender
-                .send(packet)
-                .map_err(|e| format!("Failed to send clipboard packet: {}", e))?;
-            Ok(())
-        } else {
-            Err(format!("No writer found for device ID: {}", device_id))
-        }
+    fn send(
+        &self,
+        _device: &crate::device::Device,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
     }
 }
+
+// impl Clipboard {
+//     pub async fn send_clipboard(
+//         &self,
+//         device_id: &DeviceId,
+//         content: String,
+//     ) -> Result<(), String> {
+//         let clipboard = Clipboard {
+//             content,
+//             timestamp: None,
+//         };
+//
+//         let packet = ProtocolPacket::new(
+//             PacketType::Clipboard,
+//             serde_json::to_value(clipboard).map_err(|e| e.to_string())?,
+//         );
+//
+//         let writer_map = self.writer_map.lock().await;
+//         if let Some(sender) = writer_map.get(device_id) {
+//             sender
+//                 .send(packet)
+//                 .map_err(|e| format!("Failed to send clipboard packet: {}", e))?;
+//             Ok(())
+//         } else {
+//             Err(format!("No writer found for device ID: {}", device_id))
+//         }
+//     }
+// }

@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{info, warn};
 
@@ -11,7 +10,7 @@ use crate::{
         self,
         battery::Battery,
         clipboard::Clipboard,
-        mpris::{Mpris, MprisLoopStatus, MprisRequest},
+        mpris::{Mpris, MprisRequest},
     },
     protocol::{PacketType, ProtocolPacket},
 };
@@ -22,6 +21,15 @@ use crate::{
 pub trait Plugin: Send + Sync {
     /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
+    /// Called when a packet is received that this plugin can handle.
+    fn received(
+        &self,
+        device: &Device,
+        connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+        core_event: Arc<broadcast::Sender<CoreEvent>>,
+    ) -> ();
+    /// Called to send a packet using this plugin.
+    fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) -> ();
 }
 
 /// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
@@ -54,8 +62,10 @@ impl PluginRegistry {
     ) {
         let plugins = self.plugins.read().await;
 
-        for plugin in plugins.iter() {
+        for _plugin in plugins.iter() {
             let body = packet.body.clone();
+            let core_tx = core_tx.clone();
+            let connection_tx = tx.clone();
 
             match packet.packet_type {
                 // if it's indentity we can skip
@@ -65,21 +75,14 @@ impl PluginRegistry {
 
                 // handle other plugins
                 PacketType::Battery => {
-                    // handle battery packet
-                    if let Ok(bat_body) = serde_json::from_value::<Battery>(body) {
-                        let _ = tx.send(ConnectionEvent::StateUpdated(
-                            crate::event::DeviceState::Battery {
-                                level: bat_body.charge as u8,
-                                charging: bat_body.is_charging,
-                            },
-                        ));
+                    if let Ok(battery) = serde_json::from_value::<Battery>(body) {
+                        battery.received(&device, connection_tx, core_tx);
                     }
                 }
                 PacketType::BatteryRequest => todo!(),
                 PacketType::Clipboard => {
-                    // Handle clipboard packet
                     if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
-                        let _ = tx.send(ConnectionEvent::ClipboardReceived(clipboard.content));
+                        clipboard.received(&device, connection_tx, core_tx);
                     }
                 }
                 PacketType::ClipboardConnect => {
@@ -88,7 +91,7 @@ impl PluginRegistry {
                     {
                         if timestamp > 0 {
                             info!("Clipboard sync requested with timestamp: {}", timestamp);
-                            let _ = tx.send(ConnectionEvent::ClipboardReceived(clipboard.content));
+                            clipboard.received(&device, connection_tx, core_tx);
                         } else {
                             info!("Clipboard sync requested without timestamp. Ignoring");
                         }
@@ -101,116 +104,14 @@ impl PluginRegistry {
                 }
                 PacketType::MprisRequest => {
                     if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
-                        match mpris_request {
-                            MprisRequest::List {
-                                request_player_list,
-                            } => {
-                                if request_player_list {
-                                    info!("MPRIS Player list requested");
-                                    let players = plugins::mpris::get_mpris_players();
-
-                                    if let Ok(player) = players {
-                                        let packet = ProtocolPacket {
-                                            id: None,
-                                            packet_type: PacketType::Mpris,
-                                            body: serde_json::to_value(Mpris::List {
-                                                player_list: vec![player.identity().into()],
-                                                supports_album_art_payload: false,
-                                            })
-                                            .unwrap(),
-                                            payload_size: None,
-                                            payload_transfer_info: None,
-                                        };
-
-                                        let _ = core_tx.send(CoreEvent::SendPacket {
-                                            device: device.device_id.clone(),
-                                            packet,
-                                        });
-                                    }
-                                }
-                            }
-                            MprisRequest::PlayerRequest { player, .. } => {
-                                info!("MPRIS Player request received for player: {}", player);
-                                let Some(metadata) = plugins::mpris::get_mpris_metadata() else {
-                                    continue;
-                                };
-                                let artist = metadata
-                                    .artists()
-                                    .map_or("Unknown Artist".to_string(), |a| a.join(", "));
-                                let title = metadata
-                                    .title()
-                                    .map_or("Unknown Title".to_string(), |t| t.to_string());
-                                let album = metadata
-                                    .album_name()
-                                    .map_or("Unknown Album".to_string(), |al| al.to_string());
-
-                                let album_art_url = metadata
-                                    .art_url()
-                                    .map_or("".to_string(), |url| url.to_string());
-
-                                let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
-
-                                let now_playing_string =
-                                    format!("{} - {}, ({})", &artist, &title, &album,);
-
-                                let Ok(player) = plugins::mpris::get_mpris_players() else {
-                                    continue;
-                                };
-
-                                let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
-                                let can_pause = player.can_pause().unwrap_or(false);
-                                let can_play = player.can_play().unwrap_or(false);
-                                let can_go_next = player.can_go_next().unwrap_or(false);
-                                let can_go_previous = player.can_go_previous().unwrap_or(false);
-                                let can_seek = player.can_seek().unwrap_or(false);
-                                let is_playing = player.is_running();
-                                let loop_status = MprisLoopStatus::from(
-                                    player.get_loop_status().unwrap_or(mpris::LoopStatus::None),
-                                );
-                                let shuffle = player.get_shuffle().unwrap_or(false);
-                                let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
-
-                                let construct_packet = ProtocolPacket {
-                                    id: None,
-                                    packet_type: PacketType::Mpris,
-                                    body: serde_json::to_value(Mpris::Info(
-                                        plugins::mpris::MprisPlayer {
-                                            player: player.identity().into(),
-                                            title: Some(title),
-                                            artist: Some(artist),
-                                            album: Some(album),
-                                            is_playing: Some(is_playing),
-                                            can_pause: Some(can_pause),
-                                            can_play: Some(can_play),
-                                            can_go_next: Some(can_go_next),
-                                            can_go_previous: Some(can_go_previous),
-                                            can_seek: Some(can_seek),
-                                            loop_status: Some(loop_status),
-                                            shuffle: Some(shuffle),
-                                            pos: Some(pos),
-                                            length: Some(length),
-                                            volume: Some(volume),
-                                            album_art_url: Some(album_art_url),
-                                            url: None,
-                                        },
-                                    ))
-                                    .unwrap(),
-                                    payload_size: None,
-                                    payload_transfer_info: None,
-                                };
-
-                                let _ = core_tx.send(CoreEvent::SendPacket {
-                                    device: device.device_id.clone(),
-                                    packet: construct_packet,
-                                });
-                            }
-                            MprisRequest::Action { .. } => {
-                                info!("MPRIS Action request received");
-                            }
-                        }
+                        mpris_request.received(&device, connection_tx, core_tx);
                     }
                 }
-                PacketType::Ping => {}
+                PacketType::Ping => {
+                    if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
+                        ping.received(&device, connection_tx, core_tx);
+                    }
+                }
                 _ => {
                     warn!(
                         "No plugin found to handle packet type: {:?}",
@@ -221,9 +122,33 @@ impl PluginRegistry {
         }
     }
 
-    /// Use for handling frontend packet to send to device.
-    pub async fn send_plugin(&self, device: Device, packet: ProtocolPacket) {
+    /// Sends a packet using the appropriate plugin.
+    pub async fn send(
+        &self,
+        device: Device,
+        packet: ProtocolPacket,
+        core_tx: Arc<broadcast::Sender<CoreEvent>>,
+    ) {
         let plugins = self.plugins.read().await;
+
+        for _plugin in plugins.iter() {
+            let body = packet.body.clone();
+            let core_event = core_tx.clone();
+
+            match packet.packet_type {
+                PacketType::Ping => {
+                    if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
+                        ping.send(&device, core_event);
+                    }
+                }
+                _ => {
+                    warn!(
+                        "No plugin found to handle packet type: {:?}",
+                        packet.packet_type
+                    );
+                }
+            }
+        }
     }
 
     /// Returns a list of registered plugin IDs.

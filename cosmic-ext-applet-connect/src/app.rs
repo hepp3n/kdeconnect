@@ -14,6 +14,7 @@ use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId, PairState};
 use kdeconnect_core::event::{AppEvent, ConnectionEvent, DeviceState};
 use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::config::ConnectConfig;
 use crate::{APP_ID, fl};
@@ -255,7 +256,7 @@ impl Application for CosmicConnect {
                 self.connections.entry(device_id).or_insert(device);
             }
             Message::ClipboardReceived(content) => {
-                // Handle clipboard content received from device
+                debug!("Clipboard content received: {}", content);
                 return cosmic::iced::clipboard::write(content);
             }
             Message::Disconnected(device_id) => {

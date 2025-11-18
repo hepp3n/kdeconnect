@@ -1,6 +1,14 @@
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::plugin_interface::Plugin;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc};
+use tracing::debug;
+
+use crate::{
+    device::Device,
+    plugin_interface::Plugin,
+    protocol::{PacketType, ProtocolPacket},
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(untagged)]
@@ -120,6 +128,19 @@ impl Plugin for Mpris {
     fn id(&self) -> &'static str {
         "kdeconnect.mpris"
     }
+
+    fn received(
+        &self,
+        _device: &Device,
+        _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
+        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
+        // MPRIS plugin does not send events on its own
+    }
+
+    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+        // MPRIS plugin does not send events on its own
+    }
 }
 
 pub fn get_mpris_players() -> anyhow::Result<mpris::Player> {
@@ -136,5 +157,134 @@ pub fn get_mpris_metadata() -> Option<mpris::Metadata> {
         )
     } else {
         None
+    }
+}
+
+#[async_trait::async_trait]
+impl Plugin for MprisRequest {
+    fn id(&self) -> &'static str {
+        "kdeconnect.mpris.request"
+    }
+
+    fn received(
+        &self,
+        device: &Device,
+        _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
+        core_tx: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+    ) {
+        match self {
+            MprisRequest::List {
+                request_player_list,
+            } => {
+                if *request_player_list {
+                    debug!("MPRIS Player list requested");
+                    let players = get_mpris_players();
+
+                    if let Ok(player) = players {
+                        let packet = ProtocolPacket {
+                            id: None,
+                            packet_type: PacketType::Mpris,
+                            body: serde_json::to_value(Mpris::List {
+                                player_list: vec![player.identity().into()],
+                                supports_album_art_payload: false,
+                            })
+                            .unwrap(),
+                            payload_size: None,
+                            payload_transfer_info: None,
+                        };
+
+                        let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                            device: device.device_id.clone(),
+                            packet,
+                        });
+                    }
+                }
+            }
+            MprisRequest::PlayerRequest {
+                player,
+                request_now_playing,
+                request_volume,
+                request_album_art,
+            } => {
+                debug!(
+                    "mpris request received: {:?} {:?} {:?} {:?} ",
+                    player, request_now_playing, request_volume, request_album_art
+                );
+                let Some(metadata) = get_mpris_metadata() else {
+                    return;
+                };
+                let artist = metadata
+                    .artists()
+                    .map_or("Unknown Artist".to_string(), |a| a.join(", "));
+                let title = metadata
+                    .title()
+                    .map_or("Unknown Title".to_string(), |t| t.to_string());
+                let album = metadata
+                    .album_name()
+                    .map_or("Unknown Album".to_string(), |al| al.to_string());
+
+                let album_art_url = metadata
+                    .art_url()
+                    .map_or("".to_string(), |url| url.to_string());
+
+                let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
+
+                let Ok(player) = get_mpris_players() else {
+                    return;
+                };
+
+                let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
+                let can_pause = player.can_pause().unwrap_or(false);
+                let can_play = player.can_play().unwrap_or(false);
+                let can_go_next = player.can_go_next().unwrap_or(false);
+                let can_go_previous = player.can_go_previous().unwrap_or(false);
+                let can_seek = player.can_seek().unwrap_or(false);
+                let is_playing = player.is_running();
+                let loop_status = MprisLoopStatus::from(
+                    player.get_loop_status().unwrap_or(mpris::LoopStatus::None),
+                );
+                let shuffle = player.get_shuffle().unwrap_or(false);
+                let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
+
+                let construct_packet = ProtocolPacket {
+                    id: None,
+                    packet_type: PacketType::Mpris,
+                    body: serde_json::to_value(Mpris::Info(MprisPlayer {
+                        player: player.identity().into(),
+                        title: Some(title),
+                        artist: Some(artist),
+                        album: Some(album),
+                        is_playing: Some(is_playing),
+                        can_pause: Some(can_pause),
+                        can_play: Some(can_play),
+                        can_go_next: Some(can_go_next),
+                        can_go_previous: Some(can_go_previous),
+                        can_seek: Some(can_seek),
+                        loop_status: Some(loop_status),
+                        shuffle: Some(shuffle),
+                        pos: Some(pos),
+                        length: Some(length),
+                        volume: Some(volume),
+                        album_art_url: Some(album_art_url),
+                        url: None,
+                    }))
+                    .unwrap(),
+                    payload_size: None,
+                    payload_transfer_info: None,
+                };
+
+                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                    device: device.device_id.clone(),
+                    packet: construct_packet,
+                });
+            }
+            MprisRequest::Action { .. } => {
+                debug!("MPRIS Action request received");
+            }
+        }
+    }
+
+    fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>) {
+        // MPRIS Request plugin does not send events on its own
     }
 }
