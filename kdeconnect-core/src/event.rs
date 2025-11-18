@@ -12,6 +12,10 @@ pub enum CoreEvent {
         device: DeviceId,
         packet: ProtocolPacket,
     },
+    SendPacket {
+        device: DeviceId,
+        packet: ProtocolPacket,
+    },
     Error(String),
 }
 

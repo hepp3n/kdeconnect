@@ -173,15 +173,16 @@ impl KdeConnectCore {
 
     async fn core_events(&self, event: CoreEvent) {
         let guard = self.writer_map.lock().await;
+        let core_tx = Arc::new(self.event_tx.clone());
 
         match event {
             CoreEvent::PacketReceived { device, packet } => {
                 info!("[core] packet received: {}", packet.packet_type);
 
-                if let Some(dev) = self.device_manager.get_device(&device).await {
+                if let Some(device) = self.device_manager.get_device(&device).await {
                     // dispatch to plugins
                     self.plugin_registry
-                        .dispatch(dev, packet.clone(), self.conn_tx.clone())
+                        .dispatch(device, packet.clone(), core_tx, self.conn_tx.clone())
                         .await;
                 };
             }
@@ -223,6 +224,13 @@ impl KdeConnectCore {
                 }
 
                 let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
+            }
+            CoreEvent::SendPacket { device, packet } => {
+                info!("[core] send packet to device: {}", device);
+
+                if let Some(sender) = guard.get(&device) {
+                    sender.send(packet).unwrap();
+                }
             }
             CoreEvent::Error(e) => {
                 tracing::error!("Core error: {}", e);

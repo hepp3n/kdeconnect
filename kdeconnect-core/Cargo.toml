@@ -18,3 +18,4 @@ time = "0.3"
 tokio = { workspace = true }
 tokio-native-tls = { version = "0.3.1", features = ["vendored"] }
 tracing = { workspace = true }
+mpris = "2.0.1"

@@ -5,7 +5,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::warn;
 
 pub const PROTOCOL_VERSION: usize = 8;
 
