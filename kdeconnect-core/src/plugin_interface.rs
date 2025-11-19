@@ -60,76 +60,75 @@ impl PluginRegistry {
         core_tx: Arc<broadcast::Sender<CoreEvent>>,
         tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
     ) {
-        let plugins = self.plugins.read().await;
+        let body = packet.body.clone();
+        let core_tx = core_tx.clone();
+        let connection_tx = tx.clone();
 
-        for _plugin in plugins.iter() {
-            let body = packet.body.clone();
-            let core_tx = core_tx.clone();
-            let connection_tx = tx.clone();
+        match packet.packet_type {
+            // if it's indentity we can skip
+            PacketType::Identity => {
+                debug!("Skipping identity packet");
+            }
+            // if it's pair we can also skip because we handle it elsewhere
+            PacketType::Pair => {
+                debug!("Skipping pair packet");
+            }
 
-            match packet.packet_type {
-                // if it's indentity we can skip
-                PacketType::Identity => {
-                    debug!("Skipping identity packet");
-                    continue;
+            // handle other plugins
+            PacketType::Battery => {
+                if let Ok(battery) = serde_json::from_value::<Battery>(body) {
+                    battery.received(&device, connection_tx, core_tx).await;
                 }
-                // if it's pair we can also skip because we handle it elsewhere
-                PacketType::Pair => continue,
-
-                // handle other plugins
-                PacketType::Battery => {
-                    if let Ok(battery) = serde_json::from_value::<Battery>(body) {
-                        battery.received(&device, connection_tx, core_tx).await;
-                    }
+            }
+            PacketType::BatteryRequest => todo!(),
+            PacketType::Clipboard => {
+                if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
+                    clipboard.received(&device, connection_tx, core_tx).await;
                 }
-                PacketType::BatteryRequest => todo!(),
-                PacketType::Clipboard => {
-                    if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
+            }
+            PacketType::ClipboardConnect => {
+                if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
+                    && let Some(timestamp) = clipboard.timestamp
+                {
+                    if timestamp > 0 {
+                        info!("Clipboard sync requested with timestamp: {}", timestamp);
                         clipboard.received(&device, connection_tx, core_tx).await;
+                    } else {
+                        info!("Clipboard sync requested without timestamp. Ignoring");
                     }
                 }
-                PacketType::ClipboardConnect => {
-                    if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
-                        && let Some(timestamp) = clipboard.timestamp
-                    {
-                        if timestamp > 0 {
-                            info!("Clipboard sync requested with timestamp: {}", timestamp);
-                            clipboard.received(&device, connection_tx, core_tx).await;
-                        } else {
-                            info!("Clipboard sync requested without timestamp. Ignoring");
-                        }
-                    }
+            }
+            PacketType::Mpris => {
+                if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
+                    info!("Received MPRIS packet: {:?}", mpris_packet);
                 }
-                PacketType::Mpris => {
-                    if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
-                        info!("Received MPRIS packet: {:?}", mpris_packet);
-                    }
+            }
+            PacketType::MprisRequest => {
+                if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
+                    mpris_request
+                        .received(&device, connection_tx, core_tx)
+                        .await;
                 }
-                PacketType::MprisRequest => {
-                    if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
-                        mpris_request
-                            .received(&device, connection_tx, core_tx)
-                            .await;
-                    }
+            }
+            PacketType::Notification => {
+                debug!("Received notification packet");
+                info!("Notification body: {:?}", body);
+                if let Ok(notification) =
+                    serde_json::from_value::<plugins::notification::Notification>(body)
+                {
+                    notification.received(&device, connection_tx, core_tx).await;
                 }
-                PacketType::Notification => {
-                    if let Ok(notification) =
-                        serde_json::from_value::<plugins::notification::Notification>(body)
-                    {
-                        notification.received(&device, connection_tx, core_tx).await;
-                    }
+            }
+            PacketType::Ping => {
+                if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
+                    ping.received(&device, connection_tx, core_tx).await;
                 }
-                PacketType::Ping => {
-                    if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                        ping.received(&device, connection_tx, core_tx).await;
-                    }
-                }
-                _ => {
-                    warn!(
-                        "No plugin found to handle packet type: {:?}",
-                        packet.packet_type
-                    );
-                }
+            }
+            _ => {
+                warn!(
+                    "No plugin found to handle packet type: {:?}",
+                    packet.packet_type
+                );
             }
         }
     }

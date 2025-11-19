@@ -81,16 +81,24 @@ impl Plugin for Notification {
 
     async fn received(
         &self,
-        _device: &crate::device::Device,
+        device: &crate::device::Device,
         _event: std::sync::Arc<tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
-        _core_event: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        core_event: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
     ) {
         // Implementation for handling received notifications would go here.
+        let device_id = device.device_id.clone();
         let app_name = self.app_name.clone().unwrap_or_default();
         let title = self.title.clone().unwrap_or_default();
         let text = self.text.clone().unwrap_or_default();
+        let key = self.id.clone().unwrap_or_default();
 
         let _ = tokio::task::spawn_blocking(move || {
+            let mut notify_action = Action::Ignore;
+
+            if title.is_empty() && text.is_empty() {
+                return;
+            }
+
             notify_rust::Notification::new()
                 .appname(&app_name)
                 .summary(&title)
@@ -100,11 +108,28 @@ impl Plugin for Notification {
                 .show()
                 .unwrap()
                 .wait_for_action(|action| match action {
-                    "clicked" => {}
-                    // here "__closed" is a hard coded keyword
-                    "__closed" => println!("the notification was closed"),
+                    "clicked" => {
+                        notify_action = Action::Open;
+                    }
+                    "__closed" => notify_action = Action::Ignore,
                     _ => (),
                 });
+
+            let packet = crate::protocol::ProtocolPacket::new(
+                crate::protocol::PacketType::NotificationAction,
+                serde_json::to_value(NotificationAction {
+                    key: Some(key),
+                    action: Some(notify_action),
+                })
+                .unwrap_or_default(),
+            );
+
+            core_event
+                .send(crate::event::CoreEvent::SendPacket {
+                    device: device_id,
+                    packet,
+                })
+                .unwrap_or_default();
         })
         .await;
     }
