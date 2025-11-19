@@ -79,10 +79,32 @@ fn make_identity(
             .unwrap_or_else(|_| "localhost".into())
             .to_string_lossy()
             .to_string(),
-        device_type: DeviceType::Desktop,
+        device_type: identify_device_type(),
         incoming_capabilities: vec![Capabilities::Ping.into()],
         outgoing_capabilities,
         protocol_version: PROTOCOL_VERSION,
         tcp_port,
+    }
+}
+
+fn identify_device_type() -> DeviceType {
+    if cfg!(target_os = "linux") {
+        // check if /sys/class/dmi/id/chassis_type exists
+        if let Ok(mut file) = fs::File::open("/sys/class/dmi/id/chassis_type") {
+            let mut contents = String::new();
+            if file.read_to_string(&mut contents).is_ok() {
+                let chassis_type: u8 = contents.trim().parse().unwrap_or(0);
+                match chassis_type {
+                    8 | 9 | 10 | 14 => DeviceType::Laptop, // Portable, Laptop, Notebook, SubNotebook
+                    _ => DeviceType::Desktop,
+                }
+            } else {
+                DeviceType::Desktop
+            }
+        } else {
+            DeviceType::Desktop
+        }
+    } else {
+        DeviceType::Desktop
     }
 }

@@ -67,6 +67,10 @@ impl KdeConnectCore {
         plugin_registry.register(Arc::new(battery_plugin)).await;
         let clipboard_plugin = plugins::clipboard::Clipboard::default();
         plugin_registry.register(Arc::new(clipboard_plugin)).await;
+        let notification_plugin = plugins::notification::Notification::default();
+        plugin_registry
+            .register(Arc::new(notification_plugin))
+            .await;
 
         Ok((
             Self {

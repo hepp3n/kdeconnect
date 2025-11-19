@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     device::Device,
@@ -69,7 +69,10 @@ impl PluginRegistry {
 
             match packet.packet_type {
                 // if it's indentity we can skip
-                PacketType::Identity => continue,
+                PacketType::Identity => {
+                    debug!("Skipping identity packet");
+                    continue;
+                }
                 // if it's pair we can also skip because we handle it elsewhere
                 PacketType::Pair => continue,
 
@@ -107,6 +110,13 @@ impl PluginRegistry {
                         mpris_request
                             .received(&device, connection_tx, core_tx)
                             .await;
+                    }
+                }
+                PacketType::Notification => {
+                    if let Ok(notification) =
+                        serde_json::from_value::<plugins::notification::Notification>(body)
+                    {
+                        notification.received(&device, connection_tx, core_tx).await;
                     }
                 }
                 PacketType::Ping => {
