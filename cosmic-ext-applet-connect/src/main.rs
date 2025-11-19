@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use app::CosmicConnect;
-use tracing::{Level, level_filters::LevelFilter};
+use tracing::Level;
 use tracing_subscriber::{
-    FmtSubscriber, Layer, Registry, filter,
-    fmt::{self, FormatEvent},
+    Layer, Registry, filter,
+    fmt::{self},
     layer::SubscriberExt as _,
-    util::SubscriberInitExt as _,
 };
 mod app;
 mod config;

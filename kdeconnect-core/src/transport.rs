@@ -19,7 +19,7 @@ use crate::{
     protocol::{Identity, PacketType, ProtocolPacket},
 };
 
-pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(30);
+pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
 pub const DEFAULT_LISTEN_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(

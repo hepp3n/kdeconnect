@@ -74,8 +74,8 @@ impl Plugin for ConnectivityReport {
     async fn received(
         &self,
         device: &Device,
-        connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        core_event: Arc<broadcast::Sender<CoreEvent>>,
+        _connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+        _core_event: Arc<broadcast::Sender<CoreEvent>>,
     ) -> () {
         debug!(
             "Received connectivity report for device {}",
@@ -84,7 +84,7 @@ impl Plugin for ConnectivityReport {
         // Currently, we do not process incoming connectivity reports.
     }
 
-    async fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) -> () {
+    async fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<CoreEvent>>) -> () {
         // Currently, we do not send connectivity report requests.
     }
 }

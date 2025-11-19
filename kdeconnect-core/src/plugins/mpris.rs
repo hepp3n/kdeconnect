@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fs, io::Read as _, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -250,7 +250,7 @@ impl Plugin for MprisRequest {
                 let shuffle = player.get_shuffle().unwrap_or(false);
                 let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
 
-                let construct_packet = ProtocolPacket {
+                let mut construct_packet = ProtocolPacket {
                     id: None,
                     packet_type: PacketType::Mpris,
                     body: serde_json::to_value(Mpris::Info(MprisPlayer {
@@ -269,13 +269,29 @@ impl Plugin for MprisRequest {
                         pos: Some(pos),
                         length: Some(length),
                         volume: Some(volume),
-                        album_art_url: Some(album_art_url),
+                        album_art_url: Some(album_art_url.clone()),
                         url: None,
                     }))
                     .unwrap(),
                     payload_size: None,
                     payload_transfer_info: None,
                 };
+
+                if !album_art_url.is_empty() {
+                    let file = fs::File::open(
+                        album_art_url
+                            .strip_prefix("file://")
+                            .unwrap_or(&album_art_url),
+                    );
+
+                    if let Ok(mut f) = file {
+                        let mut art_data = Vec::new();
+                        if f.read_to_end(&mut art_data).is_ok() {
+                            debug!("Sending album art of size {}", art_data.len());
+                            construct_packet.payload_size = Some(art_data.len());
+                        }
+                    }
+                }
 
                 let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
                     device: device.device_id.clone(),

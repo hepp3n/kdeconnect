@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use cosmic::app::{Core, Task};
@@ -20,8 +18,6 @@ use tracing::debug;
 
 use crate::config::ConnectConfig;
 use crate::{APP_ID, fl};
-
-const ICON_PATH: &str = "../../data/icons/sc-apps-kdeconnectindicator.svg";
 
 #[derive(Debug, Clone, Default)]
 pub struct State {

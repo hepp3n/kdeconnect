@@ -211,7 +211,7 @@ pub struct ProtocolPacket {
     pub body: Value,
     #[serde(rename = "payloadSize")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload_size: Option<i64>,
+    pub payload_size: Option<usize>,
     #[serde(rename = "payloadTransferInfo")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_transfer_info: Option<PacketPayloadTransferInfo>,

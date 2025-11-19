@@ -238,6 +238,7 @@ impl KdeConnectCore {
             }
             CoreEvent::SendPacket { device, packet } => {
                 info!("[core] send packet to device: {}", device);
+                debug!("[core] packet: {:?}", packet);
 
                 if let Some(sender) = guard.get(&device) {
                     sender.send(packet).unwrap();

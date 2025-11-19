@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
 
 use crate::plugin_interface::Plugin;
 
@@ -17,48 +16,15 @@ pub struct Notification {
     #[serde(rename = "requestReplyId")]
     pub request_reply_id: Option<String>,
     pub time: Option<String>,
-    pub actions: Option<Vec<Action>>,
+    pub actions: Option<Vec<String>>,
     #[serde(rename = "payloadHash")]
     pub payload_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub enum Action {
-    #[default]
-    Ignore,
-    Open,
-}
-
-impl From<&str> for Action {
-    fn from(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "ignore" => Action::Ignore,
-            "open" => Action::Open,
-            _ => Action::Ignore,
-        }
-    }
-}
-
-impl From<String> for Action {
-    fn from(s: String) -> Self {
-        Action::from(s.as_str())
-    }
-}
-
-impl Display for Action {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Action::Ignore => "Ignore",
-            Action::Open => "Open",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct NotificationAction {
     pub key: Option<String>,
-    pub action: Option<Action>,
+    pub action: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -88,48 +54,54 @@ impl Plugin for Notification {
         // Implementation for handling received notifications would go here.
         let device_id = device.device_id.clone();
         let app_name = self.app_name.clone().unwrap_or_default();
-        let title = self.title.clone().unwrap_or_default();
-        let text = self.text.clone().unwrap_or_default();
+        let Some(title) = self.title.clone() else {
+            return;
+        };
+        let Some(text) = self.text.clone() else {
+            return;
+        };
         let key = self.id.clone().unwrap_or_default();
 
-        let _ = tokio::task::spawn_blocking(move || {
-            let mut notify_action = Action::Ignore;
+        let actions = self.actions.clone().unwrap_or_default();
 
-            if title.is_empty() && text.is_empty() {
-                return;
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut notify_action: Option<String> = None;
+
+            let mut notify = notify_rust::Notification::new();
+            notify.appname(&app_name);
+            notify.summary(&title);
+            notify.body(&text);
+
+            for action in actions.iter() {
+                notify.action(action, action);
             }
 
-            notify_rust::Notification::new()
-                .appname(&app_name)
-                .summary(&title)
-                .body(&text)
+            notify
                 // .action("clicked", "Click to reply")
                 .hint(notify_rust::Hint::Resident(true))
                 .show()
                 .unwrap()
-                .wait_for_action(|action| match action {
-                    "clicked" => {
-                        notify_action = Action::Open;
-                    }
-                    "__closed" => notify_action = Action::Ignore,
-                    _ => (),
+                .wait_for_action(|action| {
+                    notify_action = Some(action.to_string());
                 });
 
-            let packet = crate::protocol::ProtocolPacket::new(
-                crate::protocol::PacketType::NotificationAction,
-                serde_json::to_value(NotificationAction {
-                    key: Some(key),
-                    action: Some(notify_action),
-                })
-                .unwrap_or_default(),
-            );
+            if let Some(action) = notify_action {
+                let packet = crate::protocol::ProtocolPacket::new(
+                    crate::protocol::PacketType::NotificationAction,
+                    serde_json::to_value(NotificationAction {
+                        key: Some(key),
+                        action: Some(action),
+                    })
+                    .unwrap_or_default(),
+                );
 
-            core_event
-                .send(crate::event::CoreEvent::SendPacket {
-                    device: device_id,
-                    packet,
-                })
-                .unwrap_or_default();
+                core_event
+                    .send(crate::event::CoreEvent::SendPacket {
+                        device: device_id,
+                        packet,
+                    })
+                    .unwrap_or_default();
+            }
         })
         .await;
     }

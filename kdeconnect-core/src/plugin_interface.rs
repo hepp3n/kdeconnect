@@ -153,24 +153,20 @@ impl PluginRegistry {
         packet: ProtocolPacket,
         core_tx: Arc<broadcast::Sender<CoreEvent>>,
     ) {
-        let plugins = self.plugins.read().await;
+        let body = packet.body.clone();
+        let core_event = core_tx.clone();
 
-        for _plugin in plugins.iter() {
-            let body = packet.body.clone();
-            let core_event = core_tx.clone();
-
-            match packet.packet_type {
-                PacketType::Ping => {
-                    if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                        ping.send(&device, core_event).await;
-                    }
+        match packet.packet_type {
+            PacketType::Ping => {
+                if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
+                    ping.send(&device, core_event).await;
                 }
-                _ => {
-                    warn!(
-                        "No plugin found to handle packet type: {:?}",
-                        packet.packet_type
-                    );
-                }
+            }
+            _ => {
+                warn!(
+                    "No plugin found to handle packet type: {:?}",
+                    packet.packet_type
+                );
             }
         }
     }

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 
 use crate::plugin_interface::Plugin;
 
@@ -30,18 +29,18 @@ impl Plugin for RunCommandRequest {
 
     async fn received(
         &self,
-        device: &crate::device::Device,
+        _device: &crate::device::Device,
         _connection_tx: std::sync::Arc<
             tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>,
         >,
-        core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
     ) {
     }
 
     async fn send(
         &self,
-        device: &crate::device::Device,
-        core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _device: &crate::device::Device,
+        _core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
     ) {
     }
 }
