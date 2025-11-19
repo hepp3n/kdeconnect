@@ -24,11 +24,3 @@ features = ["fluent-system", "desktop-requester"]
 [dependencies.kdeconnect-core]
 path = "../kdeconnect-core"
 
-# [patch."https://github.com/hepp3n/kdeconnect"]
-# kdeconnect = { path = "../kdeconnect-lib"}
-
-# Uncomment to test a locally-cloned libcosmic
-# [patch.'https://github.com/pop-os/libcosmic']
-# libcosmic = { path = "../libcosmic" }
-# cosmic-config = { path = "../libcosmic/cosmic-config" }
-# cosmic-theme = { path = "../libcosmic/cosmic-theme" }

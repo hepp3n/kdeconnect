@@ -71,6 +71,13 @@ impl KdeConnectCore {
         plugin_registry
             .register(Arc::new(notification_plugin))
             .await;
+        let connectivity_report_plugin =
+            plugins::connectivity_report::ConnectivityReport::default();
+        plugin_registry
+            .register(Arc::new(connectivity_report_plugin))
+            .await;
+        let run_command_plugin = plugins::run_command::RunCommandRequest::default();
+        plugin_registry.register(Arc::new(run_command_plugin)).await;
 
         Ok((
             Self {

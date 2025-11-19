@@ -86,6 +86,10 @@ impl PluginRegistry {
                     clipboard.received(&device, connection_tx, core_tx).await;
                 }
             }
+            PacketType::ConnectivityReportRequest => {
+                debug!("Received connectivity report request packet");
+                // Handle connectivity report request if needed
+            }
             PacketType::ClipboardConnect => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
                     && let Some(timestamp) = clipboard.timestamp
@@ -122,6 +126,15 @@ impl PluginRegistry {
             PacketType::Ping => {
                 if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
                     ping.received(&device, connection_tx, core_tx).await;
+                }
+            }
+            PacketType::RunCommandRequest => {
+                if let Ok(run_command_request) =
+                    serde_json::from_value::<plugins::run_command::RunCommandRequest>(body)
+                {
+                    run_command_request
+                        .received(&device, connection_tx, core_tx)
+                        .await;
                 }
             }
             _ => {
