@@ -10,7 +10,7 @@ run:
 	@echo "Running $(APPLET)..."
 	./target/release/$(APPLET)
 
-make all: build run
+all: build run
 
 install:
 	@echo "Installing $(APPLET)..."
