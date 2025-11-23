@@ -14,7 +14,7 @@ all: build run
 
 install:
 	@echo "Installing $(APPLET)..."
-	install -Dm0755 ./target/release/$(APPLET) $(PREFIX)/bin/$(applet)
+	install -Dm0755 ./target/release/$(APPLET) $(PREFIX)/bin/$(APPLET)
 	install -Dm0644 ./data/icons/$(ICON) $(PREFIX)/share/icons/hicolor/scalable/apps/kdeconnect.svg
 	install -Dm0644 ./data/$(APPLET).desktop $(PREFIX)/share/applications/$(APPLET).desktop
 
