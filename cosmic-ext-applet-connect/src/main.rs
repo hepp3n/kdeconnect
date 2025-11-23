@@ -19,7 +19,10 @@ fn main() -> cosmic::iced::Result {
     let subscriber = Registry::default()
         .with(
             // stdout layer, to view everything in the console
-            fmt::layer().compact().with_ansi(true),
+            fmt::layer()
+                .compact()
+                .with_ansi(true)
+                .with_filter(filter::LevelFilter::from_level(Level::DEBUG)),
         )
         .with(
             // log-debug file, to log the debug
