@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::plugin_interface::Plugin;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[allow(dead_code)]
 pub struct RunCommand {
     #[serde(rename = "commandList")]
     pub command_list: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[allow(dead_code)]
 pub struct RunCommandItem {
     pub name: String,
     pub command: String,

@@ -28,12 +28,14 @@ pub struct NotificationAction {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct NotificationReply {
     #[serde(rename = "requestReplyId")]
     pub request_reply_id: Option<String>,
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 pub struct NotificationRequest {
     pub cancel: Option<String>,
     pub request: Option<bool>,

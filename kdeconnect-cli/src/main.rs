@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
             ConnectionEvent::DevicePaired((_, _)) => todo!(),
             ConnectionEvent::Disconnected(_device_id) => todo!(),
             ConnectionEvent::StateUpdated(_state) => todo!(),
+            ConnectionEvent::ClipboardReceived(_) => todo!(),
         }
     }
 
