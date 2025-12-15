@@ -1,3 +1,4 @@
+use once_cell::sync::OnceCell;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     select,
@@ -25,8 +26,9 @@ pub(crate) mod plugins;
 pub(crate) mod protocol;
 pub(crate) mod transport;
 
+pub static GLOBAL_CONFIG: OnceCell<config::Config> = OnceCell::new();
+
 pub struct KdeConnectCore {
-    pub config: config::Config,
     device_manager: Arc<DeviceManager>,
     pairing: Arc<PairingManager>,
     plugin_registry: Arc<PluginRegistry>,
@@ -50,12 +52,14 @@ impl KdeConnectCore {
         let plugin_registry = Arc::new(PluginRegistry::new());
 
         let outgoing_capabilities = plugin_registry.list_plugins().await;
-        let config = config::Config::new(outgoing_capabilities);
+        GLOBAL_CONFIG
+            .set(config::Config::new(outgoing_capabilities))
+            .unwrap();
 
         let (event_tx, _event_rx) = broadcast::channel(128);
         let (transport_tx, transport_rx) = mpsc::unbounded_channel();
-        let transport = TcpTransport::new(&config, &transport_tx);
-        let udp_transport = UdpTransport::new(&config, &transport_tx);
+        let transport = TcpTransport::new(&transport_tx);
+        let udp_transport = UdpTransport::new(&transport_tx);
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
@@ -81,7 +85,6 @@ impl KdeConnectCore {
 
         Ok((
             Self {
-                config,
                 device_manager: Arc::new(device_manager),
                 pairing,
                 plugin_registry,

@@ -1,15 +1,17 @@
 use std::{fs::File, io, path::PathBuf};
 
 use rcgen::{Certificate, CertificateParams, DnType, Error, KeyPair};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use time::Duration;
 
 use crate::config::CONFIG_DIR;
 
+#[derive(Debug)]
 pub struct KeyStore {
     certificate: String,
-    _cert_path: PathBuf,
+    cert_path: PathBuf,
     keypair: String,
-    _keys_path: PathBuf,
+    keys_path: PathBuf,
 }
 
 impl KeyStore {
@@ -71,9 +73,9 @@ impl KeyStore {
 
         Ok(Self {
             certificate,
-            _cert_path: cert_path,
+            cert_path,
             keypair,
-            _keys_path: keys_path,
+            keys_path,
         })
     }
 
@@ -81,8 +83,16 @@ impl KeyStore {
         &self.certificate
     }
 
+    pub fn get_certificateder(&self) -> CertificateDer<'static> {
+        CertificateDer::from_pem_file(&self.cert_path).unwrap()
+    }
+
     pub fn get_keypair(&self) -> &String {
         &self.keypair
+    }
+
+    pub fn get_keys(&self) -> PrivateKeyDer<'static> {
+        PrivateKeyDer::from_pem_file(&self.keys_path).unwrap()
     }
 }
 

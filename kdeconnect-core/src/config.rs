@@ -5,6 +5,8 @@ use std::{
     time::Duration,
 };
 
+use tracing::debug;
+
 use crate::{
     crypto::KeyStore,
     protocol::{Capabilities, DeviceType, Identity, PROTOCOL_VERSION},
@@ -13,6 +15,7 @@ use crate::{
 pub const CONFIG_DIR: &str = "kdeconnect";
 pub const DEVICE_ID_STORE: &str = "device_id";
 
+#[derive(Debug)]
 pub struct Config {
     pub device_name: String,
     pub listen_addr: SocketAddr,
@@ -54,6 +57,8 @@ impl Config {
                 make_identity(device_id, out_caps, Some(DEFAULT_LISTEN_PORT))
             }
         };
+
+        debug!("CONFIG initialized.");
 
         Self {
             device_name: hostname::get()
