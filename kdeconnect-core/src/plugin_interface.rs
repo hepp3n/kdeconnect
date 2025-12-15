@@ -278,7 +278,6 @@ impl PluginRegistry {
 
         let _ = tokio::io::copy(&mut payload, &mut stream).await;
         let _ = stream.flush().await;
-
         let _ = stream.shutdown().await;
 
         info!("successfully sent payload");

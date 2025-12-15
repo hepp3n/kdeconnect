@@ -489,8 +489,6 @@ pub(crate) async fn prepare_listener_for_payload() -> Result<TcpListener, String
             free_listener = Some(listener);
             free_port = Some(port);
 
-            info!("found free port: {:?} and bound listener to it.", free_port);
-
             break;
         }
     }

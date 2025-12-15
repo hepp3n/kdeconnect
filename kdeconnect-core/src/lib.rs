@@ -186,6 +186,10 @@ impl KdeConnectCore {
     async fn core_events(&self, event: CoreEvent) {
         let guard = self.writer_map.lock().await;
 
+        let free_listener = prepare_listener_for_payload()
+            .await
+            .expect("creating payload");
+
         match event {
             CoreEvent::PacketReceived { device, packet } => {
                 info!("[core] packet received: {}", packet.packet_type);
@@ -261,10 +265,6 @@ impl KdeConnectCore {
             } => {
                 if let Some(sender) = guard.get(&device_id) {
                     debug!("sender available.");
-
-                    let free_listener = prepare_listener_for_payload()
-                        .await
-                        .expect("creating payload");
 
                     if let Some(_device) = self.device_manager.get_device(&device_id).await {
                         // dispatch to plugins
