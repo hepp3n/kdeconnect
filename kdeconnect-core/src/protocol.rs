@@ -1,10 +1,13 @@
 use std::{
     fmt::Display,
+    os::unix::fs::MetadataExt as _,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::{fs::File, io::AsyncRead};
 
 pub const PROTOCOL_VERSION: usize = 8;
 
@@ -211,7 +214,7 @@ pub struct ProtocolPacket {
     pub body: Value,
     #[serde(rename = "payloadSize")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload_size: Option<usize>,
+    pub payload_size: Option<i64>,
     #[serde(rename = "payloadTransferInfo")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_transfer_info: Option<PacketPayloadTransferInfo>,
@@ -255,6 +258,21 @@ impl ProtocolPacket {
         }
     }
 
+    pub fn new_with_payload(
+        t: PacketType,
+        body: Value,
+        payload_size: i64,
+        payload_transfer_info: Option<PacketPayloadTransferInfo>,
+    ) -> Self {
+        Self {
+            id: None,
+            packet_type: t,
+            body,
+            payload_size: Some(payload_size),
+            payload_transfer_info,
+        }
+    }
+
     pub fn from_raw(raw: &[u8]) -> anyhow::Result<Self> {
         let pkt: ProtocolPacket =
             serde_json::from_slice(raw).expect("Failed to parse ProtocolPacket from raw data");
@@ -264,6 +282,69 @@ impl ProtocolPacket {
     pub fn as_raw(&self) -> anyhow::Result<Vec<u8>> {
         let str = serde_json::to_string(self)?;
         Ok(format!("{}\n", str).as_bytes().to_vec())
+    }
+}
+
+pub struct DeviceFile<S: AsyncRead + Sync + Send + Unpin> {
+    pub buf: S,
+    pub size: i64,
+    pub name: String,
+    pub creation_time: Option<u128>,
+    pub last_modified: Option<u128>,
+}
+
+impl DeviceFile<File> {
+    pub async fn try_from_tokio(file: File, name: String) -> anyhow::Result<Self> {
+        file.sync_all().await?;
+        let metadata = file.metadata().await?;
+
+        Ok(DeviceFile {
+            buf: file,
+            size: metadata.size().try_into().map_err(std::io::Error::other)?,
+            name,
+            creation_time: Some(
+                metadata
+                    .created()?
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("time went backwards")
+                    .as_millis(),
+            ),
+            last_modified: Some(
+                metadata
+                    .modified()?
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("time went backwards")
+                    .as_millis(),
+            ),
+        })
+    }
+
+    pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path: &Path = path.as_ref();
+
+        Self::try_from_tokio(
+            File::open(path).await?,
+            path.file_name()
+                .expect("invalid file name")
+                .to_os_string()
+                .into_string()
+                .expect("OsString conversion"),
+        )
+        .await
+    }
+}
+
+pub struct DevicePayload<S: AsyncRead + Sync + Send + Unpin> {
+    pub buf: S,
+    pub size: i64,
+}
+
+impl<S: AsyncRead + Sync + Send + Unpin> From<DeviceFile<S>> for DevicePayload<S> {
+    fn from(file: DeviceFile<S>) -> Self {
+        Self {
+            buf: file.buf,
+            size: file.size,
+        }
     }
 }
 

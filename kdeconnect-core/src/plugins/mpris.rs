@@ -1,13 +1,11 @@
-use std::{fs, io::Read as _, sync::Arc};
-
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::{
     device::Device,
     plugin_interface::Plugin,
-    protocol::{PacketType, ProtocolPacket},
+    protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -57,6 +55,122 @@ pub struct MprisPlayer {
     pub album_art_url: Option<String>,
     // undocumented kdeconnect-kde field
     pub url: Option<String>,
+}
+
+impl MprisPlayer {
+    pub fn new(player_name: Option<&str>) -> Option<Self> {
+        let Ok(player) = get_mpris_players(player_name) else {
+            return None;
+        };
+
+        let metadata = get_mpris_metadata()?;
+
+        let artist = metadata
+            .artists()
+            .map_or("Unknown Artist".to_string(), |a| a.join(", "));
+        let title = metadata
+            .title()
+            .map_or("Unknown Title".to_string(), |t| t.to_string());
+        let album = metadata
+            .album_name()
+            .map_or("Unknown Album".to_string(), |al| al.to_string());
+
+        let album_art_url = metadata
+            .art_url()
+            .map_or("".to_string(), |url| url.to_string());
+
+        let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
+        let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
+        let can_pause = player.can_pause().unwrap_or(false);
+        let can_play = player.can_play().unwrap_or(false);
+        let can_go_next = player.can_go_next().unwrap_or(false);
+        let can_go_previous = player.can_go_previous().unwrap_or(false);
+        let can_seek = player.can_seek().unwrap_or(false);
+        let is_playing = player.is_running();
+        let loop_status =
+            MprisLoopStatus::from(player.get_loop_status().unwrap_or(mpris::LoopStatus::None));
+        let shuffle = player.get_shuffle().unwrap_or(false);
+        let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
+
+        let player_ident = player.identity().to_string();
+
+        Some(Self {
+            player: player_ident.clone(),
+            title: Some(title),
+            artist: Some(artist),
+            album: Some(album),
+            is_playing: Some(is_playing),
+            can_pause: Some(can_pause),
+            can_play: Some(can_play),
+            can_go_next: Some(can_go_next),
+            can_go_previous: Some(can_go_previous),
+            can_seek: Some(can_seek),
+            loop_status: Some(loop_status),
+            shuffle: Some(shuffle),
+            pos: Some(pos),
+            length: Some(length),
+            volume: Some(volume),
+            album_art_url: Some(album_art_url.clone()),
+            url: None,
+        })
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        let Ok(player) = get_mpris_players(Some(name)) else {
+            return None;
+        };
+
+        let metadata = get_mpris_metadata()?;
+
+        let artist = metadata
+            .artists()
+            .map_or("Unknown Artist".to_string(), |a| a.join(", "));
+        let title = metadata
+            .title()
+            .map_or("Unknown Title".to_string(), |t| t.to_string());
+        let album = metadata
+            .album_name()
+            .map_or("Unknown Album".to_string(), |al| al.to_string());
+
+        let album_art_url = metadata
+            .art_url()
+            .map_or("".to_string(), |url| url.to_string());
+
+        let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
+        let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
+        let can_pause = player.can_pause().unwrap_or(false);
+        let can_play = player.can_play().unwrap_or(false);
+        let can_go_next = player.can_go_next().unwrap_or(false);
+        let can_go_previous = player.can_go_previous().unwrap_or(false);
+        let can_seek = player.can_seek().unwrap_or(false);
+        let is_playing = player.is_running();
+        let loop_status =
+            MprisLoopStatus::from(player.get_loop_status().unwrap_or(mpris::LoopStatus::None));
+        let shuffle = player.get_shuffle().unwrap_or(false);
+        let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
+
+        let player_ident = player.identity().to_string();
+
+        Some(Self {
+            player: player_ident.clone(),
+            title: Some(title),
+            artist: Some(artist),
+            album: Some(album),
+            is_playing: Some(is_playing),
+            can_pause: Some(can_pause),
+            can_play: Some(can_play),
+            can_go_next: Some(can_go_next),
+            can_go_previous: Some(can_go_previous),
+            can_seek: Some(can_seek),
+            loop_status: Some(loop_status),
+            shuffle: Some(shuffle),
+            pos: Some(pos),
+            length: Some(length),
+            volume: Some(volume),
+            album_art_url: Some(album_art_url.clone()),
+            url: None,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -132,8 +246,8 @@ impl Plugin for Mpris {
     async fn received(
         &self,
         _device: &Device,
-        _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // MPRIS plugin does not send events on its own
     }
@@ -141,19 +255,40 @@ impl Plugin for Mpris {
     async fn send(
         &self,
         _device: &Device,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
-        // MPRIS plugin does not send events on its own
     }
 }
 
-pub fn get_mpris_players() -> anyhow::Result<mpris::Player> {
+impl Mpris {
+    pub async fn send_art(
+        &self,
+        writer: &mpsc::UnboundedSender<ProtocolPacket>,
+        payload_size: i64,
+        payload_transfer_info: Option<PacketPayloadTransferInfo>,
+    ) {
+        let packet = ProtocolPacket::new_with_payload(
+            PacketType::Mpris,
+            serde_json::to_value(self.clone()).expect("failed serialize packet body"),
+            payload_size,
+            payload_transfer_info,
+        );
+
+        let _ = writer.send(packet);
+    }
+}
+
+pub fn get_mpris_players(name: Option<&str>) -> anyhow::Result<mpris::Player> {
     let player_finder = mpris::PlayerFinder::new()?;
-    Ok(player_finder.find_active()?)
+    if let Some(name) = name {
+        Ok(player_finder.find_by_name(name)?)
+    } else {
+        Ok(player_finder.find_active()?)
+    }
 }
 
 pub fn get_mpris_metadata() -> Option<mpris::Metadata> {
-    if let Ok(player) = get_mpris_players() {
+    if let Ok(player) = get_mpris_players(None) {
         Some(
             player
                 .get_metadata()
@@ -173,8 +308,8 @@ impl Plugin for MprisRequest {
     async fn received(
         &self,
         device: &Device,
-        _event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
-        core_tx: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         match self {
             MprisRequest::List {
@@ -182,7 +317,7 @@ impl Plugin for MprisRequest {
             } => {
                 if *request_player_list {
                     debug!("MPRIS Player list requested");
-                    let players = get_mpris_players();
+                    let players = get_mpris_players(None);
 
                     if let Ok(player) = players {
                         let packet = ProtocolPacket {
@@ -190,7 +325,7 @@ impl Plugin for MprisRequest {
                             packet_type: PacketType::Mpris,
                             body: serde_json::to_value(Mpris::List {
                                 player_list: vec![player.identity().into()],
-                                supports_album_art_payload: false,
+                                supports_album_art_payload: true,
                             })
                             .unwrap(),
                             payload_size: None,
@@ -204,110 +339,17 @@ impl Plugin for MprisRequest {
                     }
                 }
             }
-            MprisRequest::PlayerRequest {
-                player,
-                request_now_playing,
-                request_volume,
-                request_album_art,
-            } => {
-                debug!(
-                    "mpris request received: {:?} {:?} {:?} {:?} ",
-                    player, request_now_playing, request_volume, request_album_art
-                );
-                let Some(metadata) = get_mpris_metadata() else {
-                    return;
-                };
-                let artist = metadata
-                    .artists()
-                    .map_or("Unknown Artist".to_string(), |a| a.join(", "));
-                let title = metadata
-                    .title()
-                    .map_or("Unknown Title".to_string(), |t| t.to_string());
-                let album = metadata
-                    .album_name()
-                    .map_or("Unknown Album".to_string(), |al| al.to_string());
-
-                let album_art_url = metadata
-                    .art_url()
-                    .map_or("".to_string(), |url| url.to_string());
-
-                let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
-
-                let Ok(player) = get_mpris_players() else {
-                    return;
-                };
-
-                let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
-                let can_pause = player.can_pause().unwrap_or(false);
-                let can_play = player.can_play().unwrap_or(false);
-                let can_go_next = player.can_go_next().unwrap_or(false);
-                let can_go_previous = player.can_go_previous().unwrap_or(false);
-                let can_seek = player.can_seek().unwrap_or(false);
-                let is_playing = player.is_running();
-                let loop_status = MprisLoopStatus::from(
-                    player.get_loop_status().unwrap_or(mpris::LoopStatus::None),
-                );
-                let shuffle = player.get_shuffle().unwrap_or(false);
-                let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
-
-                let mut construct_packet = ProtocolPacket {
-                    id: None,
-                    packet_type: PacketType::Mpris,
-                    body: serde_json::to_value(Mpris::Info(MprisPlayer {
-                        player: player.identity().into(),
-                        title: Some(title),
-                        artist: Some(artist),
-                        album: Some(album),
-                        is_playing: Some(is_playing),
-                        can_pause: Some(can_pause),
-                        can_play: Some(can_play),
-                        can_go_next: Some(can_go_next),
-                        can_go_previous: Some(can_go_previous),
-                        can_seek: Some(can_seek),
-                        loop_status: Some(loop_status),
-                        shuffle: Some(shuffle),
-                        pos: Some(pos),
-                        length: Some(length),
-                        volume: Some(volume),
-                        album_art_url: Some(album_art_url.clone()),
-                        url: None,
-                    }))
-                    .unwrap(),
-                    payload_size: None,
-                    payload_transfer_info: None,
-                };
-
-                if !album_art_url.is_empty() {
-                    let file = fs::File::open(
-                        album_art_url
-                            .strip_prefix("file://")
-                            .unwrap_or(&album_art_url),
-                    );
-
-                    if let Ok(mut f) = file {
-                        let mut art_data = Vec::new();
-                        if f.read_to_end(&mut art_data).is_ok() {
-                            debug!("Sending album art of size {}", art_data.len());
-                            construct_packet.payload_size = Some(art_data.len());
-                        }
-                    }
-                }
-
-                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                    device: device.device_id.clone(),
-                    packet: construct_packet,
-                });
-            }
             MprisRequest::Action { .. } => {
                 debug!("MPRIS Action request received");
             }
+            _ => {}
         }
     }
 
     async fn send(
         &self,
         _device: &Device,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // MPRIS Request plugin does not send events on its own
     }

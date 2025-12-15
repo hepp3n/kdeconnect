@@ -2,8 +2,7 @@ use crate::plugin_interface::Plugin;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Clipboard {
@@ -20,8 +19,8 @@ impl Plugin for Clipboard {
     async fn received(
         &self,
         _device: &crate::device::Device,
-        event: Arc<mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         let _ = event.send(crate::event::ConnectionEvent::ClipboardReceived(
             self.content.clone(),
@@ -31,7 +30,7 @@ impl Plugin for Clipboard {
     async fn send(
         &self,
         _device: &crate::device::Device,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
     }
 }

@@ -1,9 +1,10 @@
+use tokio::io::AsyncRead;
+
 use crate::{
     device::{Device, DeviceId},
     protocol::ProtocolPacket,
 };
 
-#[derive(Debug, Clone)]
 pub enum CoreEvent {
     DeviceDiscovered(Device),
     DevicePaired((DeviceId, Device)),
@@ -15,6 +16,12 @@ pub enum CoreEvent {
     SendPacket {
         device: DeviceId,
         packet: ProtocolPacket,
+    },
+    SendPaylod {
+        device: DeviceId,
+        packet: ProtocolPacket,
+        payload: Box<dyn AsyncRead + Sync + Send + Unpin>,
+        payload_size: i64,
     },
     Error(String),
 }

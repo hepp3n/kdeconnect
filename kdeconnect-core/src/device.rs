@@ -9,7 +9,10 @@ use std::{
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{RwLock, broadcast},
+    sync::{
+        RwLock,
+        mpsc::{self},
+    },
 };
 use tracing::info;
 
@@ -100,11 +103,11 @@ impl Device {
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
     devices: Arc<RwLock<HashMap<DeviceId, Device>>>,
-    event_tx: broadcast::Sender<CoreEvent>,
+    event_tx: mpsc::UnboundedSender<CoreEvent>,
 }
 
 impl DeviceManager {
-    pub fn new(event_tx: broadcast::Sender<CoreEvent>) -> Self {
+    pub fn new(event_tx: mpsc::UnboundedSender<CoreEvent>) -> Self {
         Self {
             devices: Default::default(),
             event_tx,

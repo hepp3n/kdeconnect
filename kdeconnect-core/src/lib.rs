@@ -2,9 +2,9 @@ use once_cell::sync::OnceCell;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     select,
-    sync::{Mutex, broadcast, mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager},
@@ -13,7 +13,9 @@ use crate::{
     plugin_interface::PluginRegistry,
     plugins::ping::Ping,
     protocol::{PacketType, Pair, ProtocolPacket},
-    transport::{TcpTransport, Transport, TransportEvent, UdpTransport},
+    transport::{
+        TcpTransport, Transport, TransportEvent, UdpTransport, prepare_listener_for_payload,
+    },
 };
 
 pub mod config;
@@ -34,14 +36,15 @@ pub struct KdeConnectCore {
     plugin_registry: Arc<PluginRegistry>,
     transport_rx: mpsc::UnboundedReceiver<TransportEvent>,
     writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
-    event_tx: broadcast::Sender<CoreEvent>,
+    event_tx: mpsc::UnboundedSender<CoreEvent>,
+    event_rx: mpsc::UnboundedReceiver<CoreEvent>,
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
     udp_transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
     // channel for 3rd party communication
     out_tx: Arc<mpsc::UnboundedSender<AppEvent>>,
     in_rx: mpsc::UnboundedReceiver<AppEvent>,
-    conn_tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+    conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
 }
 
 impl KdeConnectCore {
@@ -56,7 +59,7 @@ impl KdeConnectCore {
             .set(config::Config::new(outgoing_capabilities))
             .unwrap();
 
-        let (event_tx, _event_rx) = broadcast::channel(128);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (transport_tx, transport_rx) = mpsc::unbounded_channel();
         let transport = TcpTransport::new(&transport_tx);
         let udp_transport = UdpTransport::new(&transport_tx);
@@ -91,12 +94,13 @@ impl KdeConnectCore {
                 transport_rx,
                 writer_map,
                 event_tx,
+                event_rx,
                 shutdown_tx: Arc::new(Mutex::new(None)),
                 transport: Arc::new(Mutex::new(Some(Box::new(transport)))),
                 udp_transport: Arc::new(Mutex::new(Some(Box::new(udp_transport)))),
                 out_tx: Arc::new(out_tx),
                 in_rx,
-                conn_tx: Arc::new(conn_tx),
+                conn_tx,
             },
             conn_rx,
         ))
@@ -136,8 +140,6 @@ impl KdeConnectCore {
             }
         });
 
-        let mut rx = self.event_tx.subscribe();
-
         let (sutdown_tx, mut shutdown_rx) = oneshot::channel();
 
         {
@@ -149,15 +151,11 @@ impl KdeConnectCore {
 
         loop {
             select! {
-                maybe = rx.recv() => {
+                maybe = self.event_rx.recv() => {
                     match maybe {
-                        Ok(event) => self.core_events(event).await,
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            error!("Event loop lagged by {} messages", n);
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            info!("Core channel closed");
-                            break;
+                        Some(event) => self.core_events(event).await,
+                        None => {
+                            let _ = self.event_tx.send(CoreEvent::Error("CoreEvent channel closed".to_string()));
                         }
                     }
                 }
@@ -187,7 +185,6 @@ impl KdeConnectCore {
 
     async fn core_events(&self, event: CoreEvent) {
         let guard = self.writer_map.lock().await;
-        let core_tx = Arc::new(self.event_tx.clone());
 
         match event {
             CoreEvent::PacketReceived { device, packet } => {
@@ -196,7 +193,12 @@ impl KdeConnectCore {
                 if let Some(device) = self.device_manager.get_device(&device).await {
                     // dispatch to plugins
                     self.plugin_registry
-                        .dispatch(device, packet.clone(), core_tx, self.conn_tx.clone())
+                        .dispatch(
+                            device,
+                            packet.clone(),
+                            self.event_tx.clone(),
+                            self.conn_tx.clone(),
+                        )
                         .await;
                 };
             }
@@ -240,11 +242,38 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
             }
             CoreEvent::SendPacket { device, packet } => {
-                info!("[core] send packet to device: {}", device);
-                debug!("[core] packet: {:?}", packet);
+                info!(
+                    "[core] send packet: [{}] to device: {}",
+                    packet.packet_type, device
+                );
 
                 if let Some(sender) = guard.get(&device) {
-                    sender.send(packet).unwrap();
+                    debug!("sender available.");
+                    let _ = sender.send(packet);
+                    debug!("packet sent....");
+                }
+            }
+            CoreEvent::SendPaylod {
+                device: device_id,
+                packet,
+                payload,
+                payload_size,
+            } => {
+                if let Some(sender) = guard.get(&device_id) {
+                    debug!("sender available.");
+
+                    let free_listener = prepare_listener_for_payload()
+                        .await
+                        .expect("creating payload");
+
+                    if let Some(_device) = self.device_manager.get_device(&device_id).await {
+                        // dispatch to plugins
+                        self.plugin_registry
+                            .send_payload(packet, sender, payload, payload_size, &free_listener)
+                            .await;
+                    };
+
+                    debug!("packet sent....");
                 }
             }
             CoreEvent::Error(e) => {

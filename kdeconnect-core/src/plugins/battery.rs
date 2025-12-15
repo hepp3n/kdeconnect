@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 use crate::{device::Device, event::ConnectionEvent, plugin_interface::Plugin};
 
@@ -51,8 +49,8 @@ impl Plugin for Battery {
     async fn received(
         &self,
         _device: &Device,
-        event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        event: mpsc::UnboundedSender<ConnectionEvent>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         event
             .send(ConnectionEvent::StateUpdated(
@@ -67,7 +65,7 @@ impl Plugin for Battery {
     async fn send(
         &self,
         _device: &Device,
-        _core_event: Arc<broadcast::Sender<crate::event::CoreEvent>>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // Battery plugin does not send events on its own
     }

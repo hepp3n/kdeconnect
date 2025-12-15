@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::plugin_interface::Plugin;
 
@@ -32,17 +33,15 @@ impl Plugin for RunCommandRequest {
     async fn received(
         &self,
         _device: &crate::device::Device,
-        _connection_tx: std::sync::Arc<
-            tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>,
-        >,
-        _core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _connection_tx: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        _core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
     }
 
     async fn send(
         &self,
         _device: &crate::device::Device,
-        _core_tx: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
     }
 }

@@ -4,8 +4,7 @@ use crate::plugin_interface::Plugin;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tracing::debug;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -74,8 +73,8 @@ impl Plugin for ConnectivityReport {
     async fn received(
         &self,
         device: &Device,
-        _connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        _core_event: Arc<broadcast::Sender<CoreEvent>>,
+        _connection_event: mpsc::UnboundedSender<ConnectionEvent>,
+        _core_event: mpsc::UnboundedSender<CoreEvent>,
     ) -> () {
         debug!(
             "Received connectivity report for device {}",
@@ -84,7 +83,7 @@ impl Plugin for ConnectivityReport {
         // Currently, we do not process incoming connectivity reports.
     }
 
-    async fn send(&self, _device: &Device, _core_event: Arc<broadcast::Sender<CoreEvent>>) -> () {
+    async fn send(&self, _device: &Device, _core_event: mpsc::UnboundedSender<CoreEvent>) -> () {
         // Currently, we do not send connectivity report requests.
     }
 }

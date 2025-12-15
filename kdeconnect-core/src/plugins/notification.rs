@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::plugin_interface::Plugin;
 
@@ -50,8 +51,8 @@ impl Plugin for Notification {
     async fn received(
         &self,
         device: &crate::device::Device,
-        _event: std::sync::Arc<tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>>,
-        core_event: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _event: tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // Implementation for handling received notifications would go here.
         let device_id = device.device_id.clone();
@@ -110,7 +111,7 @@ impl Plugin for Notification {
     async fn send(
         &self,
         _device: &crate::device::Device,
-        _core_event: std::sync::Arc<tokio::sync::broadcast::Sender<crate::event::CoreEvent>>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // Implementation for sending notifications would go here.
     }

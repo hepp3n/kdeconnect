@@ -1,18 +1,25 @@
 use async_trait::async_trait;
+use rustls::crypto::aws_lc_rs::default_provider;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::{
+    io::{AsyncRead, AsyncWriteExt},
+    net::TcpListener,
+    sync::{RwLock, mpsc},
+};
 use tracing::{debug, info, warn};
 
 use crate::{
+    GLOBAL_CONFIG,
+    crypto::NoCertificateVerification,
     device::Device,
     event::{ConnectionEvent, CoreEvent},
     plugins::{
         self,
         battery::Battery,
         clipboard::Clipboard,
-        mpris::{Mpris, MprisRequest},
+        mpris::{Mpris, MprisPlayer, MprisRequest},
     },
-    protocol::{PacketType, ProtocolPacket},
+    protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
 
 /// All plugins must implement this trait.
@@ -25,11 +32,11 @@ pub trait Plugin: Send + Sync {
     async fn received(
         &self,
         device: &Device,
-        connection_event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        core_event: Arc<broadcast::Sender<CoreEvent>>,
+        connection_event: mpsc::UnboundedSender<ConnectionEvent>,
+        core_event: mpsc::UnboundedSender<CoreEvent>,
     ) -> ();
     /// Called to send a packet using this plugin.
-    async fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) -> ();
+    async fn send(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) -> ();
 }
 
 /// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
@@ -57,8 +64,8 @@ impl PluginRegistry {
         &self,
         device: Device,
         packet: ProtocolPacket,
-        core_tx: Arc<broadcast::Sender<CoreEvent>>,
-        tx: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
+        core_tx: mpsc::UnboundedSender<CoreEvent>,
+        tx: mpsc::UnboundedSender<ConnectionEvent>,
     ) {
         let body = packet.body.clone();
         let core_tx = core_tx.clone();
@@ -109,9 +116,74 @@ impl PluginRegistry {
             }
             PacketType::MprisRequest => {
                 if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
-                    mpris_request
-                        .received(&device, connection_tx, core_tx)
-                        .await;
+                    match mpris_request {
+                        MprisRequest::PlayerRequest {
+                            player,
+                            request_now_playing,
+                            request_volume,
+                            request_album_art,
+                        } => {
+                            debug!(
+                                "mpris request received: {:?} {:?} {:?} {:?} ",
+                                player, request_now_playing, request_volume, request_album_art
+                            );
+
+                            let Some(player) = MprisPlayer::new(Some(&player)) else {
+                                return;
+                            };
+
+                            let player_name = player.player.clone();
+                            let art = player.album_art_url.clone();
+
+                            if let Some(album_art_url) = request_album_art {
+                                let path = album_art_url.strip_prefix("file://");
+
+                                let Some(path) = path else {
+                                    return;
+                                };
+
+                                let file = DeviceFile::open(path).await.expect("cannot open file");
+                                let payload = DevicePayload::from(file);
+
+                                let construct_packet = ProtocolPacket::new_with_payload(
+                                    PacketType::Mpris,
+                                    serde_json::to_value(Mpris::TransferringArt {
+                                        player: player_name,
+                                        album_art_url: art.unwrap_or(path.to_string()),
+                                        transferring_album_art: true,
+                                    })
+                                    .unwrap(),
+                                    payload.size,
+                                    None,
+                                );
+
+                                let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
+                                    device: device.device_id.clone(),
+                                    packet: construct_packet,
+                                    payload: Box::new(payload.buf),
+                                    payload_size: payload.size,
+                                });
+                            } else {
+                                let construct_packet = ProtocolPacket {
+                                    id: None,
+                                    packet_type: PacketType::Mpris,
+                                    body: serde_json::to_value(Mpris::Info(player)).unwrap(),
+                                    payload_size: None,
+                                    payload_transfer_info: None,
+                                };
+
+                                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                                    device: device.device_id.clone(),
+                                    packet: construct_packet,
+                                });
+                            }
+                        }
+                        MprisRequest::Action { .. } | MprisRequest::List { .. } => {
+                            mpris_request
+                                .received(&device, connection_tx, core_tx)
+                                .await;
+                        }
+                    }
                 }
             }
             PacketType::Notification => {
@@ -146,12 +218,78 @@ impl PluginRegistry {
         }
     }
 
+    pub async fn send_payload(
+        &self,
+        packet: ProtocolPacket,
+        device_writer: &mpsc::UnboundedSender<ProtocolPacket>,
+        mut payload: impl AsyncRead + Sync + Send + Unpin,
+        payload_size: i64,
+        free_listener: &TcpListener,
+    ) {
+        info!("preparing payload transfer");
+
+        let body = packet.body.clone();
+
+        if let Ok(addr) = free_listener.local_addr() {
+            debug!("trying to match packet for addr: {}", addr);
+            let payload_transfer_info = Some(PacketPayloadTransferInfo { port: addr.port() });
+
+            match packet.packet_type {
+                PacketType::Mpris => {
+                    if let Ok(mpris) = serde_json::from_value::<plugins::mpris::Mpris>(body) {
+                        debug!("got mpris packet, sending info.");
+
+                        let _ = mpris
+                            .send_art(device_writer, payload_size, payload_transfer_info)
+                            .await;
+                    }
+                }
+                _ => {
+                    warn!(
+                        "No plugin found to handle packet type: {:?}",
+                        packet.packet_type
+                    );
+                }
+            }
+        };
+
+        let config = GLOBAL_CONFIG.get().unwrap();
+        let cert = config.key_store.get_certificateder().clone();
+        let keypair = config.key_store.get_keys().clone_key();
+
+        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
+
+        let server_config = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier.clone())
+            .with_single_cert(vec![cert.clone()], keypair)
+            .expect("creating server config");
+
+        debug!("server config created.");
+
+        let incoming = free_listener.accept().await.expect("accepting connection.");
+        debug!("incoming connection.");
+
+        let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(server_config))
+            .accept(incoming.0)
+            .await
+            .expect("from acceptor in payload");
+
+        debug!("accepted");
+
+        let _ = tokio::io::copy(&mut payload, &mut stream).await;
+        let _ = stream.flush().await;
+
+        let _ = stream.shutdown().await;
+
+        info!("successfully sent payload");
+    }
+
     /// Sends a packet using the appropriate plugin.
     pub async fn send(
         &self,
         device: Device,
         packet: ProtocolPacket,
-        core_tx: Arc<broadcast::Sender<CoreEvent>>,
+        core_tx: mpsc::UnboundedSender<CoreEvent>,
     ) {
         let body = packet.body.clone();
         let core_event = core_tx.clone();

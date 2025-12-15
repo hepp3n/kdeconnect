@@ -9,7 +9,7 @@ use tracing::debug;
 
 use crate::{
     crypto::KeyStore,
-    protocol::{Capabilities, DeviceType, Identity, PROTOCOL_VERSION},
+    protocol::{DeviceType, Identity, PROTOCOL_VERSION},
     transport::{DEFAULT_DISCOVERY_INTERVAL, DEFAULT_LISTEN_ADDR, DEFAULT_LISTEN_PORT},
 };
 pub const CONFIG_DIR: &str = "kdeconnect";
@@ -73,11 +73,7 @@ impl Config {
     }
 }
 
-fn make_identity(
-    device_id: String,
-    outgoing_capabilities: Vec<String>,
-    tcp_port: Option<u16>,
-) -> Identity {
+fn make_identity(device_id: String, capabilities: Vec<String>, tcp_port: Option<u16>) -> Identity {
     Identity {
         device_id,
         device_name: hostname::get()
@@ -85,8 +81,8 @@ fn make_identity(
             .to_string_lossy()
             .to_string(),
         device_type: identify_device_type(),
-        incoming_capabilities: vec![Capabilities::Ping.into()],
-        outgoing_capabilities,
+        incoming_capabilities: capabilities.clone(),
+        outgoing_capabilities: capabilities,
         protocol_version: PROTOCOL_VERSION,
         tcp_port,
     }

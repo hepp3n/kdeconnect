@@ -6,8 +6,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Ping {
@@ -23,8 +22,8 @@ impl Plugin for Ping {
     async fn received(
         &self,
         device: &Device,
-        _event: Arc<mpsc::UnboundedSender<ConnectionEvent>>,
-        core_event: Arc<broadcast::Sender<CoreEvent>>,
+        _event: mpsc::UnboundedSender<ConnectionEvent>,
+        core_event: mpsc::UnboundedSender<CoreEvent>,
     ) {
         let device_id = device.device_id.clone();
         let event = core_event.clone();
@@ -68,7 +67,7 @@ impl Plugin for Ping {
         .await;
     }
 
-    async fn send(&self, device: &Device, core_event: Arc<broadcast::Sender<CoreEvent>>) {
+    async fn send(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) {
         let packet = ProtocolPacket::new(
             crate::protocol::PacketType::Ping,
             serde_json::to_value(self).unwrap_or_default(),

@@ -4,9 +4,12 @@ use std::{
     time::Duration,
 };
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::{
+    crypto::aws_lc_rs::default_provider,
+    pki_types::{CertificateDer, PrivateKeyDer},
+};
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, split},
+    io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, split},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
@@ -16,6 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
+    crypto::NoCertificateVerification,
     device::DeviceId,
     protocol::{Identity, PacketType, ProtocolPacket},
 };
@@ -48,7 +52,6 @@ pub enum TransportEvent {
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync {
     async fn listen(&self) -> anyhow::Result<()>;
-    async fn connect(&self, peer: SocketAddr, id: DeviceId) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
 }
 
@@ -59,6 +62,7 @@ pub struct TcpTransport {
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     identity: Arc<Identity>,
     cert: CertificateDer<'static>,
+    keypair: PrivateKeyDer<'static>,
 }
 
 impl TcpTransport {
@@ -67,6 +71,7 @@ impl TcpTransport {
         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
         let write_rx = Arc::new(Mutex::new(write_rx));
         let cert = config.key_store.get_certificateder().clone();
+        let keypair = config.key_store.get_keys();
 
         Self {
             listen_addr: config.listen_addr,
@@ -75,6 +80,7 @@ impl TcpTransport {
             write_rx,
             identity: Arc::new(config.identity.clone()),
             cert,
+            keypair,
         }
     }
 }
@@ -83,12 +89,14 @@ impl TcpTransport {
 impl Transport for TcpTransport {
     async fn listen(&self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(self.listen_addr).await?;
-        let event_tx = self.event_tx.clone();
-        let write_tx = self.write_tx.clone();
-
-        let identity = self.identity.clone();
 
         loop {
+            let event_tx = self.event_tx.clone();
+            let write_tx = self.write_tx.clone();
+            let write_rx = self.write_rx.clone();
+
+            let identity = self.identity.clone();
+
             match listener.accept().await {
                 Ok((mut stream, peer)) => {
                     info!("[tcp] new connection from {}", peer);
@@ -107,13 +115,48 @@ impl Transport for TcpTransport {
                     if let Ok(packet) = serde_json::from_str::<ProtocolPacket>(&buffer)
                         && let Ok(peer_identity) = serde_json::from_value::<Identity>(packet.body)
                     {
-                        let id = DeviceId(peer_identity.device_id.clone());
                         let name = peer_identity.device_name.clone();
+                        let id = peer_identity.device_id.clone();
 
                         if identity.device_id == peer_identity.device_id {
                             warn!("skipping the same device");
                             continue;
                         }
+
+                        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
+
+                        let client_config = rustls::ClientConfig::builder()
+                            .dangerous()
+                            .with_custom_certificate_verifier(verifier)
+                            .with_client_auth_cert(
+                                vec![self.cert.clone()],
+                                self.keypair.clone_key(),
+                            )?;
+
+                        let mut stream = TlsConnector::from(Arc::new(client_config.clone()))
+                            .connect(id.clone().try_into()?, stream)
+                            .await?;
+
+                        let packet = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = stream.write_all(packet.as_slice()).await;
+
+                        let (reader, writer) = split(stream);
+
+                        let _ = tokio::spawn(rw_client(
+                            event_tx.clone(),
+                            reader,
+                            writer,
+                            write_rx,
+                            peer,
+                            DeviceId(id),
+                        ))
+                        .await;
 
                         // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
@@ -124,8 +167,6 @@ impl Transport for TcpTransport {
                         }) {
                             error!("[tcp] transport event channel closed: {}", e);
                         }
-
-                        let _ = self.connect(peer, id).await;
                     }
                 }
                 Err(e) => {
@@ -133,48 +174,6 @@ impl Transport for TcpTransport {
                 }
             }
         }
-    }
-
-    async fn connect(&self, peer: SocketAddr, id: DeviceId) -> anyhow::Result<()> {
-        let event_tx = self.event_tx.clone();
-        let write_rx = self.write_rx.clone();
-        let identity = self.identity.clone();
-
-        let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.add(self.cert.clone())?;
-
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-
-        let connector = TlsConnector::from(Arc::new(config));
-
-        let stream = TcpStream::connect(&peer).await?;
-
-        let domain = ServerName::try_from(id.to_string().as_str())?.to_owned();
-
-        let mut tls_stream = connector.connect(domain, stream).await?;
-
-        info!("[tcp] Established TLS connection with device {}", id);
-
-        tls_stream
-            .write_all(
-                ProtocolPacket::new(
-                    PacketType::Identity,
-                    serde_json::to_value(&*identity).unwrap(),
-                )
-                .as_raw()
-                .expect("Failed to serialize identity packet")
-                .as_slice(),
-            )
-            .await
-            .expect("Failed to send identity packet");
-
-        let (reader, writer) = tokio::io::split(tls_stream);
-
-        let _ = tokio::spawn(rw_client(event_tx, reader, writer, write_rx, peer, id)).await;
-
-        Ok(())
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
@@ -263,6 +262,7 @@ impl Transport for UdpTransport {
 
         let event_tx = self.event_tx.clone();
         let write_tx = self.write_tx.clone();
+        let write_rx = self.write_rx.clone();
         let this_identity = self.identity.clone();
 
         let broadcaster = socket.clone();
@@ -292,6 +292,55 @@ impl Transport for UdpTransport {
                             info!("Device {} supports TCP at {}", id, peer);
                         }
 
+                        let mut stream = TcpStream::connect(peer).await?;
+
+                        let packet = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = stream.write_all(packet.as_slice()).await;
+
+                        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
+
+                        // FIXME Verify certs
+                        let server_config = rustls::ServerConfig::builder()
+                            .with_client_cert_verifier(verifier.clone())
+                            .with_single_cert(vec![self.cert.clone()], self.keypair.clone_key())
+                            .expect("building server config");
+
+                        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+                        let mut tls_stream = acceptor
+                            .accept(stream)
+                            .await
+                            .expect("Failed to accept TLS connection");
+
+                        info!("[udp] Established TLS connection with device {} ", id);
+
+                        let packet = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = tls_stream.write_all(packet.as_slice()).await;
+
+                        let (reader, writer) = split(tls_stream);
+
+                        let _ = tokio::spawn(rw_server(
+                            event_tx.clone(),
+                            reader,
+                            writer,
+                            write_rx.clone(),
+                            peer,
+                            id,
+                        ))
+                        .await;
+
                         // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
                             addr: peer,
@@ -301,8 +350,6 @@ impl Transport for UdpTransport {
                         }) {
                             error!("[udp] transport event channel closed: {}", e);
                         }
-
-                        let _ = self.connect(peer, id).await;
                     }
                 }
                 Err(e) => {
@@ -312,62 +359,11 @@ impl Transport for UdpTransport {
         }
     }
 
-    async fn connect(&self, peer: SocketAddr, id: DeviceId) -> anyhow::Result<()> {
-        let event_tx = self.event_tx.clone();
-        let write_rx = self.write_rx.clone();
-
-        if let Ok(mut socket) = TcpStream::connect(peer).await {
-            let identity_packet = ProtocolPacket::new(
-                PacketType::Identity,
-                serde_json::to_value(&*self.identity).unwrap(),
-            );
-
-            socket
-                .write_all(
-                    &identity_packet
-                        .as_raw()
-                        .expect("Failed to serialize identity packet"),
-                )
-                .await
-                .expect("Failed to send identity packet");
-
-            let config = rustls::ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(vec![self.cert.clone()], self.keypair.clone_key())?;
-
-            let acceptor = TlsAcceptor::from(Arc::new(config));
-
-            let mut tls_stream = acceptor
-                .accept(socket)
-                .await
-                .expect("Faimed to accept TLS connection");
-
-            info!("[udp] Established TLS connection with device {} ", id);
-
-            tls_stream
-                .write_all(
-                    &identity_packet
-                        .as_raw()
-                        .expect("Failed to serialize identity packet"),
-                )
-                .await
-                .expect("Failed to send identity packet over TLS");
-
-            info!("[udp] Sent identity to device {} at {}", id, peer);
-
-            let (reader, writer) = split(tls_stream);
-
-            let _ = tokio::spawn(rw_server(event_tx, reader, writer, write_rx, peer, id)).await;
-        }
-        Ok(())
-    }
-
     async fn stop(&self) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
-/// Helper to run per-connection read loop.
 async fn rw_client(
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     reader: tokio::io::ReadHalf<client::TlsStream<TcpStream>>,
@@ -425,7 +421,6 @@ async fn rw_client(
     });
 }
 
-/// Helper to create writer channel and writer task that will forward strings to socket
 async fn rw_server(
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     reader: tokio::io::ReadHalf<server::TlsStream<TcpStream>>,
@@ -481,4 +476,30 @@ async fn rw_server(
         }
         info!("writer task for {} ended", peer);
     });
+}
+
+pub(crate) async fn prepare_listener_for_payload() -> Result<TcpListener, String> {
+    let mut free_listener: Option<TcpListener> = None;
+    let mut free_port: Option<u16> = None;
+
+    for port in 1739..1769 {
+        if let Ok(listener) =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
+        {
+            free_listener = Some(listener);
+            free_port = Some(port);
+
+            info!("found free port: {:?} and bound listener to it.", free_port);
+
+            break;
+        }
+    }
+
+    if let Some(free_listener) = free_listener
+        && let Some(_free_port) = free_port
+    {
+        Ok(free_listener)
+    } else {
+        Err("no free port for payload, failed.".to_string())
+    }
 }
