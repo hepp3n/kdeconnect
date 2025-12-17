@@ -18,8 +18,10 @@ use crate::{
         battery::Battery,
         clipboard::Clipboard,
         mpris::{Mpris, MprisPlayer, MprisRequest},
+        share,
     },
     protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
+    transport::prepare_listener_for_payload,
 };
 
 /// All plugins must implement this trait.
@@ -128,7 +130,7 @@ impl PluginRegistry {
                                 player, request_now_playing, request_volume, request_album_art
                             );
 
-                            let Some(player) = MprisPlayer::new(Some(&player)) else {
+                            let Ok(player) = MprisPlayer::new(Some(&player)) else {
                                 return;
                             };
 
@@ -224,9 +226,12 @@ impl PluginRegistry {
         device_writer: &mpsc::UnboundedSender<ProtocolPacket>,
         mut payload: impl AsyncRead + Sync + Send + Unpin,
         payload_size: i64,
-        free_listener: &TcpListener,
     ) {
         info!("preparing payload transfer");
+
+        let free_listener = prepare_listener_for_payload()
+            .await
+            .expect("cannot find free port");
 
         let body = packet.body.clone();
 
@@ -244,9 +249,20 @@ impl PluginRegistry {
                             .await;
                     }
                 }
+                PacketType::ShareRequest => {
+                    if let Ok(share_request) =
+                        serde_json::from_value::<plugins::share::ShareRequest>(body)
+                    {
+                        debug!("got share request packet, sending info.");
+
+                        let _ = share_request
+                            .send_file(device_writer, payload_size, payload_transfer_info)
+                            .await;
+                    }
+                }
                 _ => {
                     warn!(
-                        "No plugin found to handle packet type: {:?}",
+                        "[payload] No plugin found to handle packet type: {:?}",
                         packet.packet_type
                     );
                 }
@@ -266,11 +282,11 @@ impl PluginRegistry {
 
         debug!("server config created.");
 
-        let incoming = free_listener.accept().await.expect("accepting connection.");
-        debug!("incoming connection.");
+        let (incoming, peer_addr) = free_listener.accept().await.expect("accepting connection.");
+        debug!("incoming connection from {}", peer_addr);
 
         let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(server_config))
-            .accept(incoming.0)
+            .accept(incoming)
             .await
             .expect("from acceptor in payload");
 

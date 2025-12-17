@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use ashpd::desktop::file_chooser::SelectedFiles;
 use cosmic::app::{Core, Task};
 use cosmic::iced::futures::SinkExt;
 use cosmic::iced::window::Id;
@@ -13,6 +11,9 @@ use cosmic::{Application, Element};
 use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId, PairState};
 use kdeconnect_core::event::{AppEvent, ConnectionEvent, DeviceState};
+use percent_encoding::percent_decode;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -23,6 +24,7 @@ use crate::{APP_ID, fl};
 pub struct State {
     pub battery_level: Option<u8>,
     pub is_charging: Option<bool>,
+    pub selected_files: Vec<String>,
 }
 
 pub struct CosmicConnect {
@@ -39,6 +41,7 @@ pub enum CosmicEvent {
     Pair(DeviceId),
     Unpair(DeviceId),
     SendPing((DeviceId, String)),
+    SendFiles((DeviceId, Vec<String>)),
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +55,9 @@ pub enum Message {
     Disconnected(DeviceId),
     SendEvent(CosmicEvent),
     UpdatedState(DeviceState),
+    SelectFiles,
+    CollectFiles(Vec<String>),
+    SendFiles(DeviceId),
 }
 
 impl Application for CosmicConnect {
@@ -157,7 +163,6 @@ impl Application for CosmicConnect {
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
         let mut content_list = widget::list_column().add(widget::settings::flex_item_row(vec![
             widget::text(fl!("applet-name")).into(),
-            widget::button::standard("Broadcast").into(),
         ]));
 
         for device in self.connections.values() {
@@ -208,6 +213,25 @@ impl Application for CosmicConnect {
                     }
                 )),
             ));
+
+            section = section.add(settings::item(
+                "Send files",
+                widget::settings::item_row(vec![
+                    widget::button::standard("Select files")
+                        .on_press(Message::SelectFiles)
+                        .into(),
+                    widget::button::standard("Send files")
+                        .on_press(Message::SendFiles(device.device_id.clone()))
+                        .into(),
+                ]),
+            ));
+
+            if !self.device_state.selected_files.is_empty() {
+                for file_path in self.device_state.selected_files.iter() {
+                    section = section.add(widget::text(file_path));
+                }
+            }
+
             content_list = content_list.add(section);
         }
 
@@ -278,6 +302,11 @@ impl Application for CosmicConnect {
                         let _ = sender.send(AppEvent::Ping((device_id, msg)));
                     }
                 }
+                CosmicEvent::SendFiles((device_id, files_list)) => {
+                    if let Some(sender) = self.event_sender.as_ref() {
+                        let _ = sender.send(AppEvent::SendFiles((device_id, files_list)));
+                    }
+                }
             },
             Message::UpdatedState(state) => match state {
                 DeviceState::Battery { level, charging } => {
@@ -285,6 +314,45 @@ impl Application for CosmicConnect {
                     self.device_state.is_charging = Some(charging);
                 }
             },
+            Message::SelectFiles => {
+                return Task::future(async move {
+                    let files = SelectedFiles::open_file()
+                        .title("Select file or files to send")
+                        .accept_label("Select")
+                        .modal(true)
+                        .multiple(true)
+                        .send()
+                        .await
+                        .unwrap()
+                        .response()
+                        .unwrap();
+
+                    let paths = files
+                        .uris()
+                        .iter()
+                        .map(|u| {
+                            percent_decode(u.path().as_bytes())
+                                .decode_utf8()
+                                .unwrap()
+                                .to_string()
+                        })
+                        .collect::<Vec<String>>();
+
+                    cosmic::Action::App(Message::CollectFiles(paths))
+                });
+            }
+            Message::CollectFiles(files) => {
+                self.device_state.selected_files = files;
+            }
+            Message::SendFiles(device_id) => {
+                let files_list = self.device_state.selected_files.clone();
+
+                self.device_state.selected_files.clear();
+
+                return Task::done(cosmic::Action::App(Message::SendEvent(
+                    CosmicEvent::SendFiles((device_id, files_list)),
+                )));
+            }
         }
         Task::none()
     }

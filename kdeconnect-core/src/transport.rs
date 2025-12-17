@@ -15,7 +15,7 @@ use tokio::{
     time::MissedTickBehavior,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector, client, server};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, field::debug, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
@@ -412,6 +412,8 @@ async fn rw_client(
 
     tokio::spawn(async move {
         while let Some(msg) = write_rx.lock().await.recv().await {
+            debug!("writing {}", msg.packet_type);
+
             if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
                 error!("Error writing to {}: {}", peer, e);
                 break;
@@ -469,6 +471,8 @@ async fn rw_server(
 
     tokio::spawn(async move {
         while let Some(msg) = write_rx.lock().await.recv().await {
+            debug!("writing {}", msg.packet_type);
+
             if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
                 error!("Error writing to {}: {}", peer, e);
                 break;

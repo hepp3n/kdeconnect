@@ -58,12 +58,9 @@ pub struct MprisPlayer {
 }
 
 impl MprisPlayer {
-    pub fn new(player_name: Option<&str>) -> Option<Self> {
-        let Ok(player) = get_mpris_players(player_name) else {
-            return None;
-        };
-
-        let metadata = get_mpris_metadata()?;
+    pub fn new(player_name: Option<&str>) -> anyhow::Result<Self, anyhow::Error> {
+        let player = get_mpris_players(player_name)?;
+        let metadata = get_mpris_metadata(player_name)?;
 
         let artist = metadata
             .artists()
@@ -94,7 +91,7 @@ impl MprisPlayer {
 
         let player_ident = player.identity().to_string();
 
-        Some(Self {
+        Ok(Self {
             player: player_ident.clone(),
             title: Some(title),
             artist: Some(artist),
@@ -115,61 +112,8 @@ impl MprisPlayer {
         })
     }
 
-    pub fn from_name(name: &str) -> Option<Self> {
-        let Ok(player) = get_mpris_players(Some(name)) else {
-            return None;
-        };
-
-        let metadata = get_mpris_metadata()?;
-
-        let artist = metadata
-            .artists()
-            .map_or("Unknown Artist".to_string(), |a| a.join(", "));
-        let title = metadata
-            .title()
-            .map_or("Unknown Title".to_string(), |t| t.to_string());
-        let album = metadata
-            .album_name()
-            .map_or("Unknown Album".to_string(), |al| al.to_string());
-
-        let album_art_url = metadata
-            .art_url()
-            .map_or("".to_string(), |url| url.to_string());
-
-        let length = metadata.length().map_or(0, |l| l.as_millis() as i32);
-        let volume = (player.get_volume().unwrap_or(1.0) * 100.0) as i32;
-        let can_pause = player.can_pause().unwrap_or(false);
-        let can_play = player.can_play().unwrap_or(false);
-        let can_go_next = player.can_go_next().unwrap_or(false);
-        let can_go_previous = player.can_go_previous().unwrap_or(false);
-        let can_seek = player.can_seek().unwrap_or(false);
-        let is_playing = player.is_running();
-        let loop_status =
-            MprisLoopStatus::from(player.get_loop_status().unwrap_or(mpris::LoopStatus::None));
-        let shuffle = player.get_shuffle().unwrap_or(false);
-        let pos = player.get_position().map_or(0, |p| p.as_millis() as i32);
-
-        let player_ident = player.identity().to_string();
-
-        Some(Self {
-            player: player_ident.clone(),
-            title: Some(title),
-            artist: Some(artist),
-            album: Some(album),
-            is_playing: Some(is_playing),
-            can_pause: Some(can_pause),
-            can_play: Some(can_play),
-            can_go_next: Some(can_go_next),
-            can_go_previous: Some(can_go_previous),
-            can_seek: Some(can_seek),
-            loop_status: Some(loop_status),
-            shuffle: Some(shuffle),
-            pos: Some(pos),
-            length: Some(length),
-            volume: Some(volume),
-            album_art_url: Some(album_art_url.clone()),
-            url: None,
-        })
+    pub fn from_name(name: &str) -> anyhow::Result<mpris::Player> {
+        get_mpris_players(Some(name))
     }
 }
 
@@ -287,16 +231,8 @@ pub fn get_mpris_players(name: Option<&str>) -> anyhow::Result<mpris::Player> {
     }
 }
 
-pub fn get_mpris_metadata() -> Option<mpris::Metadata> {
-    if let Ok(player) = get_mpris_players(None) {
-        Some(
-            player
-                .get_metadata()
-                .expect("Failed to get player metadata"),
-        )
-    } else {
-        None
-    }
+pub fn get_mpris_metadata(name: Option<&str>) -> anyhow::Result<mpris::Metadata> {
+    Ok(get_mpris_players(name)?.get_metadata()?)
 }
 
 #[async_trait::async_trait]
@@ -339,8 +275,8 @@ impl Plugin for MprisRequest {
                     }
                 }
             }
-            MprisRequest::Action { .. } => {
-                debug!("MPRIS Action request received");
+            MprisRequest::Action(action) => {
+                debug!("MPRIS Action request received: {:?}", action);
             }
             _ => {}
         }

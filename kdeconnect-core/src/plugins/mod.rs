@@ -5,3 +5,4 @@ pub mod mpris;
 pub mod notification;
 pub mod ping;
 pub mod run_command;
+pub mod share;

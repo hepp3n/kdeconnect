@@ -11,11 +11,12 @@ use crate::{
     event::{AppEvent, ConnectionEvent, CoreEvent},
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
-    plugins::ping::Ping,
-    protocol::{PacketType, Pair, ProtocolPacket},
-    transport::{
-        TcpTransport, Transport, TransportEvent, UdpTransport, prepare_listener_for_payload,
+    plugins::{
+        ping::Ping,
+        share::{ShareRequest, ShareRequestFile, ShareRequestUpdate},
     },
+    protocol::{DeviceFile, DevicePayload, PacketType, Pair, ProtocolPacket},
+    transport::{TcpTransport, Transport, TransportEvent, UdpTransport},
 };
 
 pub mod config;
@@ -85,6 +86,10 @@ impl KdeConnectCore {
             .await;
         let run_command_plugin = plugins::run_command::RunCommandRequest::default();
         plugin_registry.register(Arc::new(run_command_plugin)).await;
+        let share_request_plugin = plugins::share::ShareRequest::default();
+        plugin_registry
+            .register(Arc::new(share_request_plugin))
+            .await;
 
         Ok((
             Self {
@@ -186,10 +191,6 @@ impl KdeConnectCore {
     async fn core_events(&self, event: CoreEvent) {
         let guard = self.writer_map.lock().await;
 
-        let free_listener = prepare_listener_for_payload()
-            .await
-            .expect("creating payload");
-
         match event {
             CoreEvent::PacketReceived { device, packet } => {
                 info!("[core] packet received: {}", packet.packet_type);
@@ -269,7 +270,7 @@ impl KdeConnectCore {
                     if let Some(_device) = self.device_manager.get_device(&device_id).await {
                         // dispatch to plugins
                         self.plugin_registry
-                            .send_payload(packet, sender, payload, payload_size, &free_listener)
+                            .send_payload(packet, sender, payload, payload_size)
                             .await;
                     };
 
@@ -351,6 +352,8 @@ impl KdeConnectCore {
     }
 
     async fn kde_events(&self, event: AppEvent) {
+        let guard = self.writer_map.lock().await;
+
         match event {
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
@@ -365,9 +368,39 @@ impl KdeConnectCore {
 
                 if let Some(device) = self.device_manager.get_device(&device_id).await {
                     self.plugin_registry
-                        .send(device.clone(), pkt, self.event_tx.clone().into())
+                        .send(device.clone(), pkt, self.event_tx.clone())
                         .await;
                 };
+            }
+            AppEvent::SendFiles((device_id, files_list)) => {
+                info!("frontend trying to sent files to device: {}", device_id);
+
+                if let Some(sender) = guard.get(&device_id) {
+                    debug!("sender available.");
+
+                    let pkts = ShareRequest::share_files(files_list)
+                        .await
+                        .expect("creating share request");
+
+                    for (pkt_body, path) in pkts {
+                        let packet = ProtocolPacket::new(
+                            PacketType::ShareRequest,
+                            serde_json::to_value(pkt_body).expect("serializing packet body"),
+                        );
+
+                        let file = DeviceFile::open(path).await.expect("opening file");
+                        let payload = DevicePayload::from(file);
+
+                        if let Some(_device) = self.device_manager.get_device(&device_id).await {
+                            // dispatch to plugins
+                            self.plugin_registry
+                                .send_payload(packet, sender, payload.buf, payload.size)
+                                .await;
+                        };
+                    }
+
+                    debug!("packet sent....");
+                }
             }
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);

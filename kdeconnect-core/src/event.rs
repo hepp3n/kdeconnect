@@ -31,6 +31,7 @@ pub enum AppEvent {
     Pair(DeviceId),
     Ping((DeviceId, String)),
     Unpair(DeviceId),
+    SendFiles((DeviceId, Vec<String>)),
 }
 
 #[derive(Debug, Clone)]
