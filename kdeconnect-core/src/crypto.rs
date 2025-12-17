@@ -1,10 +1,12 @@
-use std::{fs::File, io, path::PathBuf};
+use std::{fs::File, io, sync::Arc};
 
 use rcgen::{Certificate, CertificateParams, DnType, Error, KeyPair};
 use rustls::{
-    DigitallySignedStruct,
+    ClientConfig, DigitallySignedStruct, ServerConfig,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature},
+    crypto::{
+        CryptoProvider, aws_lc_rs::default_provider, verify_tls12_signature, verify_tls13_signature,
+    },
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
     server::danger::{ClientCertVerified, ClientCertVerifier},
 };
@@ -14,10 +16,8 @@ use crate::config::CONFIG_DIR;
 
 #[derive(Debug)]
 pub struct KeyStore {
-    certificate: String,
-    cert_path: PathBuf,
-    keypair: String,
-    keys_path: PathBuf,
+    pub client_config: Arc<ClientConfig>,
+    pub server_config: Arc<ServerConfig>,
 }
 
 impl KeyStore {
@@ -33,72 +33,41 @@ impl KeyStore {
         let cert_path = config_dir.join(format!("device_cert@{}.pem", device_uuid));
         let keys_path = config_dir.join(format!("device_key@{}.pem", device_uuid));
 
-        let keypair = match keys_path.exists() {
-            true => {
-                let mut key_file = File::open(&keys_path)?;
-                let mut key_pem = String::new();
+        if !keys_path.exists() && !cert_path.exists() {
+            use io::Write as _;
 
-                use io::Read as _;
-                key_file.read_to_string(&mut key_pem)?;
+            let key = KeyPair::generate()?.serialize_pem();
+            let mut key_file = File::create(&keys_path)?;
+            key_file.write_all(key.as_bytes())?;
 
-                key_pem
-            }
-            false => {
-                let key = KeyPair::generate()?.serialize_pem();
-
-                let mut key_file = File::create(&keys_path)?;
-
-                use io::Write as _;
-                key_file.write_all(key.as_bytes())?;
-
-                key
-            }
+            let cert = certificate_generator(&key, device_uuid)?.pem();
+            let mut cert_file = File::create(&cert_path)?;
+            cert_file.write_all(cert.as_bytes())?;
         };
 
-        let certificate = match cert_path.exists() {
-            true => {
-                let mut cert_file = File::open(&cert_path)?;
-                let mut cert_pem = String::new();
+        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
 
-                use io::Read as _;
-                cert_file.read_to_string(&mut cert_pem)?;
+        let cert = CertificateDer::from_pem_file(&cert_path).expect("decoding certfificate");
+        let keys = PrivateKeyDer::from_pem_file(&keys_path).expect("decoding private key");
 
-                cert_pem
-            }
-            false => {
-                let cert = certificate_generator(&keypair, device_uuid)?.pem();
+        let client_config = Arc::new(
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier.clone())
+                .with_client_auth_cert(vec![cert.clone()], keys.clone_key())?,
+        );
 
-                let mut cert_file = File::create(&cert_path)?;
-
-                use io::Write as _;
-                cert_file.write_all(cert.as_bytes())?;
-
-                cert
-            }
-        };
+        let server_config = Arc::new(
+            rustls::ServerConfig::builder()
+                .with_client_cert_verifier(verifier.clone())
+                .with_single_cert(vec![cert], keys)
+                .expect("building server config"),
+        );
 
         Ok(Self {
-            certificate,
-            cert_path,
-            keypair,
-            keys_path,
+            client_config,
+            server_config,
         })
-    }
-
-    pub fn get_certificate(&self) -> &String {
-        &self.certificate
-    }
-
-    pub fn get_certificateder(&self) -> CertificateDer<'static> {
-        CertificateDer::from_pem_file(&self.cert_path).unwrap()
-    }
-
-    pub fn get_keypair(&self) -> &String {
-        &self.keypair
-    }
-
-    pub fn get_keys(&self) -> PrivateKeyDer<'static> {
-        PrivateKeyDer::from_pem_file(&self.keys_path).unwrap()
     }
 }
 

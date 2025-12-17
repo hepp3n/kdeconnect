@@ -1,4 +1,3 @@
-use rustls::crypto::aws_lc_rs::default_provider;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncRead, AsyncWriteExt},
@@ -8,7 +7,6 @@ use tracing::{debug, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
-    crypto::NoCertificateVerification,
     device::Device,
     event::{ConnectionEvent, CoreEvent},
     plugins::{
@@ -253,22 +251,13 @@ impl PluginRegistry {
         };
 
         let config = GLOBAL_CONFIG.get().unwrap();
-        let cert = config.key_store.get_certificateder().clone();
-        let keypair = config.key_store.get_keys().clone_key();
-
-        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
-
-        let server_config = rustls::ServerConfig::builder()
-            .with_client_cert_verifier(verifier.clone())
-            .with_single_cert(vec![cert.clone()], keypair)
-            .expect("creating server config");
-
+        let server_config = config.key_store.server_config.clone();
         debug!("server config created.");
 
         let (incoming, peer_addr) = free_listener.accept().await.expect("accepting connection.");
         debug!("incoming connection from {}", peer_addr);
 
-        let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(server_config))
+        let mut stream = tokio_rustls::TlsAcceptor::from(server_config)
             .accept(incoming)
             .await
             .expect("from acceptor in payload");

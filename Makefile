@@ -6,6 +6,9 @@ build:
 	@echo "Building $(APPLET)..."
 	cargo build --release
 
+check:
+	cargo clippy
+
 run: 
 	@echo "Running $(APPLET)..."
 	./target/release/$(APPLET)

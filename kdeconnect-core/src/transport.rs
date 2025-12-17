@@ -4,10 +4,6 @@ use std::{
     time::Duration,
 };
 
-use rustls::{
-    crypto::aws_lc_rs::default_provider,
-    pki_types::{CertificateDer, PrivateKeyDer},
-};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, split},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -19,7 +15,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
-    crypto::NoCertificateVerification,
     device::DeviceId,
     protocol::{Identity, PacketType, ProtocolPacket},
 };
@@ -55,8 +50,7 @@ pub struct TcpTransport {
     write_tx: mpsc::UnboundedSender<ProtocolPacket>,
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     identity: Arc<Identity>,
-    cert: CertificateDer<'static>,
-    keypair: PrivateKeyDer<'static>,
+    client_config: Arc<rustls::ClientConfig>,
 }
 
 impl TcpTransport {
@@ -64,17 +58,18 @@ impl TcpTransport {
         let config = GLOBAL_CONFIG.get().unwrap();
         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
         let write_rx = Arc::new(Mutex::new(write_rx));
-        let cert = config.key_store.get_certificateder().clone();
-        let keypair = config.key_store.get_keys();
+        let listen_addr = config.listen_addr;
+        let event_tx = event_tx.clone();
+        let identity = Arc::new(config.identity.clone());
+        let client_config = config.key_store.client_config.clone();
 
         Self {
-            listen_addr: config.listen_addr,
-            event_tx: event_tx.clone(),
+            listen_addr,
+            event_tx,
             write_tx,
             write_rx,
-            identity: Arc::new(config.identity.clone()),
-            cert,
-            keypair,
+            identity,
+            client_config,
         }
     }
 
@@ -113,17 +108,7 @@ impl TcpTransport {
                             continue;
                         }
 
-                        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
-
-                        let client_config = rustls::ClientConfig::builder()
-                            .dangerous()
-                            .with_custom_certificate_verifier(verifier)
-                            .with_client_auth_cert(
-                                vec![self.cert.clone()],
-                                self.keypair.clone_key(),
-                            )?;
-
-                        let mut stream = TlsConnector::from(Arc::new(client_config.clone()))
+                        let mut stream = TlsConnector::from(self.client_config.clone())
                             .connect(id.clone().try_into()?, stream)
                             .await?;
 
@@ -174,8 +159,7 @@ pub struct UdpTransport {
     write_tx: mpsc::UnboundedSender<ProtocolPacket>,
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     identity: Arc<Identity>,
-    cert: CertificateDer<'static>,
-    keypair: PrivateKeyDer<'static>,
+    server_config: Arc<rustls::ServerConfig>,
 }
 
 impl UdpTransport {
@@ -183,23 +167,26 @@ impl UdpTransport {
         let config = GLOBAL_CONFIG.get().unwrap();
         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
         let write_rx = Arc::new(Mutex::new(write_rx));
-        let cert = config.key_store.get_certificateder().clone();
-        let keypair = config.key_store.get_keys().clone_key();
 
         let socket = UdpSocket::bind(config.listen_addr)
             .await
             .expect("failed to bind to socket address");
         let _ = socket.set_broadcast(true);
+        let socket = Arc::new(socket);
+
+        let discovery_interval = config.discovery_interval;
+        let event_tx = event_tx.clone();
+        let identity = Arc::new(config.identity.clone());
+        let server_config = config.key_store.server_config.clone();
 
         Self {
-            socket: Arc::new(socket),
-            discovery_interval: config.discovery_interval,
-            event_tx: event_tx.clone(),
+            socket,
+            discovery_interval,
+            event_tx,
             write_tx,
             write_rx,
-            identity: Arc::new(config.identity.clone()),
-            cert,
-            keypair,
+            identity,
+            server_config,
         }
     }
 
@@ -281,15 +268,7 @@ impl UdpTransport {
 
                         let _ = stream.write_all(packet.as_slice()).await;
 
-                        let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
-
-                        // FIXME Verify certs
-                        let server_config = rustls::ServerConfig::builder()
-                            .with_client_cert_verifier(verifier.clone())
-                            .with_single_cert(vec![self.cert.clone()], self.keypair.clone_key())
-                            .expect("building server config");
-
-                        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+                        let acceptor = TlsAcceptor::from(self.server_config.clone());
 
                         let mut tls_stream = acceptor
                             .accept(stream)
