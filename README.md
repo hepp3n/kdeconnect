@@ -14,4 +14,4 @@ For testing COSMIC desktop applet, you can build it with Makefile.
 
 `sudo make uninstall`
 
-Make sure you have [rustup.rs](curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) installed on your system.
+Make sure you have [rustup.rs](https://rustup.rs) installed on your system.
