@@ -1,5 +1,5 @@
 [workspace]
-members = ["cosmic-ext-applet-connect", "kdeconnect-cli", "kdeconnect-core", "kdeconnect-dbus"]
+members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
 default-members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
 resolver = "3"
 
