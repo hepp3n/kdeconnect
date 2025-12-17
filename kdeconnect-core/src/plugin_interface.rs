@@ -1,9 +1,7 @@
-use async_trait::async_trait;
 use rustls::crypto::aws_lc_rs::default_provider;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncRead, AsyncWriteExt},
-    net::TcpListener,
     sync::{RwLock, mpsc},
 };
 use tracing::{debug, info, warn};
@@ -18,7 +16,6 @@ use crate::{
         battery::Battery,
         clipboard::Clipboard,
         mpris::{Mpris, MprisPlayer, MprisRequest},
-        share,
     },
     protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
     transport::prepare_listener_for_payload,
@@ -26,19 +23,9 @@ use crate::{
 
 /// All plugins must implement this trait.
 /// Plugins are loaded into the core and can react to incoming packets.
-#[async_trait]
-pub trait Plugin: Send + Sync {
+pub trait Plugin: Sync + Send {
     /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
-    /// Called when a packet is received that this plugin can handle.
-    async fn received(
-        &self,
-        device: &Device,
-        connection_event: mpsc::UnboundedSender<ConnectionEvent>,
-        core_event: mpsc::UnboundedSender<CoreEvent>,
-    ) -> ();
-    /// Called to send a packet using this plugin.
-    async fn send(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) -> ();
 }
 
 /// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
@@ -82,17 +69,15 @@ impl PluginRegistry {
             PacketType::Pair => {
                 debug!("Skipping pair packet");
             }
-
-            // handle other plugins
             PacketType::Battery => {
                 if let Ok(battery) = serde_json::from_value::<Battery>(body) {
-                    battery.received(&device, connection_tx, core_tx).await;
+                    battery.received_packet(connection_tx).await;
                 }
             }
             PacketType::BatteryRequest => todo!(),
             PacketType::Clipboard => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
-                    clipboard.received(&device, connection_tx, core_tx).await;
+                    clipboard.received_packet(connection_tx).await;
                 }
             }
             PacketType::ConnectivityReportRequest => {
@@ -105,7 +90,7 @@ impl PluginRegistry {
                 {
                     if timestamp > 0 {
                         info!("Clipboard sync requested with timestamp: {}", timestamp);
-                        clipboard.received(&device, connection_tx, core_tx).await;
+                        clipboard.received_packet(connection_tx).await;
                     } else {
                         info!("Clipboard sync requested without timestamp. Ignoring");
                     }
@@ -181,9 +166,7 @@ impl PluginRegistry {
                             }
                         }
                         MprisRequest::Action { .. } | MprisRequest::List { .. } => {
-                            mpris_request
-                                .received(&device, connection_tx, core_tx)
-                                .await;
+                            mpris_request.received_packet(&device, core_tx).await;
                         }
                     }
                 }
@@ -194,12 +177,12 @@ impl PluginRegistry {
                 if let Ok(notification) =
                     serde_json::from_value::<plugins::notification::Notification>(body)
                 {
-                    notification.received(&device, connection_tx, core_tx).await;
+                    notification.received_packet(&device, core_tx).await;
                 }
             }
             PacketType::Ping => {
                 if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                    ping.received(&device, connection_tx, core_tx).await;
+                    ping.received_packet(&device, core_tx).await;
                 }
             }
             PacketType::RunCommandRequest => {
@@ -207,7 +190,7 @@ impl PluginRegistry {
                     serde_json::from_value::<plugins::run_command::RunCommandRequest>(body)
                 {
                     run_command_request
-                        .received(&device, connection_tx, core_tx)
+                        .received_packet(&device, connection_tx, core_tx)
                         .await;
                 }
             }
@@ -299,7 +282,6 @@ impl PluginRegistry {
         info!("successfully sent payload");
     }
 
-    /// Sends a packet using the appropriate plugin.
     pub async fn send(
         &self,
         device: Device,
@@ -312,7 +294,7 @@ impl PluginRegistry {
         match packet.packet_type {
             PacketType::Ping => {
                 if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
-                    ping.send(&device, core_event).await;
+                    ping.send_packet(&device, core_event).await;
                 }
             }
             _ => {
@@ -324,7 +306,6 @@ impl PluginRegistry {
         }
     }
 
-    /// Returns a list of registered plugin IDs.
     pub async fn list_plugins(&self) -> Vec<String> {
         let plugins = self.plugins.read().await;
         plugins.iter().map(|p| p.id().to_string()).collect()

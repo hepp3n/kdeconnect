@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     select,
-    sync::{Mutex, mpsc, oneshot},
+    sync::{Mutex, mpsc},
 };
 use tracing::{debug, info};
 
@@ -11,12 +11,9 @@ use crate::{
     event::{AppEvent, ConnectionEvent, CoreEvent},
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
-    plugins::{
-        ping::Ping,
-        share::{ShareRequest, ShareRequestFile, ShareRequestUpdate},
-    },
+    plugins::{ping::Ping, share::ShareRequest},
     protocol::{DeviceFile, DevicePayload, PacketType, Pair, ProtocolPacket},
-    transport::{TcpTransport, Transport, TransportEvent, UdpTransport},
+    transport::{TcpTransport, TransportEvent, UdpTransport},
 };
 
 pub mod config;
@@ -39,10 +36,8 @@ pub struct KdeConnectCore {
     writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
-    shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
-    transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
-    udp_transport: Arc<Mutex<Option<Box<dyn Transport + Send + Sync>>>>,
-    // channel for 3rd party communication
+    tcp_transport: Arc<TcpTransport>,
+    udp_transport: Arc<UdpTransport>,
     out_tx: Arc<mpsc::UnboundedSender<AppEvent>>,
     in_rx: mpsc::UnboundedReceiver<AppEvent>,
     conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
@@ -62,11 +57,24 @@ impl KdeConnectCore {
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (transport_tx, transport_rx) = mpsc::unbounded_channel();
-        let transport = TcpTransport::new(&transport_tx);
-        let udp_transport = UdpTransport::new(&transport_tx);
+        let transport = Arc::new(TcpTransport::new(&transport_tx));
+        let udp_transport = Arc::new(UdpTransport::new(&transport_tx).await);
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        //
+        // start tcp transport
+        let tcp = Arc::clone(&transport);
+
+        tokio::spawn(async move {
+            let _ = tcp.listen().await;
+        });
+
+        let udp = Arc::clone(&udp_transport);
+
+        tokio::spawn(async move {
+            let _ = udp.listen().await;
+        });
 
         // register plugins
         let ping_plugin = plugins::ping::Ping::default();
@@ -100,9 +108,8 @@ impl KdeConnectCore {
                 writer_map,
                 event_tx,
                 event_rx,
-                shutdown_tx: Arc::new(Mutex::new(None)),
-                transport: Arc::new(Mutex::new(Some(Box::new(transport)))),
-                udp_transport: Arc::new(Mutex::new(Some(Box::new(udp_transport)))),
+                tcp_transport: transport,
+                udp_transport,
                 out_tx: Arc::new(out_tx),
                 in_rx,
                 conn_tx,
@@ -111,47 +118,17 @@ impl KdeConnectCore {
         ))
     }
 
-    pub async fn stop(&self) -> anyhow::Result<()> {
-        // stop transport
-        let mut guard = self.transport.lock().await;
-        if let Some(transport) = guard.as_mut() {
-            transport.stop().await?;
-        }
-        *guard = None;
+    pub async fn stop(&self) {
+        drop(self.tcp_transport.clone());
+        drop(self.udp_transport.clone());
 
-        let mut sguard = self.shutdown_tx.lock().await;
-        if let Some(shutdown_tx) = sguard.take() {
-            let _ = shutdown_tx.send(());
-        }
-        info!("KdeConnect stopped");
-        Ok(())
+        let mut guard = self.writer_map.lock().await;
+        guard.clear();
+
+        info!("KDE Connection connections stopped");
     }
 
     pub async fn run_event_loop(&mut self) {
-        // start tcp transport
-        let tcp = Arc::clone(&self.transport);
-
-        tokio::spawn(async move {
-            if let Some(transport) = tcp.lock().await.as_mut() {
-                let _ = transport.listen().await;
-            }
-        });
-
-        let udp = Arc::clone(&self.udp_transport);
-
-        tokio::spawn(async move {
-            if let Some(transport) = udp.lock().await.as_mut() {
-                let _ = transport.listen().await;
-            }
-        });
-
-        let (sutdown_tx, mut shutdown_rx) = oneshot::channel();
-
-        {
-            let mut sguard = self.shutdown_tx.lock().await;
-            *sguard = Some(sutdown_tx);
-        }
-
         info!("Starting KdeConnect event loop");
 
         loop {
@@ -179,10 +156,6 @@ impl KdeConnectCore {
                             let _ = self.event_tx.send(CoreEvent::Error("KdeEvent channel closed".to_string()));
                         }
                     }
-                }
-                _ = &mut shutdown_rx => {
-                    info!("Event loop received shutdown");
-                    break;
                 }
             }
         }
@@ -355,6 +328,9 @@ impl KdeConnectCore {
         let guard = self.writer_map.lock().await;
 
         match event {
+            AppEvent::Broadcasting => {
+                let _ = self.udp_transport.send_identity().await;
+            }
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
                 let _ = self.pairing.request_pairing(device_id).await;
@@ -401,6 +377,9 @@ impl KdeConnectCore {
 
                     debug!("packet sent....");
                 }
+            }
+            AppEvent::StopKdeConnect => {
+                let _ = self.stop().await;
             }
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);

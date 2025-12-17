@@ -1,8 +1,7 @@
-use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::sync::mpsc;
 
-use crate::{device::Device, event::ConnectionEvent, plugin_interface::Plugin};
+use crate::{device::DeviceState, event::ConnectionEvent, plugin_interface::Plugin};
 
 fn serialize_threshold<S>(x: &bool, s: S) -> Result<S::Ok, S::Error>
 where
@@ -41,32 +40,19 @@ pub struct Battery {
     pub under_threshold: bool,
 }
 
-#[async_trait]
 impl Plugin for Battery {
     fn id(&self) -> &'static str {
         "kdeconnect.battery"
     }
-    async fn received(
-        &self,
-        _device: &Device,
-        event: mpsc::UnboundedSender<ConnectionEvent>,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        event
-            .send(ConnectionEvent::StateUpdated(
-                crate::event::DeviceState::Battery {
-                    level: self.charge,
-                    charging: self.is_charging,
-                },
-            ))
-            .unwrap();
-    }
+}
 
-    async fn send(
-        &self,
-        _device: &Device,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        // Battery plugin does not send events on its own
+impl Battery {
+    pub async fn received_packet(&self, event: mpsc::UnboundedSender<ConnectionEvent>) {
+        event
+            .send(ConnectionEvent::StateUpdated(DeviceState::Battery {
+                level: self.charge,
+                charging: self.is_charging,
+            }))
+            .unwrap();
     }
 }

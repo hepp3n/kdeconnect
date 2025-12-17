@@ -15,7 +15,7 @@ use tokio::{
     time::MissedTickBehavior,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector, client, server};
-use tracing::{debug, error, field::debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
@@ -49,12 +49,6 @@ pub enum TransportEvent {
     },
 }
 
-#[async_trait::async_trait]
-pub trait Transport: Send + Sync {
-    async fn listen(&self) -> anyhow::Result<()>;
-    async fn stop(&self) -> anyhow::Result<()>;
-}
-
 pub struct TcpTransport {
     listen_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
@@ -83,18 +77,14 @@ impl TcpTransport {
             keypair,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl Transport for TcpTransport {
-    async fn listen(&self) -> anyhow::Result<()> {
+    pub async fn listen(&self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(self.listen_addr).await?;
 
         loop {
             let event_tx = self.event_tx.clone();
             let write_tx = self.write_tx.clone();
             let write_rx = self.write_rx.clone();
-
             let identity = self.identity.clone();
 
             match listener.accept().await {
@@ -175,14 +165,10 @@ impl Transport for TcpTransport {
             }
         }
     }
-
-    async fn stop(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 pub struct UdpTransport {
-    listen_addr: SocketAddr,
+    socket: Arc<UdpSocket>,
     discovery_interval: Duration,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     write_tx: mpsc::UnboundedSender<ProtocolPacket>,
@@ -193,15 +179,20 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
-    pub fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
+    pub async fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
         let write_rx = Arc::new(Mutex::new(write_rx));
         let cert = config.key_store.get_certificateder().clone();
         let keypair = config.key_store.get_keys().clone_key();
 
+        let socket = UdpSocket::bind(config.listen_addr)
+            .await
+            .expect("failed to bind to socket address");
+        let _ = socket.set_broadcast(true);
+
         Self {
-            listen_addr: config.listen_addr,
+            socket: Arc::new(socket),
             discovery_interval: config.discovery_interval,
             event_tx: event_tx.clone(),
             write_tx,
@@ -212,7 +203,7 @@ impl UdpTransport {
         }
     }
 
-    pub async fn send_identity(&self, socket: Arc<UdpSocket>) -> anyhow::Result<()> {
+    pub async fn send_identity(&self) -> anyhow::Result<()> {
         if std::env::var("KDECONNECT_DISABLE_UDP_BROADCAST").is_ok() {
             warn!(
                 "UDP broadcast is disabled by environment variable KDECONNECT_DISABLE_UDP_BROADCAST"
@@ -222,7 +213,7 @@ impl UdpTransport {
 
         debug!("Broadcasting UDP identity packet");
         let interval = self.discovery_interval;
-        let udp_socket = socket.clone();
+        let udp_socket = self.socket.clone();
 
         let packet = ProtocolPacket::new(
             PacketType::Identity,
@@ -248,32 +239,19 @@ impl UdpTransport {
 
         Ok(())
     }
-}
 
-#[async_trait::async_trait]
-impl Transport for UdpTransport {
-    async fn listen(&self) -> anyhow::Result<()> {
-        let socket = UdpSocket::bind(self.listen_addr)
-            .await
-            .expect("failed to bind to socket address");
-        let _ = socket.set_broadcast(true);
-
-        let socket = Arc::new(socket);
-
+    pub async fn listen(&self) -> anyhow::Result<()> {
         let event_tx = self.event_tx.clone();
         let write_tx = self.write_tx.clone();
         let write_rx = self.write_rx.clone();
         let this_identity = self.identity.clone();
-
-        let broadcaster = socket.clone();
-        let _ = self.send_identity(broadcaster).await;
 
         loop {
             let this_identity = this_identity.clone();
 
             let mut buf = vec![0u8; 8192];
 
-            match socket.recv_from(&mut buf).await {
+            match self.socket.recv_from(&mut buf).await {
                 Ok((len, mut peer)) => {
                     let raw = &buf[..len];
                     let packet = ProtocolPacket::from_raw(raw).expect("Failed to parse UDP packet");
@@ -358,10 +336,6 @@ impl Transport for UdpTransport {
             }
         }
     }
-
-    async fn stop(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 async fn rw_client(
@@ -419,6 +393,7 @@ async fn rw_client(
                 break;
             }
         }
+        let _ = writer.shutdown().await;
         info!("writer task for {} ended", peer);
     });
 }

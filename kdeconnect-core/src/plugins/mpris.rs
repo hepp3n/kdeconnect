@@ -112,7 +112,7 @@ impl MprisPlayer {
         })
     }
 
-    pub fn from_name(name: &str) -> anyhow::Result<mpris::Player> {
+    pub fn _from_name(name: &str) -> anyhow::Result<mpris::Player> {
         get_mpris_players(Some(name))
     }
 }
@@ -181,26 +181,9 @@ pub enum MprisAction {
     Previous,
 }
 
-#[async_trait::async_trait]
 impl Plugin for Mpris {
     fn id(&self) -> &'static str {
         "kdeconnect.mpris"
-    }
-
-    async fn received(
-        &self,
-        _device: &Device,
-        _event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        // MPRIS plugin does not send events on its own
-    }
-
-    async fn send(
-        &self,
-        _device: &Device,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
     }
 }
 
@@ -235,16 +218,15 @@ pub fn get_mpris_metadata(name: Option<&str>) -> anyhow::Result<mpris::Metadata>
     Ok(get_mpris_players(name)?.get_metadata()?)
 }
 
-#[async_trait::async_trait]
 impl Plugin for MprisRequest {
     fn id(&self) -> &'static str {
         "kdeconnect.mpris.request"
     }
-
-    async fn received(
+}
+impl MprisRequest {
+    pub async fn received_packet(
         &self,
         device: &Device,
-        _event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
         core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         match self {
@@ -280,13 +262,5 @@ impl Plugin for MprisRequest {
             }
             _ => {}
         }
-    }
-
-    async fn send(
-        &self,
-        _device: &Device,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        // MPRIS Request plugin does not send events on its own
     }
 }

@@ -1,7 +1,7 @@
 use tokio::io::AsyncRead;
 
 use crate::{
-    device::{Device, DeviceId},
+    device::{Device, DeviceId, DeviceState},
     protocol::ProtocolPacket,
 };
 
@@ -28,10 +28,12 @@ pub enum CoreEvent {
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
+    Broadcasting,
     Pair(DeviceId),
     Ping((DeviceId, String)),
     Unpair(DeviceId),
     SendFiles((DeviceId, Vec<String>)),
+    StopKdeConnect,
 }
 
 #[derive(Debug, Clone)]
@@ -41,9 +43,4 @@ pub enum ConnectionEvent {
     DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),
     StateUpdated(DeviceState),
-}
-
-#[derive(Debug, Clone)]
-pub enum DeviceState {
-    Battery { level: u8, charging: bool },
 }

@@ -64,13 +64,13 @@ impl Display for ConnectivityReportNetworkType {
     }
 }
 
-#[async_trait::async_trait]
 impl Plugin for ConnectivityReport {
     fn id(&self) -> &'static str {
         "kdeconnect.connectivity_report"
     }
-
-    async fn received(
+}
+impl ConnectivityReport {
+    pub async fn _received_packet(
         &self,
         device: &Device,
         _connection_event: mpsc::UnboundedSender<ConnectionEvent>,
@@ -81,9 +81,5 @@ impl Plugin for ConnectivityReport {
             device.device_id
         );
         // Currently, we do not process incoming connectivity reports.
-    }
-
-    async fn send(&self, _device: &Device, _core_event: mpsc::UnboundedSender<CoreEvent>) -> () {
-        // Currently, we do not send connectivity report requests.
     }
 }

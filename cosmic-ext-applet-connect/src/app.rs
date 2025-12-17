@@ -9,8 +9,8 @@ use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::widget::{self, settings};
 use cosmic::{Application, Element};
 use kdeconnect_core::KdeConnectCore;
-use kdeconnect_core::device::{Device, DeviceId, PairState};
-use kdeconnect_core::event::{AppEvent, ConnectionEvent, DeviceState};
+use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
+use kdeconnect_core::event::{AppEvent, ConnectionEvent};
 use percent_encoding::percent_decode;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,10 +38,12 @@ pub struct CosmicConnect {
 
 #[derive(Debug, Clone)]
 pub enum CosmicEvent {
+    Broadcasting,
     Pair(DeviceId),
     Unpair(DeviceId),
     SendPing((DeviceId, String)),
     SendFiles((DeviceId, Vec<String>)),
+    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -163,12 +165,17 @@ impl Application for CosmicConnect {
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
         let mut content_list = widget::list_column().add(widget::settings::flex_item_row(vec![
             widget::text(fl!("applet-name")).into(),
+            widget::button::standard("Broadcast")
+                .on_press(Message::SendEvent(CosmicEvent::Broadcasting))
+                .into(),
         ]));
 
         for device in self.connections.values() {
             content_list = content_list.add(settings::item_row(vec![
                 widget::text::monotext(device.name.clone()).into(),
-                widget::button::standard("Disconnect").into(),
+                widget::button::standard("Disconnect")
+                    .on_press(Message::SendEvent(CosmicEvent::Stop))
+                    .into(),
                 if self.is_paired(device.device_id.clone()) {
                     widget::button::standard("Unpair")
                         .on_press(Message::SendEvent(CosmicEvent::Unpair(
@@ -287,6 +294,11 @@ impl Application for CosmicConnect {
                 self.connections.remove_entry(&device_id);
             }
             Message::SendEvent(event) => match event {
+                CosmicEvent::Broadcasting => {
+                    if let Some(sender) = self.event_sender.as_ref() {
+                        let _ = sender.send(AppEvent::Broadcasting);
+                    }
+                }
                 CosmicEvent::Pair(device_id) => {
                     if let Some(sender) = self.event_sender.as_ref() {
                         let _ = sender.send(AppEvent::Pair(device_id));
@@ -306,6 +318,15 @@ impl Application for CosmicConnect {
                     if let Some(sender) = self.event_sender.as_ref() {
                         let _ = sender.send(AppEvent::SendFiles((device_id, files_list)));
                     }
+                }
+                CosmicEvent::Stop => {
+                    if let Some(sender) = self.event_sender.as_ref() {
+                        let _ = sender.send(AppEvent::StopKdeConnect);
+                    }
+
+                    self.event_sender = None;
+                    self.connections.clear();
+                    self.device_state = State::default();
                 }
             },
             Message::UpdatedState(state) => match state {

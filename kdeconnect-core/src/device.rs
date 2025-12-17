@@ -27,6 +27,11 @@ impl Display for DeviceId {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DeviceState {
+    Battery { level: u8, charging: bool },
+}
+
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PairState {
     #[default]

@@ -1,10 +1,4 @@
-use crate::{
-    device::Device,
-    event::{ConnectionEvent, CoreEvent},
-    plugin_interface::Plugin,
-    protocol::ProtocolPacket,
-};
-use async_trait::async_trait;
+use crate::{device::Device, event::CoreEvent, plugin_interface::Plugin, protocol::ProtocolPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -13,16 +7,15 @@ pub struct Ping {
     pub message: Option<String>,
 }
 
-#[async_trait]
 impl Plugin for Ping {
     fn id(&self) -> &'static str {
         "kdeconnect.ping"
     }
-
-    async fn received(
+}
+impl Ping {
+    pub async fn received_packet(
         &self,
         device: &Device,
-        _event: mpsc::UnboundedSender<ConnectionEvent>,
         core_event: mpsc::UnboundedSender<CoreEvent>,
     ) {
         let device_id = device.device_id.clone();
@@ -67,7 +60,7 @@ impl Plugin for Ping {
         .await;
     }
 
-    async fn send(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) {
+    pub async fn send_packet(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) {
         let packet = ProtocolPacket::new(
             crate::protocol::PacketType::Ping,
             serde_json::to_value(self).unwrap_or_default(),

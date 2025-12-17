@@ -42,16 +42,16 @@ pub struct NotificationRequest {
     pub request: Option<bool>,
 }
 
-#[async_trait::async_trait]
 impl Plugin for Notification {
     fn id(&self) -> &'static str {
         "kdeconnect.notification"
     }
+}
 
-    async fn received(
+impl Notification {
+    pub async fn received_packet(
         &self,
         device: &crate::device::Device,
-        _event: tokio::sync::mpsc::UnboundedSender<crate::event::ConnectionEvent>,
         core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // Implementation for handling received notifications would go here.
@@ -107,12 +107,5 @@ impl Plugin for Notification {
             }
         })
         .await;
-    }
-    async fn send(
-        &self,
-        _device: &crate::device::Device,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        // Implementation for sending notifications would go here.
     }
 }

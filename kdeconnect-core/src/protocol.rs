@@ -288,49 +288,23 @@ impl ProtocolPacket {
 pub struct DeviceFile<S: AsyncRead + Sync + Send + Unpin> {
     pub buf: S,
     pub size: i64,
-    pub name: String,
-    pub creation_time: Option<u128>,
-    pub last_modified: Option<u128>,
 }
 
 impl DeviceFile<File> {
-    pub async fn try_from_tokio(file: File, name: String) -> anyhow::Result<Self> {
+    pub async fn try_from_tokio(file: File) -> anyhow::Result<Self> {
         file.sync_all().await?;
         let metadata = file.metadata().await?;
 
         Ok(DeviceFile {
             buf: file,
             size: metadata.size().try_into().map_err(std::io::Error::other)?,
-            name,
-            creation_time: Some(
-                metadata
-                    .created()?
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .expect("time went backwards")
-                    .as_millis(),
-            ),
-            last_modified: Some(
-                metadata
-                    .modified()?
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .expect("time went backwards")
-                    .as_millis(),
-            ),
         })
     }
 
     pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path: &Path = path.as_ref();
 
-        Self::try_from_tokio(
-            File::open(path).await?,
-            path.file_name()
-                .expect("invalid file name")
-                .to_os_string()
-                .into_string()
-                .expect("OsString conversion"),
-        )
-        .await
+        Self::try_from_tokio(File::open(path).await?).await
     }
 }
 

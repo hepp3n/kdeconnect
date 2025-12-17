@@ -1,11 +1,9 @@
-use std::{os::unix::fs::MetadataExt, path::PathBuf, str::FromStr, time::SystemTime};
+use std::{path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::{
-    device::Device,
-    event::CoreEvent,
     plugin_interface::Plugin,
     protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
@@ -41,10 +39,6 @@ impl ShareRequest {
                 continue;
             }
 
-            let Ok(metadata) = pathbuf.metadata() else {
-                continue;
-            };
-
             let filename = pathbuf
                 .file_name()
                 .unwrap()
@@ -65,57 +59,14 @@ impl ShareRequest {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareRequestUpdate {
-    pub number_of_files: Option<i32>,
-    pub total_payload_size: Option<i64>,
-}
-
-impl ShareRequestUpdate {
-    pub async fn send(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) {
-        let packet = ProtocolPacket::new(
-            crate::protocol::PacketType::ShareRequestUpdate,
-            serde_json::to_value(self).unwrap_or_default(),
-        );
-
-        let _ = core_event.send(CoreEvent::SendPacket {
-            device: device.device_id.clone(),
-            packet,
-        });
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ShareRequestFile {
     pub filename: String,
     pub open: Option<bool>,
 }
 
-#[async_trait::async_trait]
 impl Plugin for ShareRequest {
     fn id(&self) -> &'static str {
         "kdeconnect.share.request"
-    }
-
-    async fn received(
-        &self,
-        device: &Device,
-        _event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
-        core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        match self {
-            ShareRequest::File(share_request_file) => todo!(),
-            ShareRequest::Text { text } => todo!(),
-            ShareRequest::Url { url } => todo!(),
-        }
-    }
-
-    async fn send(
-        &self,
-        device: &Device,
-        core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-        // MPRIS Request plugin does not send events on its own
     }
 }
 

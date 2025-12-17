@@ -1,6 +1,5 @@
 use crate::plugin_interface::Plugin;
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -10,28 +9,19 @@ pub struct Clipboard {
     pub timestamp: Option<u64>,
 }
 
-#[async_trait]
 impl Plugin for Clipboard {
     fn id(&self) -> &'static str {
         "kdeconnect.clipboard"
     }
-
-    async fn received(
+}
+impl Clipboard {
+    pub async fn received_packet(
         &self,
-        _device: &crate::device::Device,
         event: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         let _ = event.send(crate::event::ConnectionEvent::ClipboardReceived(
             self.content.clone(),
         ));
-    }
-
-    async fn send(
-        &self,
-        _device: &crate::device::Device,
-        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
     }
 }
 

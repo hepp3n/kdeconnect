@@ -24,23 +24,17 @@ pub struct RunCommandRequest {
     pub request_command_list: Option<bool>,
 }
 
-#[async_trait::async_trait]
 impl Plugin for RunCommandRequest {
     fn id(&self) -> &'static str {
         "kdeconnect.runcommand.request"
     }
+}
 
-    async fn received(
+impl RunCommandRequest {
+    pub async fn received_packet(
         &self,
         _device: &crate::device::Device,
         _connection_tx: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
-        _core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
-    ) {
-    }
-
-    async fn send(
-        &self,
-        _device: &crate::device::Device,
         _core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
     }
