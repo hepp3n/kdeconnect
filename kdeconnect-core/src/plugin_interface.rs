@@ -127,27 +127,28 @@ impl PluginRegistry {
                                     return;
                                 };
 
-                                let file = DeviceFile::open(path).await.expect("cannot open file");
-                                let payload = DevicePayload::from(file);
+                                if let Ok(file) = DeviceFile::open(path).await {
+                                    let payload = DevicePayload::from(file);
 
-                                let construct_packet = ProtocolPacket::new_with_payload(
-                                    PacketType::Mpris,
-                                    serde_json::to_value(Mpris::TransferringArt {
-                                        player: player_name,
-                                        album_art_url: art.unwrap_or(path.to_string()),
-                                        transferring_album_art: true,
-                                    })
-                                    .unwrap(),
-                                    payload.size,
-                                    None,
-                                );
+                                    let construct_packet = ProtocolPacket::new_with_payload(
+                                        PacketType::Mpris,
+                                        serde_json::to_value(Mpris::TransferringArt {
+                                            player: player_name,
+                                            album_art_url: art.unwrap_or(path.to_string()),
+                                            transferring_album_art: true,
+                                        })
+                                        .unwrap(),
+                                        payload.size,
+                                        None,
+                                    );
 
-                                let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
-                                    device: device.device_id.clone(),
-                                    packet: construct_packet,
-                                    payload: Box::new(payload.buf),
-                                    payload_size: payload.size,
-                                });
+                                    let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
+                                        device: device.device_id.clone(),
+                                        packet: construct_packet,
+                                        payload: Box::new(payload.buf),
+                                        payload_size: payload.size,
+                                    });
+                                }
                             } else {
                                 let construct_packet = ProtocolPacket {
                                     id: None,
