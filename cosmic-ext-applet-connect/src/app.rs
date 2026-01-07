@@ -2,12 +2,18 @@
 
 use ashpd::desktop::file_chooser::SelectedFiles;
 use cosmic::app::{Core, Task};
+use cosmic::applet::column::Column;
+use cosmic::applet::{column, menu_button, padded_control};
+use cosmic::cosmic_theme::Spacing;
+use cosmic::iced::alignment::Vertical;
 use cosmic::iced::futures::SinkExt;
 use cosmic::iced::window::Id;
-use cosmic::iced::{self, Limits, Subscription, stream};
+use cosmic::iced::{Length, Limits, Pixels, Subscription, stream};
+use cosmic::iced_core::text::LineHeight;
+use cosmic::iced_widget::horizontal_rule;
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
-use cosmic::widget::{self, settings};
-use cosmic::{Application, Element};
+use cosmic::widget::{button, container, horizontal_space, icon, row, text};
+use cosmic::{Application, Apply, Element, Renderer, Theme, theme};
 use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
 use kdeconnect_core::event::{AppEvent, ConnectionEvent};
@@ -22,6 +28,7 @@ use crate::{APP_ID, fl};
 
 #[derive(Debug, Clone, Default)]
 pub struct State {
+    pub connectivity: Option<(String, i32)>,
     pub battery_level: Option<u8>,
     pub is_charging: Option<bool>,
     pub selected_files: Vec<String>,
@@ -163,89 +170,15 @@ impl Application for CosmicConnect {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-        let mut content_list = widget::list_column().add(widget::settings::flex_item_row(vec![
-            widget::text(fl!("applet-name")).into(),
-            widget::button::standard("Broadcast")
-                .on_press(Message::SendEvent(CosmicEvent::Broadcasting))
-                .into(),
-        ]));
+        let Spacing {
+            space_xxs, space_s, ..
+        } = theme::active().cosmic().spacing;
 
-        for device in self.connections.values() {
-            content_list = content_list.add(settings::item_row(vec![
-                widget::text::monotext(device.name.clone()).into(),
-                widget::button::standard("Disconnect")
-                    .on_press(Message::SendEvent(CosmicEvent::Stop))
-                    .into(),
-                if self.is_paired(device.device_id.clone()) {
-                    widget::button::standard("Unpair")
-                        .on_press(Message::SendEvent(CosmicEvent::Unpair(
-                            device.device_id.clone(),
-                        )))
-                        .into()
-                } else {
-                    widget::button::standard("Pair")
-                        .on_press(Message::SendEvent(CosmicEvent::Pair(
-                            device.device_id.clone(),
-                        )))
-                        .into()
-                },
-                widget::button::standard("Send Ping")
-                    .on_press(Message::SendEvent(CosmicEvent::SendPing((
-                        device.device_id.clone(),
-                        "Hello From COSMIC APPLET!".to_string(),
-                    ))))
-                    .into(),
-            ]));
-
-            let mut section = settings::section().title(device.device_id.to_string());
-
-            // if let Some(networks) = state.connectivity.as_ref() {
-            //     for (_, network) in &networks.signal_strengths {
-            //         section = section.add(settings::item(
-            //             format!("Network ({})", network.network_type),
-            //             widget::text(format!("Signal: {}", network.signal_strength)),
-            //         ));
-            //     }
-            // };
-
-            section = section.add(settings::item(
-                "Battery",
-                widget::text(format!(
-                    "{}% [{}]",
-                    self.device_state.battery_level.unwrap_or(0),
-                    if self.device_state.is_charging.unwrap_or(false) {
-                        "Charging"
-                    } else {
-                        "Discharging"
-                    }
-                )),
-            ));
-
-            section = section.add(settings::item(
-                "Send files",
-                widget::settings::item_row(vec![
-                    widget::button::standard("Select files")
-                        .on_press(Message::SelectFiles)
-                        .into(),
-                    widget::button::standard("Send files")
-                        .on_press(Message::SendFiles(device.device_id.clone()))
-                        .into(),
-                ]),
-            ));
-
-            if !self.device_state.selected_files.is_empty() {
-                for file_path in self.device_state.selected_files.iter() {
-                    section = section.add(widget::text(file_path));
-                }
-            }
-
-            content_list = content_list.add(section);
-        }
+        let content = self.device_list_col(self.connections.values().collect::<Vec<&Device>>());
 
         self.core
             .applet
-            .popup_container(content_list)
-            .limits(iced::Limits::NONE.max_width(680.0).max_height(800.0))
+            .popup_container(padded_control(container(content)).padding([space_xxs, space_s]))
             .into()
     }
 
@@ -334,6 +267,9 @@ impl Application for CosmicConnect {
                     self.device_state.battery_level = Some(level);
                     self.device_state.is_charging = Some(charging);
                 }
+                DeviceState::Connectivity(connectivity) => {
+                    self.device_state.connectivity = Some(connectivity);
+                }
             },
             Message::SelectFiles => {
                 return Task::future(async move {
@@ -388,5 +324,168 @@ impl CosmicConnect {
         self.connections
             .get(&device_id)
             .is_some_and(|state| state.pair_state == PairState::Paired)
+    }
+
+    fn device_list_col(
+        &self,
+        devices: Vec<&Device>,
+    ) -> column::Column<'static, Message, Theme, Renderer> {
+        let Spacing { space_xxs, .. } = theme::active().cosmic().spacing;
+
+        let title = format!("#{}", devices.len());
+
+        let battery_status = format!(
+            "{}% [{}]",
+            self.device_state.battery_level.unwrap_or(0),
+            if self.device_state.is_charging.unwrap_or(false) {
+                "Charging"
+            } else {
+                "Discharging"
+            }
+        );
+
+        if !devices.is_empty() {
+            devices.iter().cloned().enumerate().fold(
+                column::Column::new()
+                    .width(Length::Fill)
+                    .push(Self::device_list_header(title)),
+                |col, device| {
+                    col.push(
+                        container(
+                            row()
+                                .push(menu_button(
+                                    text::title4(device.1.name.clone())
+                                        .width(Length::Fill)
+                                        .align_y(Vertical::Center)
+                                        .line_height(LineHeight::Absolute(Pixels::from(60))),
+                                ))
+                                .push(
+                                    button::icon(icon::from_name("mail-send-symbolic"))
+                                        .on_press(Message::SendEvent(CosmicEvent::SendPing((
+                                            device.1.device_id.clone(),
+                                            fl!("ping-message"),
+                                        ))))
+                                        .apply(container)
+                                        .center(Length::Fill)
+                                        .width(Length::Fixed(60.0))
+                                        .height(Length::Fixed(60.0)),
+                                )
+                                .push(if self.is_paired(device.1.device_id.clone()) {
+                                    button::icon(icon::from_name("network-disconnected-symbolic"))
+                                        .on_press(Message::SendEvent(CosmicEvent::Unpair(
+                                            device.1.device_id.clone(),
+                                        )))
+                                        .class(theme::Button::Destructive)
+                                        .apply(container)
+                                        .center(Length::Fill)
+                                        .width(Length::Fixed(60.0))
+                                        .height(Length::Fixed(60.0))
+                                } else {
+                                    button::icon(icon::from_name("list-add-symbolic"))
+                                        .on_press(Message::SendEvent(CosmicEvent::Pair(
+                                            device.1.device_id.clone(),
+                                        )))
+                                        .class(theme::Button::Suggested)
+                                        .apply(container)
+                                        .center(Length::Fill)
+                                        .width(Length::Fixed(60.0))
+                                        .height(Length::Fixed(60.0))
+                                }),
+                        )
+                        .center_y(Length::Fixed(60.)),
+                    )
+                    .push(horizontal_rule(Pixels::from(1)))
+                    .push(horizontal_rule(Pixels::from(1)))
+                    .push_maybe(self.device_state.connectivity.as_ref().map(|networks| {
+                        menu_button(
+                            row()
+                                .push(text::body(format!("Network ({})", networks.0)))
+                                .push(horizontal_space())
+                                .push(text::body(format!("Signal: {}", networks.1))),
+                        )
+                        .width(Length::Fill)
+                    }))
+                    .push(
+                        menu_button(
+                            row()
+                                .push(text::body("Battery"))
+                                .push(horizontal_space())
+                                .push(text::body(battery_status.clone())),
+                        )
+                        .width(Length::Fill),
+                    )
+                    .push(
+                        menu_button(
+                            row()
+                                .spacing(space_xxs)
+                                .push(text::body("Send files"))
+                                .push(horizontal_space())
+                                .push(
+                                    button::icon(icon::from_name("list-add-symbolic"))
+                                        .on_press(Message::SelectFiles)
+                                        .class(theme::Button::Standard)
+                                        .apply(container)
+                                        .center(Length::Fill)
+                                        .width(Length::Fixed(32.0))
+                                        .height(Length::Fixed(32.0)),
+                                )
+                                .push_maybe(if !self.device_state.selected_files.is_empty() {
+                                    Some(
+                                        button::icon(icon::from_name("mail-send-symbolic"))
+                                            .on_press(Message::SendFiles(
+                                                device.1.device_id.clone(),
+                                            ))
+                                            .class(theme::Button::Suggested)
+                                            .apply(container)
+                                            .center(Length::Fill)
+                                            .width(Length::Fixed(32.0))
+                                            .height(Length::Fixed(32.0)),
+                                    )
+                                } else {
+                                    None
+                                }),
+                        )
+                        .width(Length::Fill),
+                    )
+                    .push_maybe(
+                        if !self.device_state.selected_files.is_empty() {
+                            Some(self.device_state.selected_files.clone().into_iter().fold(
+                                column::Column::new().width(Length::Fill),
+                                |col, file_path| col.push(menu_button(text::body(file_path))),
+                            ))
+                        } else {
+                            None
+                        },
+                    )
+                },
+            )
+        } else {
+            Self::device_list_header(title)
+        }
+    }
+
+    fn device_list_header(title: String) -> Column<'static, Message, Theme, Renderer> {
+        column::Column::new()
+            .push(
+                container(
+                    row()
+                        .push(menu_button(
+                            text::title4(title)
+                                .width(Length::Fill)
+                                .align_y(Vertical::Center)
+                                .line_height(LineHeight::Absolute(Pixels::from(60))),
+                        ))
+                        .push(horizontal_space())
+                        .push(
+                            button::destructive("Disconnect")
+                                .on_press(Message::SendEvent(CosmicEvent::Stop))
+                                .apply(container)
+                                .center(Length::Fill)
+                                .height(Length::Fixed(60.0)),
+                        ),
+                )
+                .center_y(Length::Fixed(60.0)),
+            )
+            .push(horizontal_rule(Pixels::from(2)))
     }
 }

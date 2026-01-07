@@ -5,7 +5,7 @@ use tracing::debug;
 use crate::{
     device::Device,
     plugin_interface::Plugin,
-    protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
+    protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -25,6 +25,12 @@ pub enum Mpris {
         transferring_album_art: bool,
     },
     Info(MprisPlayer),
+}
+
+impl Default for Mpris {
+    fn default() -> Self {
+        Self::Info(MprisPlayer::new(None).expect("mpris failed"))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -110,10 +116,6 @@ impl MprisPlayer {
             album_art_url: Some(album_art_url.clone()),
             url: None,
         })
-    }
-
-    pub fn _from_name(name: &str) -> anyhow::Result<mpris::Player> {
-        get_mpris_players(Some(name))
     }
 }
 
@@ -230,6 +232,68 @@ impl MprisRequest {
         core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         match self {
+            MprisRequest::PlayerRequest {
+                player,
+                request_now_playing,
+                request_volume,
+                request_album_art,
+            } => {
+                debug!(
+                    "mpris request received: {:?} {:?} {:?} {:?} ",
+                    player, request_now_playing, request_volume, request_album_art
+                );
+
+                let Ok(player) = MprisPlayer::new(Some(player)) else {
+                    return;
+                };
+
+                let player_name = player.player.clone();
+                let art = player.album_art_url.clone();
+
+                if let Some(album_art_url) = request_album_art {
+                    let path = album_art_url.strip_prefix("file://");
+
+                    let Some(path) = path else {
+                        return;
+                    };
+
+                    if let Ok(file) = DeviceFile::open(path).await {
+                        let payload = DevicePayload::from(file);
+
+                        let construct_packet = ProtocolPacket::new_with_payload(
+                            PacketType::Mpris,
+                            serde_json::to_value(Mpris::TransferringArt {
+                                player: player_name,
+                                album_art_url: art.unwrap_or(path.to_string()),
+                                transferring_album_art: true,
+                            })
+                            .unwrap(),
+                            payload.size,
+                            None,
+                        );
+
+                        let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
+                            device: device.device_id.clone(),
+                            packet: construct_packet,
+                            payload: Box::new(payload.buf),
+                            payload_size: payload.size,
+                        });
+                    }
+                } else {
+                    let construct_packet = ProtocolPacket {
+                        id: None,
+                        packet_type: PacketType::Mpris,
+                        body: serde_json::to_value(Mpris::Info(player)).unwrap(),
+                        payload_size: None,
+                        payload_transfer_info: None,
+                    };
+
+                    let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                        device: device.device_id.clone(),
+                        packet: construct_packet,
+                    });
+                }
+            }
             MprisRequest::List {
                 request_player_list,
             } => {
@@ -257,10 +321,9 @@ impl MprisRequest {
                     }
                 }
             }
-            MprisRequest::Action(action) => {
-                debug!("MPRIS Action request received: {:?}", action);
+            MprisRequest::Action { .. } => {
+                debug!("received mpris action");
             }
-            _ => {}
         }
     }
 }

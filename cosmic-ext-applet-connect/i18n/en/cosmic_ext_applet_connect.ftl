@@ -1,1 +1,2 @@
-applet-name = Cosmic Connect
+ping-message = "Hello from COSMIC applet!"
+

@@ -6,6 +6,7 @@ license = "GPL-3.0"
 
 [dependencies]
 ashpd = "0.12.0"
+cosmic-time = { git = "https://github.com/pop-os/cosmic-time", default-features = false }
 i18n-embed-fl = "0.10"
 open = "5.3.3"
 percent-encoding = "2.3.2"

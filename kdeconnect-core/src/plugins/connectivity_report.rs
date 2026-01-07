@@ -1,11 +1,10 @@
-use crate::device::Device;
-use crate::event::{ConnectionEvent, CoreEvent};
+use crate::device::DeviceState;
+use crate::event::ConnectionEvent;
 use crate::plugin_interface::Plugin;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use tokio::sync::mpsc;
-use tracing::debug;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -70,16 +69,14 @@ impl Plugin for ConnectivityReport {
     }
 }
 impl ConnectivityReport {
-    pub async fn _received_packet(
-        &self,
-        device: &Device,
-        _connection_event: mpsc::UnboundedSender<ConnectionEvent>,
-        _core_event: mpsc::UnboundedSender<CoreEvent>,
-    ) -> () {
-        debug!(
-            "Received connectivity report for device {}",
-            device.device_id
-        );
-        // Currently, we do not process incoming connectivity reports.
+    pub async fn received_packet(&self, event: mpsc::UnboundedSender<ConnectionEvent>) {
+        self.signal_strengths.values().for_each(|v| {
+            event
+                .send(ConnectionEvent::StateUpdated(DeviceState::Connectivity((
+                    v.network_type.to_string(),
+                    v.signal_strength,
+                ))))
+                .unwrap();
+        });
     }
 }

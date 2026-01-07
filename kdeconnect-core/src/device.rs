@@ -30,6 +30,7 @@ impl Display for DeviceId {
 #[derive(Debug, Clone)]
 pub enum DeviceState {
     Battery { level: u8, charging: bool },
+    Connectivity((String, i32)),
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

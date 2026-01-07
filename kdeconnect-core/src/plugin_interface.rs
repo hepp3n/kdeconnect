@@ -13,9 +13,10 @@ use crate::{
         self,
         battery::Battery,
         clipboard::Clipboard,
-        mpris::{Mpris, MprisPlayer, MprisRequest},
+        connectivity_report::ConnectivityReport,
+        mpris::{Mpris, MprisRequest},
     },
-    protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
+    protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
     transport::prepare_listener_for_payload,
 };
 
@@ -78,9 +79,10 @@ impl PluginRegistry {
                     clipboard.received_packet(connection_tx).await;
                 }
             }
-            PacketType::ConnectivityReportRequest => {
-                debug!("Received connectivity report request packet");
-                // Handle connectivity report request if needed
+            PacketType::ConnectivityReport => {
+                if let Ok(connectivity_rep) = serde_json::from_value::<ConnectivityReport>(body) {
+                    connectivity_rep.received_packet(connection_tx).await;
+                }
             }
             PacketType::ClipboardConnect => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
@@ -101,73 +103,7 @@ impl PluginRegistry {
             }
             PacketType::MprisRequest => {
                 if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
-                    match mpris_request {
-                        MprisRequest::PlayerRequest {
-                            player,
-                            request_now_playing,
-                            request_volume,
-                            request_album_art,
-                        } => {
-                            debug!(
-                                "mpris request received: {:?} {:?} {:?} {:?} ",
-                                player, request_now_playing, request_volume, request_album_art
-                            );
-
-                            let Ok(player) = MprisPlayer::new(Some(&player)) else {
-                                return;
-                            };
-
-                            let player_name = player.player.clone();
-                            let art = player.album_art_url.clone();
-
-                            if let Some(album_art_url) = request_album_art {
-                                let path = album_art_url.strip_prefix("file://");
-
-                                let Some(path) = path else {
-                                    return;
-                                };
-
-                                if let Ok(file) = DeviceFile::open(path).await {
-                                    let payload = DevicePayload::from(file);
-
-                                    let construct_packet = ProtocolPacket::new_with_payload(
-                                        PacketType::Mpris,
-                                        serde_json::to_value(Mpris::TransferringArt {
-                                            player: player_name,
-                                            album_art_url: art.unwrap_or(path.to_string()),
-                                            transferring_album_art: true,
-                                        })
-                                        .unwrap(),
-                                        payload.size,
-                                        None,
-                                    );
-
-                                    let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
-                                        device: device.device_id.clone(),
-                                        packet: construct_packet,
-                                        payload: Box::new(payload.buf),
-                                        payload_size: payload.size,
-                                    });
-                                }
-                            } else {
-                                let construct_packet = ProtocolPacket {
-                                    id: None,
-                                    packet_type: PacketType::Mpris,
-                                    body: serde_json::to_value(Mpris::Info(player)).unwrap(),
-                                    payload_size: None,
-                                    payload_transfer_info: None,
-                                };
-
-                                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                                    device: device.device_id.clone(),
-                                    packet: construct_packet,
-                                });
-                            }
-                        }
-                        MprisRequest::Action { .. } | MprisRequest::List { .. } => {
-                            mpris_request.received_packet(&device, core_tx).await;
-                        }
-                    }
+                    mpris_request.received_packet(&device, core_tx).await;
                 }
             }
             PacketType::Notification => {
