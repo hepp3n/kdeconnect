@@ -1,8 +1,16 @@
 # Testing on COSMIC Desktop
 
-For testing COSMIC desktop applet, you can build it with Makefile.
+For testing COSMIC desktop applet, you can build it with help of Makefile.
 
-# Build
+# Cloning repository
+
+`git clone https://github.com/hepp3n/kdeconnect.git`
+
+# Entering directory
+
+`cd kdeconnect`
+
+# Building
 
 `make build`
 
@@ -15,3 +23,5 @@ For testing COSMIC desktop applet, you can build it with Makefile.
 `sudo make uninstall`
 
 Make sure you have [rustup.rs](https://rustup.rs) installed on your system.
+
+You might need also `libxkbcommon-dev` dependency. If it won't build, please create an issue.
