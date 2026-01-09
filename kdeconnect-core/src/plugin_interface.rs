@@ -58,6 +58,7 @@ impl PluginRegistry {
         let body = packet.body.clone();
         let core_tx = core_tx.clone();
         let connection_tx = tx.clone();
+        let payload_info = packet.payload_transfer_info;
 
         match packet.packet_type {
             // if it's indentity we can skip
@@ -127,6 +128,15 @@ impl PluginRegistry {
                     run_command_request
                         .received_packet(&device, connection_tx, core_tx)
                         .await;
+                }
+            }
+            PacketType::ShareRequest => {
+                if let Ok(share_request) =
+                    serde_json::from_value::<plugins::share::ShareRequest>(body)
+                {
+                    if let Some(payload_info) = payload_info.as_ref() {
+                        let _ = share_request.receive_share(&device, &payload_info).await;
+                    }
                 }
             }
             _ => {

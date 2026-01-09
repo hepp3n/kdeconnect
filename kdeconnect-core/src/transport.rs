@@ -1,9 +1,11 @@
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 
+use rustls::pki_types::ServerName;
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, split},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -458,4 +460,34 @@ pub(crate) async fn prepare_listener_for_payload() -> Result<TcpListener, String
     } else {
         Err("no free port for payload, failed.".to_string())
     }
+}
+
+pub(crate) async fn receive_payload(
+    domain: &DeviceId,
+    addr: &SocketAddr,
+    temp_file: &PathBuf,
+) -> anyhow::Result<()> {
+    let config = GLOBAL_CONFIG.get().unwrap();
+    let client_config = config.key_store.client_config.clone();
+    debug!("client config created.");
+
+    let stream = TcpStream::connect(&addr).await?;
+
+    let domain = ServerName::try_from(domain.0.as_str())?.to_owned();
+
+    let mut stream = tokio_rustls::TlsConnector::from(client_config)
+        .connect(domain, stream)
+        .await?;
+
+    debug!("connected");
+
+    if let Ok(mut save_path) = tokio::fs::File::create(&temp_file).await {
+        let _ = tokio::io::copy(&mut stream, &mut save_path).await;
+        let _ = stream.flush().await;
+        let _ = stream.shutdown().await;
+    }
+
+    info!("successfully received payload");
+
+    Ok(())
 }
