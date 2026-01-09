@@ -29,7 +29,7 @@
       "name": "cosmic-ext-applet-connect",
       "buildsystem": "simple",
       "build-commands": [
-        "make build",
+        "make build-vendored",
         "make install-flatpak"
       ],
       "sources": [
