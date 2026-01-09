@@ -1,4 +1,5 @@
 PREFIX := /usr/local
+FLATPAK_PREFIX := /app
 APPLET := cosmic-ext-applet-connect
 ICON := sc-apps-kdeconnectindicator.svg
 
@@ -20,6 +21,12 @@ install:
 	install -Dm0755 ./target/release/$(APPLET) $(PREFIX)/bin/$(APPLET)
 	install -Dm0644 ./data/icons/$(ICON) $(PREFIX)/share/icons/hicolor/scalable/apps/kdeconnect.svg
 	install -Dm0644 ./data/$(APPLET).desktop $(PREFIX)/share/applications/$(APPLET).desktop
+
+install-flatpak:
+	@echo "Installing flatpak version of $(APPLET)..."
+	install -Dm0755 ./target/release/$(APPLET) $(FLATPAK_PREFIX)/bin/$(APPLET)
+	install -Dm0644 ./data/icons/$(ICON) $(FLATPAK_PREFIX)/share/icons/hicolor/scalable/apps/kdeconnect.svg
+	install -Dm0644 ./data/$(APPLET).desktop $(FLATPAK_PREFIX)/share/applications/$(APPLET).desktop
 
 uninstall:
 	@echo "Uninstalling $(APPLET)..."
