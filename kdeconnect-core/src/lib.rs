@@ -83,6 +83,10 @@ impl KdeConnectCore {
         plugin_registry.register(Arc::new(battery_plugin)).await;
         let clipboard_plugin = plugins::clipboard::Clipboard::default();
         plugin_registry.register(Arc::new(clipboard_plugin)).await;
+        let mousepad_keyboardstate = plugins::mousepad::KeyboardState::default();
+        plugin_registry
+            .register(Arc::new(mousepad_keyboardstate))
+            .await;
         let mpris_plugin = plugins::mpris::Mpris::default();
         plugin_registry.register(Arc::new(mpris_plugin)).await;
         let notification_plugin = plugins::notification::Notification::default();

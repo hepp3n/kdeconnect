@@ -8,6 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{fs::File, io::AsyncRead};
+use tracing::error;
 
 pub const PROTOCOL_VERSION: usize = 8;
 
@@ -106,7 +107,7 @@ impl From<String> for PacketType {
             "kdeconnect.lock" => PacketType::Lock,
             "kdeconnect.lock.request" => PacketType::LockRequest,
             "kdeconnect.mousepad.echo" => PacketType::MousePadEcho,
-            "kdeconnect.mousepad.keyboard_state" => PacketType::MousePadKeyboardState,
+            "kdeconnect.mousepad.keyboardstate" => PacketType::MousePadKeyboardState,
             "kdeconnect.mousepad.request" => PacketType::MousePadRequest,
             "kdeconnect.mpris" => PacketType::Mpris,
             "kdeconnect.mpris.request" => PacketType::MprisRequest,

@@ -97,6 +97,13 @@ impl PluginRegistry {
                     }
                 }
             }
+            PacketType::MousePadKeyboardState => {
+                if let Ok(keyboard_state) =
+                    serde_json::from_value::<plugins::mousepad::KeyboardState>(body)
+                {
+                    println!("{:?}", keyboard_state);
+                }
+            }
             PacketType::Mpris => {
                 if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
                     info!("Received MPRIS packet: {:?}", mpris_packet);
