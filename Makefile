@@ -33,3 +33,11 @@ uninstall:
 	rm $(PREFIX)/bin/$(APPLET)
 	rm $(PREFIX)/share/icons/hicolor/scalable/apps/kdeconnect.svg
 	rm $(PREFIX)/share/applications/$(APPLET).desktop	
+
+vendor: SHELL:=/bin/bash
+vendor:
+	mkdir -p .cargo
+	cargo vendor --sync Cargo.toml | head -n -1 > .cargo/config.toml
+	echo 'directory = "vendor"' >> .cargo/config.toml
+	tar pcf vendor.tar .cargo vendor
+	rm -rf .cargo vendor
