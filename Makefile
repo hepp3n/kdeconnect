@@ -7,6 +7,10 @@ build:
 	@echo "Building $(APPLET)..."
 	cargo build --release
 
+build-vendored: vendor-extract
+	@echo "Building vendored $(APPLET)..."
+	cargo build --release --frozen --offline
+
 check:
 	cargo clippy
 
@@ -41,3 +45,7 @@ vendor:
 	echo 'directory = "vendor"' >> .cargo/config.toml
 	tar pcf vendor.tar .cargo vendor
 	rm -rf .cargo vendor
+
+vendor-extract:
+	rm -rf vendor
+	tar pxf vendor.tar

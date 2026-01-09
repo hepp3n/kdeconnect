@@ -1,5 +1,7 @@
 target/
 Cargo.lock
+.cargo/
+vendor/
 vendor.tar
 builddir/
 .flatpak-builder/
