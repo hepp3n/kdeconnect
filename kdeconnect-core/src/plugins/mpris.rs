@@ -66,7 +66,7 @@ pub struct MprisPlayer {
 impl MprisPlayer {
     pub fn new(player_name: Option<&str>) -> anyhow::Result<Self> {
         if player_name.is_none() {
-            return Ok(Self::default());
+            Ok(Self::default())
         } else {
             let player = get_mpris_players(player_name)?;
             let metadata = get_mpris_metadata(player_name)?;

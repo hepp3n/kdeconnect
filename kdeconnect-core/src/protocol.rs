@@ -8,21 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{fs::File, io::AsyncRead};
-use tracing::error;
 
 pub const PROTOCOL_VERSION: usize = 8;
-
-pub enum Capabilities {
-    Ping,
-}
-
-impl From<Capabilities> for String {
-    fn from(value: Capabilities) -> Self {
-        match value {
-            Capabilities::Ping => "kdeconnect.ping".to_string(),
-        }
-    }
-}
 
 fn serialize_packet_type<S>(pt: &PacketType, serializer: S) -> Result<S::Ok, S::Error>
 where

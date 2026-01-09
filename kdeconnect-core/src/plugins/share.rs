@@ -68,11 +68,11 @@ impl ShareRequest {
     ) -> anyhow::Result<()> {
         match self {
             ShareRequest::File(share_request_file) => self
-                .handle_file_request(&share_request_file, &device, &info)
+                .handle_file_request(share_request_file, device, info)
                 .await
                 .expect("handling file share request"),
-            ShareRequest::Text { text } => todo!(),
-            ShareRequest::Url { url } => todo!(),
+            ShareRequest::Text { text: _ } => todo!(),
+            ShareRequest::Url { url: _ } => todo!(),
         }
 
         Ok(())
@@ -142,13 +142,16 @@ impl ShareRequest {
                     .await?
                     .response()?;
 
-                let file_path = file
+                let file_path: Option<PathBuf> = file
                     .uris()
                     .first()
-                    .and_then(|path| Some(path.to_file_path().unwrap_or_default()))
-                    .unwrap_or_default();
+                    .map(|path| path.to_file_path().unwrap_or_default());
 
-                if let Ok(_) = tokio::fs::rename(temp_file, &file_path).await {
+                let Some(file_path) = file_path else {
+                    return Ok(());
+                };
+
+                if tokio::fs::rename(temp_file, &file_path).await.is_ok() {
                     tokio::task::spawn_blocking(move || {
                         let mut notify = notify_rust::Notification::new();
                         notify.appname("KDE Connect");

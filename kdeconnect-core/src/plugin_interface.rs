@@ -140,10 +140,9 @@ impl PluginRegistry {
             PacketType::ShareRequest => {
                 if let Ok(share_request) =
                     serde_json::from_value::<plugins::share::ShareRequest>(body)
+                    && let Some(payload_info) = payload_info.as_ref()
                 {
-                    if let Some(payload_info) = payload_info.as_ref() {
-                        let _ = share_request.receive_share(&device, &payload_info).await;
-                    }
+                    let _ = share_request.receive_share(&device, payload_info).await;
                 }
             }
             _ => {
