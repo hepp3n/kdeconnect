@@ -22,6 +22,7 @@ pub struct Notification {
     pub payload_hash: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct NotificationAction {
     pub key: Option<String>,
@@ -52,10 +53,10 @@ impl Notification {
     pub async fn received_packet(
         &self,
         device: &crate::device::Device,
-        core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
+        _core_event: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
         // Implementation for handling received notifications would go here.
-        let device_id = device.device_id.clone();
+        let _device_id = device.device_id.clone();
         let app_name = self.app_name.clone().unwrap_or_default();
         let Some(title) = self.title.clone() else {
             return;
@@ -63,12 +64,12 @@ impl Notification {
         let Some(text) = self.text.clone() else {
             return;
         };
-        let key = self.id.clone().unwrap_or_default();
+        let _key = self.id.clone().unwrap_or_default();
 
         let actions = self.actions.clone().unwrap_or_default();
 
         let _ = tokio::task::spawn_blocking(move || {
-            let mut notify_action: Option<String> = None;
+            // let mut notify_action: Option<String> = None;
 
             let mut notify = notify_rust::Notification::new();
             notify.appname(&app_name);
@@ -83,28 +84,28 @@ impl Notification {
                 // .action("clicked", "Click to reply")
                 .hint(notify_rust::Hint::Resident(true))
                 .show()
-                .unwrap()
-                .wait_for_action(|action| {
-                    notify_action = Some(action.to_string());
-                });
+                .unwrap();
+            // .wait_for_action(|action| {
+            //     notify_action = Some(action.to_string());
+            // });
 
-            if let Some(action) = notify_action {
-                let packet = crate::protocol::ProtocolPacket::new(
-                    crate::protocol::PacketType::NotificationAction,
-                    serde_json::to_value(NotificationAction {
-                        key: Some(key),
-                        action: Some(action),
-                    })
-                    .unwrap_or_default(),
-                );
-
-                core_event
-                    .send(crate::event::CoreEvent::SendPacket {
-                        device: device_id,
-                        packet,
-                    })
-                    .unwrap_or_default();
-            }
+            // if let Some(action) = notify_action {
+            //     let packet = crate::protocol::ProtocolPacket::new(
+            //         crate::protocol::PacketType::NotificationAction,
+            //         serde_json::to_value(NotificationAction {
+            //             key: Some(key),
+            //             action: Some(action),
+            //         })
+            //         .unwrap_or_default(),
+            //     );
+            //
+            //     core_event
+            //         .send(crate::event::CoreEvent::SendPacket {
+            //             device: device_id,
+            //             packet,
+            //         })
+            //         .unwrap_or_default();
+            // }
         })
         .await;
     }
