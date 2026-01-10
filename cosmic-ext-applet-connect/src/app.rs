@@ -67,6 +67,7 @@ pub enum Message {
     SelectFiles,
     CollectFiles(Vec<String>),
     SendFiles(DeviceId),
+    OpenAbout,
 }
 
 impl Application for CosmicConnect {
@@ -271,6 +272,9 @@ impl Application for CosmicConnect {
                     self.device_state.connectivity = Some(connectivity);
                 }
             },
+            Message::OpenAbout => {
+                let _ = open::that_detached("https://github.com/hepp3n/kdeconnect");
+            }
             Message::SelectFiles => {
                 return Task::future(async move {
                     let files = SelectedFiles::open_file()
@@ -469,20 +473,33 @@ impl CosmicConnect {
             .push(
                 container(
                     row()
-                        .push(menu_button(
-                            text::title4(title)
-                                .width(Length::Fill)
-                                .align_y(Vertical::Center)
-                                .line_height(LineHeight::Absolute(Pixels::from(60))),
-                        ))
-                        .push(horizontal_space())
+                        .spacing(4)
+                        .push(
+                            button::suggested("About")
+                                .on_press(Message::OpenAbout)
+                                .apply(container)
+                                .center(Length::Fill)
+                                .height(Length::Fixed(60.0)),
+                        )
+                        .push(
+                            button::standard("Broadcast")
+                                .on_press(Message::SendEvent(CosmicEvent::Broadcasting))
+                                .apply(container)
+                                .center(Length::Fill)
+                                .height(Length::Fixed(60.0)),
+                        )
                         .push(
                             button::destructive("Disconnect")
                                 .on_press(Message::SendEvent(CosmicEvent::Stop))
                                 .apply(container)
                                 .center(Length::Fill)
                                 .height(Length::Fixed(60.0)),
-                        ),
+                        )
+                        .push(menu_button(
+                            text::title4(title)
+                                .align_y(Vertical::Center)
+                                .line_height(LineHeight::Absolute(Pixels::from(60))),
+                        )),
                 )
                 .center_y(Length::Fixed(60.0)),
             )
