@@ -10,12 +10,13 @@
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
+    "--socket=inherit-wayland-socket",
+    "--socket=session-bus",
     "--device=dri",
     "--share=network",
-    "--socket=session-bus",
-    "--filesystem=xdg-config/cosmic:rw",
     "--filesystem=home:ro",
-    "--filesystem=xdg-download"
+    "--filesystem=xdg-download",
+    "--filesystem=xdg-config/cosmic:rw"
   ],
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin"
