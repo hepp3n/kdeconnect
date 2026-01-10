@@ -17,7 +17,7 @@ tracing-subscriber = "0.3.20"
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
-features = ["applet", "tokio", "wayland"]
+features = ["applet", "a11y", "tokio", "wayland"]
 
 [dependencies.i18n-embed]
 version = "0.16"

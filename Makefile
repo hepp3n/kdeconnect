@@ -7,9 +7,10 @@ build:
 	@echo "Building $(APPLET)..."
 	cargo build --release
 
-build-vendored: vendor-extract
-	@echo "Building vendored $(APPLET)..."
-	cargo build --release --frozen --offline
+build-offline:
+	@echo "Building offline $(APPLET)..."
+	cargo --offline fetch --manifest-path Cargo.toml --verbose
+	cargo --offline build --release --verbose
 
 check:
 	cargo clippy
@@ -38,14 +39,3 @@ uninstall:
 	rm $(PREFIX)/share/icons/hicolor/scalable/apps/kdeconnect.svg
 	rm $(PREFIX)/share/applications/$(APPLET).desktop	
 
-vendor: SHELL:=/bin/bash
-vendor:
-	mkdir -p .cargo
-	cargo vendor --sync Cargo.toml | head -n -1 > .cargo/config.toml
-	echo 'directory = "vendor"' >> .cargo/config.toml
-	tar pcf vendor.tar .cargo vendor
-	rm -rf .cargo vendor
-
-vendor-extract:
-	rm -rf vendor
-	tar pxf vendor.tar

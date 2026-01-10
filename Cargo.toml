@@ -1,6 +1,5 @@
 [workspace]
 members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
-default-members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
 resolver = "3"
 
 
@@ -12,4 +11,8 @@ serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
-zbus = { version = "5.12", features = ["tokio"] }
+
+[patch.crates-io]
+zbus = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }
+zvariant = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }
+zvariant_derive = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }

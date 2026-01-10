@@ -15,7 +15,7 @@
     "--share=network",
     "--filesystem=xdg-config/cosmic:rw",
     "--talk-name=com.system76.CosmicSettingsDaemon",
-    "--talk-name=org.freedesktop.portal.Desktop",
+    "--talk-name=org.freedesktop.portal.FileChooser",
     "--filesystem=home:ro",
     "--filesystem=xdg-download"
   ],
@@ -26,9 +26,13 @@
     {
       "name": "cosmic-ext-applet-connect",
       "buildsystem": "simple",
+        "build-options": {
+            "env": {
+                "CARGO_HOME": "/run/build/cosmic-ext-applet-connect/cargo"
+            }
+      },
       "build-commands": [
-        "cargo --offline fetch --manifest-path Cargo.toml --verbose",
-        "cargo --offline build --release --verbose",
+        "make build-offline",
         "make install-flatpak"
       ],
       "sources": [
