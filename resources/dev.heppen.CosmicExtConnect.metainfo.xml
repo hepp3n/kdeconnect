@@ -6,7 +6,7 @@
   <project_group>COSMIC</project_group>
   <developer_name>hepp3n</developer_name>
   <update_contact>hepp3n@email.com</update_contact>
-  <url type="homepage"></url>
+  <url type="homepage">heppen.dev</url>
   <url type="bugtracker"></url>
   <name>COSMIC Ext Connect</name>
   <summary>KDE Connect implementation for COSMIC Desktop</summary>

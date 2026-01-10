@@ -9,13 +9,11 @@
   "command": "cosmic-ext-applet-connect",
   "finish-args": [
     "--share=ipc",
-    "--socket=fallback-x11",
     "--socket=wayland",
     "--device=dri",
     "--share=network",
+    "--socket=session-bus",
     "--filesystem=xdg-config/cosmic:rw",
-    "--talk-name=com.system76.CosmicSettingsDaemon",
-    "--talk-name=org.freedesktop.portal.FileChooser",
     "--filesystem=home:ro",
     "--filesystem=xdg-download"
   ],

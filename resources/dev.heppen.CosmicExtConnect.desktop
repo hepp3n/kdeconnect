@@ -1,12 +1,12 @@
 [Desktop Entry]
-Name=COSMIC Ext Connect
+Name=COSMIC-ext Connect
 Exec=cosmic-ext-applet-connect
 Terminal=false
 Type=Application
 StartupNotify=true
-Icon=display-symbolic
-Categories=COSMIC;Utility;
-Keywords=Network;
-NoDisplay=true
+NotShowIn=COSMIC
+Icon=dev.heppen.CosmicExtConnect
+Categories=Network
+Keywords=Cosmic;Applet;Connect;KDE Connect;
 X-CosmicApplet=true
 X-CosmicHoverPopup=Auto
