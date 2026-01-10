@@ -164,7 +164,7 @@ impl Application for CosmicConnect {
     fn view(&self) -> Element<'_, Self::Message> {
         self.core
             .applet
-            .icon_button("kdeconnect")
+            .icon_button("dev.heppen.CosmicExtConnect")
             .on_press(Message::TogglePopup)
             .into()
     }
