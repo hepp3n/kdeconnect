@@ -1,5 +1,7 @@
-use once_cell::sync::OnceCell;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 use tokio::{
     select,
     sync::{Mutex, mpsc},
@@ -26,7 +28,7 @@ pub(crate) mod plugins;
 pub(crate) mod protocol;
 pub(crate) mod transport;
 
-pub static GLOBAL_CONFIG: OnceCell<config::Config> = OnceCell::new();
+pub static GLOBAL_CONFIG: OnceLock<config::Config> = OnceLock::new();
 
 pub struct KdeConnectCore {
     device_manager: Arc<DeviceManager>,
@@ -51,9 +53,8 @@ impl KdeConnectCore {
         let plugin_registry = Arc::new(PluginRegistry::new());
 
         let outgoing_capabilities = plugin_registry.list_plugins().await;
-        GLOBAL_CONFIG
-            .set(config::Config::new(outgoing_capabilities))
-            .unwrap();
+        let config = config::Config::load(outgoing_capabilities).await?;
+        GLOBAL_CONFIG.set(config).unwrap();
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (transport_tx, transport_rx) = mpsc::unbounded_channel();

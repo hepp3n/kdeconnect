@@ -1,4 +1,4 @@
-use std::{fs::File, io, sync::Arc};
+use std::sync::Arc;
 
 use rcgen::{Certificate, CertificateParams, DnType, Error, KeyPair};
 use rustls::{
@@ -11,6 +11,7 @@ use rustls::{
     server::danger::{ClientCertVerified, ClientCertVerifier},
 };
 use time::Duration;
+use tokio::{fs, io::AsyncWriteExt};
 
 use crate::config::CONFIG_DIR;
 
@@ -21,34 +22,42 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
-    pub fn new(device_uuid: &str) -> anyhow::Result<Self> {
+    pub async fn load(device_uuid: &str) -> anyhow::Result<Self> {
         let config_dir = dirs::config_dir()
             .expect("cant find config directory")
             .join(CONFIG_DIR);
 
         if !config_dir.exists() {
-            std::fs::create_dir_all(&config_dir).expect("failed to create config directory");
+            fs::create_dir_all(&config_dir)
+                .await
+                .expect("failed to create config directory");
         }
 
         let cert_path = config_dir.join(format!("device_cert@{}.pem", device_uuid));
         let keys_path = config_dir.join(format!("device_key@{}.pem", device_uuid));
 
         if !keys_path.exists() && !cert_path.exists() {
-            use io::Write as _;
-
             let key = KeyPair::generate()?.serialize_pem();
-            let mut key_file = File::create(&keys_path)?;
-            key_file.write_all(key.as_bytes())?;
+            let mut key_file = fs::File::create(&keys_path).await?;
+            key_file.write_all(key.as_bytes()).await?;
 
             let cert = certificate_generator(&key, device_uuid)?.pem();
-            let mut cert_file = File::create(&cert_path)?;
-            cert_file.write_all(cert.as_bytes())?;
+            let mut cert_file = fs::File::create(&cert_path).await?;
+            cert_file.write_all(cert.as_bytes()).await?;
         };
 
         let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
 
-        let cert = CertificateDer::from_pem_file(&cert_path).expect("decoding certfificate");
-        let keys = PrivateKeyDer::from_pem_file(&keys_path).expect("decoding private key");
+        // Read files asynchronously
+        let cert_bytes = fs::read(&cert_path)
+            .await
+            .expect("reading certificate file");
+        let keys_bytes = fs::read(&keys_path)
+            .await
+            .expect("reading private key file");
+
+        let cert = CertificateDer::from_pem_slice(&cert_bytes).expect("decoding certfificate");
+        let keys = PrivateKeyDer::from_pem_slice(&keys_bytes).expect("decoding private key");
 
         let client_config = Arc::new(
             rustls::ClientConfig::builder()
