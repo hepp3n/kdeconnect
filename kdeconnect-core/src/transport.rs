@@ -12,7 +12,7 @@ use tokio::{
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
 };
-use tokio_rustls::{TlsAcceptor, TlsConnector, client, server};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -125,7 +125,7 @@ impl TcpTransport {
 
                         let (reader, writer) = split(stream);
 
-                        let _ = tokio::spawn(rw_client(
+                        let _ = tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
@@ -290,7 +290,7 @@ impl UdpTransport {
 
                         let (reader, writer) = split(tls_stream);
 
-                        let _ = tokio::spawn(rw_server(
+                        let _ = tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
@@ -319,14 +319,17 @@ impl UdpTransport {
     }
 }
 
-async fn rw_client(
+async fn handle_connection<R, W>(
     event_tx: mpsc::UnboundedSender<TransportEvent>,
-    reader: tokio::io::ReadHalf<client::TlsStream<TcpStream>>,
-    mut writer: tokio::io::WriteHalf<client::TlsStream<TcpStream>>,
+    reader: R,
+    mut writer: W,
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     peer: SocketAddr,
     id: DeviceId,
-) {
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let mut reader = BufReader::new(reader);
     let mut buffer = String::new();
 
@@ -375,65 +378,6 @@ async fn rw_client(
             }
         }
         let _ = writer.shutdown().await;
-        info!("writer task for {} ended", peer);
-    });
-}
-
-async fn rw_server(
-    event_tx: mpsc::UnboundedSender<TransportEvent>,
-    reader: tokio::io::ReadHalf<server::TlsStream<TcpStream>>,
-    mut writer: tokio::io::WriteHalf<server::TlsStream<TcpStream>>,
-    write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
-    peer: SocketAddr,
-    id: DeviceId,
-) {
-    let mut reader = BufReader::new(reader);
-    let mut buffer = String::new();
-
-    tokio::spawn(async move {
-        loop {
-            match reader.read_line(&mut buffer).await {
-                Ok(0) => {
-                    // connection closed
-                    warn!("[reader loop] connection to {} closed", peer);
-                    break;
-                }
-                Ok(_len) => {
-                    if buffer.trim().is_empty() {
-                        warn!("[reader loop] peer {} sent empty message", peer);
-                        continue;
-                    }
-
-                    // forward raw packet string
-                    if let Err(e) = event_tx.send(TransportEvent::IncomingPacket {
-                        addr: peer,
-                        id: id.clone(),
-                        raw: buffer.trim().to_string(),
-                    }) {
-                        error!("[reader loop] transport event channel closed: {}", e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("[reader loop] error reading from {}, {}", peer, e);
-                    break;
-                }
-            }
-
-            buffer.clear();
-        }
-        warn!("reader loop for {} ended", peer);
-    });
-
-    tokio::spawn(async move {
-        while let Some(msg) = write_rx.lock().await.recv().await {
-            debug!("writing {}", msg.packet_type);
-
-            if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
-                error!("Error writing to {}: {}", peer, e);
-                break;
-            }
-        }
         info!("writer task for {} ended", peer);
     });
 }
