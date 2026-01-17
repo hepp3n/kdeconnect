@@ -49,8 +49,6 @@ pub enum TransportEvent {
 pub struct TcpTransport {
     listen_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
-    write_tx: mpsc::UnboundedSender<ProtocolPacket>,
-    write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     identity: Arc<Identity>,
     client_config: Arc<rustls::ClientConfig>,
 }
@@ -58,8 +56,6 @@ pub struct TcpTransport {
 impl TcpTransport {
     pub fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
-        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-        let write_rx = Arc::new(Mutex::new(write_rx));
         let listen_addr = config.listen_addr;
         let event_tx = event_tx.clone();
         let identity = Arc::new(config.identity.clone());
@@ -68,8 +64,6 @@ impl TcpTransport {
         Self {
             listen_addr,
             event_tx,
-            write_tx,
-            write_rx,
             identity,
             client_config,
         }
@@ -80,8 +74,6 @@ impl TcpTransport {
 
         loop {
             let event_tx = self.event_tx.clone();
-            let write_tx = self.write_tx.clone();
-            let write_rx = self.write_rx.clone();
             let identity = self.identity.clone();
 
             match listener.accept().await {
@@ -125,6 +117,9 @@ impl TcpTransport {
 
                         let (reader, writer) = split(stream);
 
+                        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
+                        let write_rx = Arc::new(Mutex::new(write_rx));
+
                         let _ = tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
@@ -140,7 +135,7 @@ impl TcpTransport {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
                             name,
-                            write_tx: write_tx.clone(),
+                            write_tx,
                         }) {
                             error!("[tcp] transport event channel closed: {}", e);
                         }
@@ -158,8 +153,6 @@ pub struct UdpTransport {
     socket: Arc<UdpSocket>,
     discovery_interval: Duration,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
-    write_tx: mpsc::UnboundedSender<ProtocolPacket>,
-    write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     identity: Arc<Identity>,
     server_config: Arc<rustls::ServerConfig>,
 }
@@ -167,8 +160,6 @@ pub struct UdpTransport {
 impl UdpTransport {
     pub async fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
-        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-        let write_rx = Arc::new(Mutex::new(write_rx));
 
         let socket = UdpSocket::bind(config.listen_addr)
             .await
@@ -185,8 +176,6 @@ impl UdpTransport {
             socket,
             discovery_interval,
             event_tx,
-            write_tx,
-            write_rx,
             identity,
             server_config,
         }
@@ -231,8 +220,6 @@ impl UdpTransport {
 
     pub async fn listen(&self) -> anyhow::Result<()> {
         let event_tx = self.event_tx.clone();
-        let write_tx = self.write_tx.clone();
-        let write_rx = self.write_rx.clone();
         let this_identity = self.identity.clone();
 
         loop {
@@ -290,11 +277,14 @@ impl UdpTransport {
 
                         let (reader, writer) = split(tls_stream);
 
+                        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
+                        let write_rx = Arc::new(Mutex::new(write_rx));
+
                         let _ = tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
-                            write_rx.clone(),
+                            write_rx,
                             peer,
                             id,
                         ))
@@ -305,7 +295,7 @@ impl UdpTransport {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
                             name,
-                            write_tx: write_tx.clone(),
+                            write_tx,
                         }) {
                             error!("[udp] transport event channel closed: {}", e);
                         }

@@ -46,11 +46,11 @@ pub struct CosmicConnect {
 #[derive(Debug, Clone)]
 pub enum CosmicEvent {
     Broadcasting,
+    Disconnect(DeviceId),
     Pair(DeviceId),
     Unpair(DeviceId),
     SendPing((DeviceId, String)),
     SendFiles((DeviceId, Vec<String>)),
-    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -253,13 +253,14 @@ impl Application for CosmicConnect {
                         let _ = sender.send(AppEvent::SendFiles((device_id, files_list)));
                     }
                 }
-                CosmicEvent::Stop => {
+                CosmicEvent::Disconnect(device_id) => {
+                    self.connections.remove(&device_id);
+
                     if let Some(sender) = self.event_sender.as_ref() {
-                        let _ = sender.send(AppEvent::StopKdeConnect);
+                        let _ = sender.send(AppEvent::Disconnect(device_id));
                     }
 
                     self.event_sender = None;
-                    self.connections.clear();
                     self.device_state = State::default();
                 }
             },
@@ -369,6 +370,16 @@ impl CosmicConnect {
                                             device.1.device_id.clone(),
                                             fl!("ping-message"),
                                         ))))
+                                        .apply(container)
+                                        .center(Length::Fill)
+                                        .width(Length::Fixed(60.0))
+                                        .height(Length::Fixed(60.0)),
+                                )
+                                .push(
+                                    button::icon(icon::from_name("process-stop"))
+                                        .on_press(Message::SendEvent(CosmicEvent::Disconnect(
+                                            device.1.device_id.clone(),
+                                        )))
                                         .apply(container)
                                         .center(Length::Fill)
                                         .width(Length::Fixed(60.0))
@@ -484,13 +495,6 @@ impl CosmicConnect {
                         .push(
                             button::standard("Broadcast")
                                 .on_press(Message::SendEvent(CosmicEvent::Broadcasting))
-                                .apply(container)
-                                .center(Length::Fill)
-                                .height(Length::Fixed(60.0)),
-                        )
-                        .push(
-                            button::destructive("Disconnect")
-                                .on_press(Message::SendEvent(CosmicEvent::Stop))
                                 .apply(container)
                                 .center(Length::Fill)
                                 .height(Length::Fixed(60.0)),

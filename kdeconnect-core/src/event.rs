@@ -29,11 +29,11 @@ pub enum CoreEvent {
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     Broadcasting,
+    Disconnect(DeviceId),
     Pair(DeviceId),
     Ping((DeviceId, String)),
     Unpair(DeviceId),
     SendFiles((DeviceId, Vec<String>)),
-    StopKdeConnect,
 }
 
 #[derive(Debug, Clone)]

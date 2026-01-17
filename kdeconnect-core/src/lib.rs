@@ -38,7 +38,6 @@ pub struct KdeConnectCore {
     writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
-    tcp_transport: Arc<TcpTransport>,
     udp_transport: Arc<UdpTransport>,
     out_tx: Arc<mpsc::UnboundedSender<AppEvent>>,
     in_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -63,12 +62,10 @@ impl KdeConnectCore {
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
-        //
-        // start tcp transport
-        let tcp = Arc::clone(&transport);
 
+        // start tcp transport
         tokio::spawn(async move {
-            let _ = tcp.listen().await;
+            let _ = transport.listen().await;
         });
 
         let udp = Arc::clone(&udp_transport);
@@ -115,7 +112,6 @@ impl KdeConnectCore {
                 writer_map,
                 event_tx,
                 event_rx,
-                tcp_transport: transport,
                 udp_transport,
                 out_tx: Arc::new(out_tx),
                 in_rx,
@@ -123,16 +119,6 @@ impl KdeConnectCore {
             },
             conn_rx,
         ))
-    }
-
-    pub async fn stop(&self) {
-        drop(self.tcp_transport.clone());
-        drop(self.udp_transport.clone());
-
-        let mut guard = self.writer_map.lock().await;
-        guard.clear();
-
-        info!("KDE Connection connections stopped");
     }
 
     pub async fn run_event_loop(&mut self) {
@@ -332,7 +318,7 @@ impl KdeConnectCore {
     }
 
     async fn kde_events(&self, event: AppEvent) {
-        let guard = self.writer_map.lock().await;
+        let mut guard = self.writer_map.lock().await;
 
         match event {
             AppEvent::Broadcasting => {
@@ -385,12 +371,16 @@ impl KdeConnectCore {
                     debug!("packet sent....");
                 }
             }
-            AppEvent::StopKdeConnect => {
-                let _ = self.stop().await;
-            }
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
                 let _ = self.pairing.cancel_pairing(device_id).await;
+            }
+            AppEvent::Disconnect(device_id) => {
+                info!("frontend sent disconnect event to device: {}", device_id);
+                if guard.remove(&device_id).is_some() {
+                    let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
+                    info!("Connection closed.");
+                }
             }
         };
     }
