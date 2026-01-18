@@ -87,6 +87,10 @@ impl KdeConnectCore {
             .await;
         let mpris_plugin = plugins::mpris::Mpris::default();
         plugin_registry.register(Arc::new(mpris_plugin)).await;
+
+        // start monitoring mpris
+        plugins::mpris::monitor_mpris(device_manager.clone(), event_tx.clone());
+
         let notification_plugin = plugins::notification::Notification::default();
         plugin_registry
             .register(Arc::new(notification_plugin))

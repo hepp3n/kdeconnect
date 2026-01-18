@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::{
-    device::Device,
+    device::{Device, DeviceManager},
     plugin_interface::Plugin,
     protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
@@ -141,40 +141,27 @@ impl From<mpris::LoopStatus> for MprisLoopStatus {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(untagged)]
-pub enum MprisRequest {
-    List {
-        #[serde(rename = "requestPlayerList")]
-        request_player_list: bool,
-    },
-    PlayerRequest {
-        player: String,
-        #[serde(rename = "requestNowPlaying")]
-        request_now_playing: Option<bool>,
-        #[serde(rename = "requestVolume")]
-        request_volume: Option<bool>,
-        // set to a file:// string to get kdeconnect-kde to send (local) album art
-        #[serde(rename = "albumArtUrl", skip_serializing_if = "Option::is_none")]
-        request_album_art: Option<String>,
-    },
-    Action(MprisRequestAction),
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct MprisRequestAction {
-    pub player: String,
-    #[serde(rename = "Seek", skip_serializing_if = "Option::is_none")]
+pub struct MprisRequest {
+    pub player: Option<String>,
+    #[serde(rename = "requestNowPlaying")]
+    pub request_now_playing: Option<bool>,
+    #[serde(rename = "requestPlayerList")]
+    pub request_player_list: Option<bool>,
+    #[serde(rename = "requestVolume")]
+    pub request_volume: Option<bool>,
+    #[serde(rename = "Seek")]
     pub seek: Option<i64>,
-    #[serde(rename = "setVolume", skip_serializing_if = "Option::is_none")]
-    pub set_volume: Option<i64>,
-    #[serde(rename = "setLoopStatus", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "setLoopStatus")]
     pub set_loop_status: Option<MprisLoopStatus>,
-    #[serde(rename = "SetPosition", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "SetPosition")]
     pub set_position: Option<i64>,
-    #[serde(rename = "setShuffle", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "setShuffle")]
     pub set_shuffle: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "setVolume")]
+    pub set_volume: Option<i64>,
     pub action: Option<MprisAction>,
+    #[serde(rename = "albumArtUrl")]
+    pub album_art_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -229,105 +216,206 @@ impl Plugin for MprisRequest {
         "kdeconnect.mpris.request"
     }
 }
+
 impl MprisRequest {
     pub async fn received_packet(
         &self,
         device: &Device,
         core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
-        match self {
-            MprisRequest::PlayerRequest {
-                player,
-                request_now_playing,
-                request_volume,
-                request_album_art,
-            } => {
-                debug!(
-                    "mpris request received: {:?} {:?} {:?} {:?} ",
-                    player, request_now_playing, request_volume, request_album_art
+        debug!("mpris request received: {:?}", self);
+
+        if self.request_player_list == Some(true) {
+            debug!("MPRIS Player list requested");
+            let players = get_mpris_players(None);
+
+            if let Ok(player) = players {
+                let packet = ProtocolPacket::new(
+                    PacketType::Mpris,
+                    serde_json::to_value(Mpris::List {
+                        player_list: vec![player.identity().into()],
+                        supports_album_art_payload: true,
+                    })
+                    .unwrap(),
                 );
 
-                let Ok(player) = MprisPlayer::new(Some(player)) else {
+                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                    device: device.device_id.clone(),
+                    packet,
+                });
+            }
+            return;
+        }
+
+        if let Some(player_name) = &self.player {
+            // Actions scope - keeps `player` (!Send) from living across .await points later
+            {
+                if let Ok(player) = get_mpris_players(Some(player_name)) {
+                    if let Some(seek_us) = self.seek {
+                        let _ = player.seek(seek_us);
+                    }
+
+                    if let Some(vol) = self.set_volume {
+                        let _ = player.set_volume(vol as f64 / 100.0);
+                    }
+
+                    if let Some(loop_status) = self.set_loop_status {
+                        let status = match loop_status {
+                            MprisLoopStatus::None => mpris::LoopStatus::None,
+                            MprisLoopStatus::Track => mpris::LoopStatus::Track,
+                            MprisLoopStatus::Playlist => mpris::LoopStatus::Playlist,
+                        };
+                        let _ = player.set_loop_status(status);
+                    }
+
+                    if let Some(position_ms) = self.set_position
+                        && let Ok(metadata) = player.get_metadata()
+                        && let Some(track_id) = metadata.track_id()
+                    {
+                        let duration = std::time::Duration::from_millis(position_ms as u64);
+                        let _ = player.set_position(track_id, &duration);
+                    }
+
+                    if let Some(shuffle) = self.set_shuffle {
+                        let _ = player.set_shuffle(shuffle);
+                    }
+
+                    if let Some(command) = self.action {
+                        let _ = match command {
+                            MprisAction::Play => player.play(),
+                            MprisAction::Pause => player.pause(),
+                            MprisAction::PlayPause => player.play_pause(),
+                            MprisAction::Stop => player.stop(),
+                            MprisAction::Next => player.next(),
+                            MprisAction::Previous => player.previous(),
+                        };
+                    }
+                }
+            }
+
+            // Album Art Request
+            if let Some(album_art_url) = &self.album_art_url {
+                let Ok(player_info) = MprisPlayer::new(Some(player_name)) else {
+                    return;
+                };
+                let art = player_info.album_art_url.clone();
+
+                let path = album_art_url.strip_prefix("file://");
+
+                let Some(path) = path else {
                     return;
                 };
 
-                let player_name = player.player.clone();
-                let art = player.album_art_url.clone();
+                if let Ok(file) = DeviceFile::open(path).await {
+                    let payload = DevicePayload::from(file);
 
-                if let Some(album_art_url) = request_album_art {
-                    let path = album_art_url.strip_prefix("file://");
+                    let construct_packet = ProtocolPacket::new_with_payload(
+                        PacketType::Mpris,
+                        serde_json::to_value(Mpris::TransferringArt {
+                            player: player_name.clone(),
+                            album_art_url: art.unwrap_or(path.to_string()),
+                            transferring_album_art: true,
+                        })
+                        .unwrap(),
+                        payload.size,
+                        None,
+                    );
 
-                    let Some(path) = path else {
-                        return;
-                    };
-
-                    if let Ok(file) = DeviceFile::open(path).await {
-                        let payload = DevicePayload::from(file);
-
-                        let construct_packet = ProtocolPacket::new_with_payload(
-                            PacketType::Mpris,
-                            serde_json::to_value(Mpris::TransferringArt {
-                                player: player_name,
-                                album_art_url: art.unwrap_or(path.to_string()),
-                                transferring_album_art: true,
-                            })
-                            .unwrap(),
-                            payload.size,
-                            None,
-                        );
-
-                        let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
-                            device: device.device_id.clone(),
-                            packet: construct_packet,
-                            payload: Box::new(payload.buf),
-                            payload_size: payload.size,
-                        });
-                    }
-                } else {
-                    let construct_packet = ProtocolPacket {
-                        id: None,
-                        packet_type: PacketType::Mpris,
-                        body: serde_json::to_value(Mpris::Info(player)).unwrap(),
-                        payload_size: None,
-                        payload_transfer_info: None,
-                    };
-
-                    let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                    let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
                         device: device.device_id.clone(),
                         packet: construct_packet,
+                        payload: Box::new(payload.buf),
+                        payload_size: payload.size,
                     });
                 }
+                return;
             }
-            MprisRequest::List {
-                request_player_list,
-            } => {
-                if *request_player_list {
-                    debug!("MPRIS Player list requested");
-                    let players = get_mpris_players(None);
 
-                    if let Ok(player) = players {
-                        let packet = ProtocolPacket {
-                            id: None,
-                            packet_type: PacketType::Mpris,
-                            body: serde_json::to_value(Mpris::List {
-                                player_list: vec![player.identity().into()],
-                                supports_album_art_payload: true,
-                            })
-                            .unwrap(),
-                            payload_size: None,
-                            payload_transfer_info: None,
-                        };
+            // Info Request
+            if (self.request_now_playing == Some(true) || self.request_volume == Some(true))
+                && let Ok(player_info) = MprisPlayer::new(Some(player_name))
+            {
+                let construct_packet = ProtocolPacket::new(
+                    PacketType::Mpris,
+                    serde_json::to_value(Mpris::Info(player_info)).unwrap(),
+                );
 
-                        let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                            device: device.device_id.clone(),
-                            packet,
-                        });
-                    }
-                }
-            }
-            MprisRequest::Action { .. } => {
-                debug!("received mpris action");
+                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                    device: device.device_id.clone(),
+                    packet: construct_packet,
+                });
             }
         }
     }
+}
+
+pub fn monitor_mpris(
+    device_manager: DeviceManager,
+    core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let finder = match mpris::PlayerFinder::new() {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::error!("Failed to create PlayerFinder: {}", e);
+                return;
+            }
+        };
+
+        loop {
+            let player = match finder.find_active() {
+                Ok(p) => p,
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    continue;
+                }
+            };
+
+            let events = match player.events() {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::error!("Failed to get player events: {}", e);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    continue;
+                }
+            };
+
+            for event in events {
+                match event {
+                    Ok(mpris::Event::Playing)
+                    | Ok(mpris::Event::Paused)
+                    | Ok(mpris::Event::Stopped)
+                    | Ok(mpris::Event::TrackChanged(_))
+                    | Ok(mpris::Event::Seeked { .. })
+                    | Ok(mpris::Event::VolumeChanged(_)) => {
+                        let identity = player.identity();
+                        if let Ok(mpris_player) = MprisPlayer::new(Some(identity)) {
+                            let packet = ProtocolPacket::new(
+                                PacketType::Mpris,
+                                serde_json::to_value(Mpris::Info(mpris_player)).unwrap(),
+                            );
+
+                            let dm = device_manager.clone();
+                            let ctx = core_tx.clone();
+
+                            tokio::spawn(async move {
+                                let devices = dm.get_devices().await;
+                                for device in devices {
+                                    let _ = ctx.send(crate::event::CoreEvent::SendPacket {
+                                        device: device.device_id.clone(),
+                                        packet: packet.clone(),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("MPRIS event error: {}", e);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
 }

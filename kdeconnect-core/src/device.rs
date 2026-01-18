@@ -131,6 +131,11 @@ impl DeviceManager {
         guard.get(id).cloned()
     }
 
+    pub async fn get_devices(&self) -> Vec<Device> {
+        let guard = self.devices.read().await;
+        guard.values().cloned().collect()
+    }
+
     pub async fn set_paired(&self, id: &DeviceId, flag: bool) {
         let mut guard = self.devices.write().await;
 

@@ -163,9 +163,13 @@ impl PluginRegistry {
     ) {
         info!("preparing payload transfer");
 
-        let free_listener = prepare_listener_for_payload()
-            .await
-            .expect("cannot find free port");
+        let free_listener = match prepare_listener_for_payload().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("cannot find free port: {}", e);
+                return;
+            }
+        };
 
         let body = packet.body.clone();
 
@@ -207,13 +211,25 @@ impl PluginRegistry {
         let server_config = config.key_store.server_config.clone();
         debug!("server config created.");
 
-        let (incoming, peer_addr) = free_listener.accept().await.expect("accepting connection.");
+        let (incoming, peer_addr) = match free_listener.accept().await {
+            Ok(res) => res,
+            Err(e) => {
+                warn!("accepting connection failed: {}", e);
+                return;
+            }
+        };
         debug!("incoming connection from {}", peer_addr);
 
-        let mut stream = tokio_rustls::TlsAcceptor::from(server_config)
+        let mut stream = match tokio_rustls::TlsAcceptor::from(server_config)
             .accept(incoming)
             .await
-            .expect("from acceptor in payload");
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!("TLS handshake failed during payload transfer: {}", e);
+                return;
+            }
+        };
 
         debug!("accepted");
 

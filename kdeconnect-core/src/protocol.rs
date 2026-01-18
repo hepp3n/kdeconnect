@@ -238,7 +238,12 @@ impl Display for DeviceType {
 impl ProtocolPacket {
     pub fn new(t: PacketType, body: Value) -> Self {
         Self {
-            id: None,
+            id: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            ),
             packet_type: t,
             body,
             payload_size: None,
@@ -253,7 +258,12 @@ impl ProtocolPacket {
         payload_transfer_info: Option<PacketPayloadTransferInfo>,
     ) -> Self {
         Self {
-            id: None,
+            id: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            ),
             packet_type: t,
             body,
             payload_size: Some(payload_size),
