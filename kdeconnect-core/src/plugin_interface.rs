@@ -107,6 +107,10 @@ impl PluginRegistry {
             PacketType::Mpris => {
                 if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
                     info!("Received MPRIS packet: {:?}", mpris_packet);
+                    let _ = connection_tx.send(ConnectionEvent::Mpris((
+                        device.device_id.clone(),
+                        mpris_packet,
+                    )));
                 }
             }
             PacketType::MprisRequest => {
@@ -253,6 +257,11 @@ impl PluginRegistry {
             PacketType::Ping => {
                 if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
                     ping.send_packet(&device, core_event).await;
+                }
+            }
+            PacketType::MprisRequest => {
+                if let Ok(mpris_request) = serde_json::from_value::<MprisRequest>(body) {
+                    mpris_request.send_packet(&device, core_event).await;
                 }
             }
             _ => {

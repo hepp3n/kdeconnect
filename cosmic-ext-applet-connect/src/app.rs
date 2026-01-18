@@ -17,6 +17,7 @@ use cosmic::{Application, Apply, Element, Renderer, Theme, theme};
 use kdeconnect_core::KdeConnectCore;
 use kdeconnect_core::device::{Device, DeviceId, DeviceState, PairState};
 use kdeconnect_core::event::{AppEvent, ConnectionEvent};
+use kdeconnect_core::plugins::mpris::{Mpris, MprisAction, MprisPlayer, MprisRequest};
 use percent_encoding::percent_decode;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub struct CosmicConnect {
     config: ConnectConfig,
     event_sender: Option<Arc<mpsc::UnboundedSender<AppEvent>>>,
     connections: HashMap<DeviceId, Device>,
+    mpris_states: HashMap<DeviceId, MprisPlayer>,
     device_state: State,
 }
 
@@ -51,6 +53,7 @@ pub enum CosmicEvent {
     Unpair(DeviceId),
     SendPing((DeviceId, String)),
     SendFiles((DeviceId, Vec<String>)),
+    SendMprisRequest((DeviceId, MprisRequest)),
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +68,7 @@ pub enum Message {
     Disconnected(DeviceId),
     SendEvent(CosmicEvent),
     UpdatedState(DeviceState),
+    MprisEvent((DeviceId, Mpris)),
     SelectFiles,
     CollectFiles(Vec<String>),
     SendFiles(DeviceId),
@@ -97,6 +101,7 @@ impl Application for CosmicConnect {
             config,
             event_sender: None,
             connections: HashMap::new(),
+            mpris_states: HashMap::new(),
             device_state: State::default(),
         };
 
@@ -148,6 +153,9 @@ impl Application for CosmicConnect {
                         }
                         ConnectionEvent::PairStateChanged(data) => {
                             let _ = output.send(Message::PairStateChanged(data)).await;
+                        }
+                        ConnectionEvent::Mpris(data) => {
+                            let _ = output.send(Message::MprisEvent(data)).await;
                         }
                     }
                 }
@@ -272,6 +280,11 @@ impl Application for CosmicConnect {
                     self.event_sender = None;
                     self.device_state = State::default();
                 }
+                CosmicEvent::SendMprisRequest(data) => {
+                    if let Some(sender) = self.event_sender.as_ref() {
+                        let _ = sender.send(AppEvent::SendMprisRequest(data));
+                    }
+                }
             },
             Message::UpdatedState(state) => match state {
                 DeviceState::Battery { level, charging } => {
@@ -323,6 +336,11 @@ impl Application for CosmicConnect {
                 return Task::done(cosmic::Action::App(Message::SendEvent(
                     CosmicEvent::SendFiles((device_id, files_list)),
                 )));
+            }
+            Message::MprisEvent((device_id, mpris)) => {
+                if let Mpris::Info(player) = mpris {
+                    self.mpris_states.insert(device_id, player);
+                }
             }
         }
         Task::none()
@@ -488,6 +506,11 @@ impl CosmicConnect {
                         .width(Length::Fill),
                     )
                     .push_maybe(
+                        self.mpris_states
+                            .get(&device.1.device_id)
+                            .map(|player| self.mpris_view(player, &device.1.device_id)),
+                    )
+                    .push_maybe(
                         if !self.device_state.selected_files.is_empty() {
                             Some(self.device_state.selected_files.clone().into_iter().fold(
                                 column::Column::new().width(Length::Fill),
@@ -533,5 +556,92 @@ impl CosmicConnect {
                 .center_y(Length::Fixed(60.0)),
             )
             .push(horizontal_rule(Pixels::from(2)))
+    }
+
+    fn mpris_view(&self, player: &MprisPlayer, device_id: &DeviceId) -> Element<'static, Message> {
+        let title = player
+            .title
+            .clone()
+            .unwrap_or_else(|| "Unknown Title".to_string());
+        let artist = player
+            .artist
+            .clone()
+            .unwrap_or_else(|| "Unknown Artist".to_string());
+        let is_playing = player.is_playing.unwrap_or(false);
+        let player_name = player.player.clone();
+
+        let prev_btn = button::icon(icon::from_name("media-skip-backward-symbolic"))
+            .on_press(Message::SendEvent(CosmicEvent::SendMprisRequest((
+                device_id.clone(),
+                MprisRequest {
+                    player: Some(player_name.clone()),
+                    action: Some(MprisAction::Previous),
+                    ..Default::default()
+                },
+            ))))
+            .class(theme::Button::Standard)
+            .apply(container)
+            .center(Length::Fill)
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0));
+
+        let play_pause_icon = if is_playing {
+            "media-playback-pause-symbolic"
+        } else {
+            "media-playback-start-symbolic"
+        };
+        let play_pause_action = if is_playing {
+            MprisAction::Pause
+        } else {
+            MprisAction::Play
+        };
+
+        let play_btn = button::icon(icon::from_name(play_pause_icon))
+            .on_press(Message::SendEvent(CosmicEvent::SendMprisRequest((
+                device_id.clone(),
+                MprisRequest {
+                    player: Some(player_name.clone()),
+                    action: Some(play_pause_action),
+                    ..Default::default()
+                },
+            ))))
+            .class(theme::Button::Suggested)
+            .apply(container)
+            .center(Length::Fill)
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0));
+
+        let next_btn = button::icon(icon::from_name("media-skip-forward-symbolic"))
+            .on_press(Message::SendEvent(CosmicEvent::SendMprisRequest((
+                device_id.clone(),
+                MprisRequest {
+                    player: Some(player_name.clone()),
+                    action: Some(MprisAction::Next),
+                    ..Default::default()
+                },
+            ))))
+            .class(theme::Button::Standard)
+            .apply(container)
+            .center(Length::Fill)
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0));
+
+        menu_button(
+            column::Column::new()
+                .spacing(4)
+                .push(text::body(title))
+                .push(text::caption(artist))
+                .push(
+                    row()
+                        .spacing(8)
+                        .push(horizontal_space())
+                        .push(prev_btn)
+                        .push(play_btn)
+                        .push(next_btn)
+                        .push(horizontal_space()),
+                ),
+        )
+        .width(Length::Fill)
+        .into()
     }
 }

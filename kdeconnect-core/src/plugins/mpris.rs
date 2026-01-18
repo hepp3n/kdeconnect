@@ -140,27 +140,29 @@ impl From<mpris::LoopStatus> for MprisLoopStatus {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct MprisRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub player: Option<String>,
-    #[serde(rename = "requestNowPlaying")]
+    #[serde(rename = "requestNowPlaying", skip_serializing_if = "Option::is_none")]
     pub request_now_playing: Option<bool>,
-    #[serde(rename = "requestPlayerList")]
+    #[serde(rename = "requestPlayerList", skip_serializing_if = "Option::is_none")]
     pub request_player_list: Option<bool>,
-    #[serde(rename = "requestVolume")]
+    #[serde(rename = "requestVolume", skip_serializing_if = "Option::is_none")]
     pub request_volume: Option<bool>,
-    #[serde(rename = "Seek")]
+    #[serde(rename = "Seek", skip_serializing_if = "Option::is_none")]
     pub seek: Option<i64>,
-    #[serde(rename = "setLoopStatus")]
+    #[serde(rename = "setLoopStatus", skip_serializing_if = "Option::is_none")]
     pub set_loop_status: Option<MprisLoopStatus>,
-    #[serde(rename = "SetPosition")]
+    #[serde(rename = "SetPosition", skip_serializing_if = "Option::is_none")]
     pub set_position: Option<i64>,
-    #[serde(rename = "setShuffle")]
+    #[serde(rename = "setShuffle", skip_serializing_if = "Option::is_none")]
     pub set_shuffle: Option<bool>,
-    #[serde(rename = "setVolume")]
+    #[serde(rename = "setVolume", skip_serializing_if = "Option::is_none")]
     pub set_volume: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<MprisAction>,
-    #[serde(rename = "albumArtUrl")]
+    #[serde(rename = "albumArtUrl", skip_serializing_if = "Option::is_none")]
     pub album_art_url: Option<String>,
 }
 
@@ -346,6 +348,22 @@ impl MprisRequest {
                 });
             }
         }
+    }
+
+    pub async fn send_packet(
+        &self,
+        device: &Device,
+        core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
+    ) {
+        let packet = ProtocolPacket::new(
+            PacketType::MprisRequest,
+            serde_json::to_value(self).unwrap(),
+        );
+
+        let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+            device: device.device_id.clone(),
+            packet,
+        });
     }
 }
 

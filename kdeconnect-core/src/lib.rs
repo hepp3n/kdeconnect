@@ -24,7 +24,7 @@ pub mod device;
 pub mod event;
 pub(crate) mod pairing;
 pub(crate) mod plugin_interface;
-pub(crate) mod plugins;
+pub mod plugins;
 pub(crate) mod protocol;
 pub(crate) mod transport;
 
@@ -288,6 +288,24 @@ impl KdeConnectCore {
                     .conn_tx
                     .send(ConnectionEvent::Connected((id.clone(), device.clone())));
 
+                // request mpris players
+                let request = crate::plugins::mpris::MprisRequest {
+                    player: None,
+                    request_now_playing: None,
+                    request_player_list: Some(true),
+                    request_volume: None,
+                    seek: None,
+                    set_loop_status: None,
+                    set_position: None,
+                    set_shuffle: None,
+                    set_volume: None,
+                    action: None,
+                    album_art_url: None,
+                };
+                let value = serde_json::to_value(request).expect("fail serializing packet body");
+                let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
+                let _ = write_tx.send(pkt);
+
                 {
                     self.writer_map.lock().await.insert(id, write_tx.clone());
                 }
@@ -382,6 +400,47 @@ impl KdeConnectCore {
 
                     debug!("packet sent....");
                 }
+            }
+            AppEvent::MprisAction((device_id, player_name, action)) => {
+                info!(
+                    "frontend sent mpris action to device: {} player: {}",
+                    device_id, player_name
+                );
+
+                let request = crate::plugins::mpris::MprisRequest {
+                    player: Some(player_name),
+                    request_now_playing: None,
+                    request_player_list: None,
+                    request_volume: None,
+                    seek: None,
+                    set_loop_status: None,
+                    set_position: None,
+                    set_shuffle: None,
+                    set_volume: None,
+                    action: Some(action),
+                    album_art_url: None,
+                };
+
+                let value = serde_json::to_value(request).expect("fail serializing packet body");
+                let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
+
+                if let Some(device) = self.device_manager.get_device(&device_id).await {
+                    self.plugin_registry
+                        .send(device.clone(), pkt, self.event_tx.clone())
+                        .await;
+                };
+            }
+            AppEvent::SendMprisRequest((device_id, request)) => {
+                info!("frontend sent mpris request to device: {}", device_id);
+
+                let value = serde_json::to_value(request).expect("fail serializing packet body");
+                let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
+
+                if let Some(device) = self.device_manager.get_device(&device_id).await {
+                    self.plugin_registry
+                        .send(device.clone(), pkt, self.event_tx.clone())
+                        .await;
+                };
             }
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
