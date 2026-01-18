@@ -1,7 +1,7 @@
 use tokio::io::AsyncRead;
 
 use crate::{
-    device::{Device, DeviceId, DeviceState},
+    device::{Device, DeviceId, DeviceState, PairState},
     protocol::ProtocolPacket,
 };
 
@@ -9,6 +9,7 @@ pub enum CoreEvent {
     DeviceDiscovered(Device),
     DevicePaired((DeviceId, Device)),
     DevicePairCancelled(DeviceId),
+    DevicePairStateChanged((DeviceId, PairState)),
     PacketReceived {
         device: DeviceId,
         packet: ProtocolPacket,
@@ -43,4 +44,5 @@ pub enum ConnectionEvent {
     DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),
     StateUpdated(DeviceState),
+    PairStateChanged((DeviceId, PairState)),
 }

@@ -60,6 +60,7 @@ pub enum Message {
     UpdateConfig(ConnectConfig),
     KdeConnectStarted(Arc<mpsc::UnboundedSender<AppEvent>>),
     NewConnection((DeviceId, Device)),
+    PairStateChanged((DeviceId, PairState)),
     ClipboardReceived(String),
     Disconnected(DeviceId),
     SendEvent(CosmicEvent),
@@ -145,6 +146,9 @@ impl Application for CosmicConnect {
                         ConnectionEvent::StateUpdated(state) => {
                             let _ = output.send(Message::UpdatedState(state)).await;
                         }
+                        ConnectionEvent::PairStateChanged(data) => {
+                            let _ = output.send(Message::PairStateChanged(data)).await;
+                        }
                     }
                 }
             }),
@@ -218,7 +222,12 @@ impl Application for CosmicConnect {
                 self.event_sender = Some(sender);
             }
             Message::NewConnection((device_id, device)) => {
-                self.connections.entry(device_id).or_insert(device);
+                self.connections.insert(device_id, device);
+            }
+            Message::PairStateChanged((device_id, state)) => {
+                if let Some(device) = self.connections.get_mut(&device_id) {
+                    device.pair_state = state;
+                }
             }
             Message::ClipboardReceived(content) => {
                 debug!("Clipboard content received: {}", content);
@@ -325,12 +334,6 @@ impl Application for CosmicConnect {
 }
 
 impl CosmicConnect {
-    fn is_paired(&self, device_id: DeviceId) -> bool {
-        self.connections
-            .get(&device_id)
-            .is_some_and(|state| state.pair_state == PairState::Paired)
-    }
-
     fn device_list_col(
         &self,
         devices: Vec<&Device>,
@@ -385,26 +388,48 @@ impl CosmicConnect {
                                         .width(Length::Fixed(60.0))
                                         .height(Length::Fixed(60.0)),
                                 )
-                                .push(if self.is_paired(device.1.device_id.clone()) {
-                                    button::icon(icon::from_name("network-disconnected-symbolic"))
-                                        .on_press(Message::SendEvent(CosmicEvent::Unpair(
-                                            device.1.device_id.clone(),
-                                        )))
-                                        .class(theme::Button::Destructive)
-                                        .apply(container)
-                                        .center(Length::Fill)
-                                        .width(Length::Fixed(60.0))
-                                        .height(Length::Fixed(60.0))
-                                } else {
-                                    button::icon(icon::from_name("list-add-symbolic"))
-                                        .on_press(Message::SendEvent(CosmicEvent::Pair(
-                                            device.1.device_id.clone(),
-                                        )))
-                                        .class(theme::Button::Suggested)
-                                        .apply(container)
-                                        .center(Length::Fill)
-                                        .width(Length::Fixed(60.0))
-                                        .height(Length::Fixed(60.0))
+                                .push(match device.1.pair_state {
+                                    PairState::Paired => button::icon(icon::from_name(
+                                        "network-disconnected-symbolic",
+                                    ))
+                                    .on_press(Message::SendEvent(CosmicEvent::Unpair(
+                                        device.1.device_id.clone(),
+                                    )))
+                                    .class(theme::Button::Destructive)
+                                    .apply(container)
+                                    .center(Length::Fill)
+                                    .width(Length::Fixed(60.0))
+                                    .height(Length::Fixed(60.0)),
+                                    PairState::Requesting => {
+                                        button::icon(icon::from_name("process-stop-symbolic"))
+                                            .on_press(Message::SendEvent(CosmicEvent::Unpair(
+                                                device.1.device_id.clone(),
+                                            )))
+                                            .class(theme::Button::Standard)
+                                            .apply(container)
+                                            .center(Length::Fill)
+                                            .width(Length::Fixed(60.0))
+                                            .height(Length::Fixed(60.0))
+                                    }
+                                    PairState::Requested => {
+                                        button::icon(icon::from_name("dialog-information-symbolic"))
+                                            .class(theme::Button::Suggested)
+                                            .apply(container)
+                                            .center(Length::Fill)
+                                            .width(Length::Fixed(60.0))
+                                            .height(Length::Fixed(60.0))
+                                    }
+                                    PairState::NotPaired => {
+                                        button::icon(icon::from_name("list-add-symbolic"))
+                                            .on_press(Message::SendEvent(CosmicEvent::Pair(
+                                                device.1.device_id.clone(),
+                                            )))
+                                            .class(theme::Button::Suggested)
+                                            .apply(container)
+                                            .center(Length::Fill)
+                                            .width(Length::Fixed(60.0))
+                                            .height(Length::Fixed(60.0))
+                                    }
                                 }),
                         )
                         .center_y(Length::Fixed(60.)),

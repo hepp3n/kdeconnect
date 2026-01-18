@@ -132,16 +132,18 @@ impl DeviceManager {
     }
 
     pub async fn set_paired(&self, id: &DeviceId, flag: bool) {
-        let guard = self.devices.write().await;
+        let mut guard = self.devices.write().await;
 
-        if let Some(device) = guard.get(id) {
+        if let Some(device) = guard.get_mut(id) {
             if flag {
+                device.pair_state = PairState::Paired;
                 let _ = self.event_tx.send(CoreEvent::DevicePaired((
                     device.device_id.clone(),
                     device.clone(),
                 )));
                 let _ = device.update_pair_state(PairState::Paired).await;
             } else {
+                device.pair_state = PairState::NotPaired;
                 let _ = self
                     .event_tx
                     .send(CoreEvent::DevicePairCancelled(device.device_id.clone()));
@@ -151,9 +153,13 @@ impl DeviceManager {
     }
 
     pub async fn update_pair_state(&self, id: &DeviceId, state: PairState) {
-        let guard = self.devices.write().await;
+        let mut guard = self.devices.write().await;
 
-        if let Some(device) = guard.get(id) {
+        if let Some(device) = guard.get_mut(id) {
+            device.pair_state = state;
+            let _ = self
+                .event_tx
+                .send(CoreEvent::DevicePairStateChanged((id.clone(), state)));
             let _ = device.update_pair_state(state).await;
         }
     }

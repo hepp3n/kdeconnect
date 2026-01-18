@@ -1,6 +1,7 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
-use notify_rust::{Hint, Notification};
+use notify_rust::{Hint, Notification, Timeout};
+use tokio::time::timeout;
 use tracing::{debug, info};
 
 use crate::{
@@ -29,58 +30,99 @@ impl PairingManager {
             id, packet.packet_type
         );
 
-        if let Ok(pair_packet) = serde_json::from_value::<Pair>(packet.body) {
-            if pair_packet.timestamp.is_none() && pair_packet.pair {
-                self.device_manager
-                    .update_pair_state(&id, PairState::Paired)
-                    .await;
-            };
-            if pair_packet.timestamp.is_none() && !pair_packet.pair {
-                self.device_manager
-                    .update_pair_state(&id, PairState::NotPaired)
-                    .await;
+        let pair_packet = match serde_json::from_value::<Pair>(packet.body) {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("Failed to parse pair packet: {}", e);
+                return Ok(());
             }
+        };
+
+        // Ensure device is known and up to date
+        let device = Device::new(id.0.clone(), name.clone(), addr).await?;
+        self.device_manager
+            .add_or_update_device(id.clone(), device.clone())
+            .await;
+
+        let current_state = device.pair_state;
+
+        // Handle Unpair Request
+        if !pair_packet.pair {
+            info!("Unpair request from {}", name);
+            self.device_manager.set_paired(&id, false).await;
+            return Ok(());
         }
 
-        let device = Device::new(id.0.clone(), name, addr).await?;
+        // Handle Pair Request (pair: true)
+        // If we are already requesting, this is an acceptance
+        if current_state == PairState::Requesting {
+            info!("Pairing accepted by {}", name);
+            self.device_manager.set_paired(&id, true).await;
+            return Ok(());
+        }
+
+        // If already paired, ignore (or maybe update timestamp if we tracked it)
+        if current_state == PairState::Paired {
+            debug!("Already paired with {}", name);
+            return Ok(());
+        }
+
+        // Incoming Pair Request - Ask User
+        // Update state to Requested
+        self.device_manager
+            .update_pair_state(&id, PairState::Requested)
+            .await;
 
         let label = format!(
-            "The {} wants to Pair this device. Click this notification to accept and allow pairing.",
-            device.name
+            "Device '{}' requests pairing.\nDo you want to accept?",
+            name
         );
 
-        debug!(label);
+        debug!("Showing pairing notification for {}", name);
 
-        let pair_state = tokio::task::spawn_blocking(move || {
-            let mut pair_state = false;
+        let pair_decision_task = tokio::task::spawn_blocking(move || {
+            let mut decision = false;
 
-            Notification::new()
+            let handle = Notification::new()
                 .appname("KDE Connect")
-                .summary("KDE Connect")
+                .summary("Pairing Request")
                 .body(&label)
-                .action("clicked", "clicked") // IDENTIFIER, LABEL
-                .action("default", "default")
+                .action("accept", "Accept")
+                .action("decline", "Decline")
                 .hint(Hint::Resident(true))
-                .show()
-                .unwrap()
-                .wait_for_action(|action| match action {
-                    "clicked" => pair_state = true,
-                    "__closed" => pair_state = false,
-                    _ => pair_state = true,
-                });
+                .timeout(Timeout::Milliseconds(30000))
+                .show();
 
-            pair_state
-        })
-        .await
-        .unwrap();
+            match handle {
+                Ok(notification) => {
+                    notification.wait_for_action(|action| match action {
+                        "accept" => decision = true,
+                        "decline" => decision = false,
+                        "__closed" => decision = false,
+                        _ => decision = false, // Default to safe (decline)
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to show notification: {}", e);
+                    decision = false;
+                }
+            }
 
-        info!("User choice: {}", pair_state);
+            decision
+        });
 
-        self.device_manager.set_paired(&id, pair_state).await;
+        // Add an async timeout wrapper to ensure we don't wait forever even if notification hangs
+        let pair_decision = match timeout(Duration::from_secs(35), pair_decision_task).await {
+            Ok(result) => result.unwrap_or(false),
+            Err(_) => {
+                debug!("Pairing decision timed out (async limit)");
+                false
+            }
+        };
 
-        self.device_manager
-            .add_or_update_device(id.clone(), device)
-            .await;
+        info!("User pair decision for {}: {}", name, pair_decision);
+
+        self.device_manager.set_paired(&id, pair_decision).await;
 
         Ok(())
     }

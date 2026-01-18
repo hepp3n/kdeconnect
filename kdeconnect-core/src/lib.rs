@@ -210,7 +210,16 @@ impl KdeConnectCore {
                     sender.send(pair_packet).unwrap();
                 }
 
-                let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
+                let _ = self.conn_tx.send(ConnectionEvent::PairStateChanged((
+                    device_id,
+                    crate::device::PairState::NotPaired,
+                )));
+            }
+            CoreEvent::DevicePairStateChanged((device_id, state)) => {
+                info!("[core] pair state updated: {:?}", state);
+                let _ = self
+                    .conn_tx
+                    .send(ConnectionEvent::PairStateChanged((device_id, state)));
             }
             CoreEvent::SendPacket { device, packet } => {
                 info!(
@@ -285,8 +294,7 @@ impl KdeConnectCore {
                     Ok(pkt) => {
                         // if packet is type `pair` handle it immediately
                         if let PacketType::Pair = pkt.packet_type {
-                            if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
-                                && pair_body.timestamp.is_some()
+                            if let Ok(_pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 let _ = self
