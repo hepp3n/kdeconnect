@@ -5,14 +5,9 @@ resolver = "3"
 
 [workspace.dependencies]
 anyhow = "1.0"
-ashpd = "0.12.0"
+ashpd = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
-
-[patch.crates-io]
-zbus = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }
-zvariant = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }
-zvariant_derive = { git = "https://github.com/dbus2/zbus.git", tag = "zvariant-5.8.0" }

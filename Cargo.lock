@@ -7405,18 +7405,3 @@ dependencies = [
  "syn 2.0.114",
  "winnow 0.7.14",
 ]
-
-[[patch.unused]]
-name = "zbus"
-version = "5.11.0"
-source = "git+https://github.com/dbus2/zbus.git?tag=zvariant-5.8.0#14fce7cb33b2e6fcc8f843d8cebaf1366ab089fa"
-
-[[patch.unused]]
-name = "zvariant"
-version = "5.8.0"
-source = "git+https://github.com/dbus2/zbus.git?tag=zvariant-5.8.0#14fce7cb33b2e6fcc8f843d8cebaf1366ab089fa"
-
-[[patch.unused]]
-name = "zvariant_derive"
-version = "5.8.0"
-source = "git+https://github.com/dbus2/zbus.git?tag=zvariant-5.8.0#14fce7cb33b2e6fcc8f843d8cebaf1366ab089fa"
