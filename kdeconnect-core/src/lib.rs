@@ -443,7 +443,7 @@ impl KdeConnectCore {
                 };
             }
             AppEvent::Unpair(device_id) => {
-                info!("frontend sent pair event to device: {}", device_id);
+                info!("frontend sent unpair event to device: {}", device_id);
                 let _ = self.pairing.cancel_pairing(device_id).await;
             }
             AppEvent::Disconnect(device_id) => {
