@@ -14,7 +14,7 @@ use crate::{
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
     plugins::{ping::Ping, share::ShareRequest},
-    protocol::{DeviceFile, DevicePayload, Pair},
+    protocol::{DeviceFile, DevicePayload, PacketType, Pair, ProtocolPacket},
     transport::{TcpTransport, TransportEvent, UdpTransport},
 };
 
@@ -27,10 +27,6 @@ pub(crate) mod plugin_interface;
 pub mod plugins;
 pub(crate) mod protocol;
 pub(crate) mod transport;
-
-
-// Re-export commonly used protocol types for external crates
-pub use protocol::{ProtocolPacket, PacketType};
 
 pub static GLOBAL_CONFIG: OnceLock<config::Config> = OnceLock::new();
 
@@ -374,12 +370,6 @@ impl KdeConnectCore {
                         .send(device.clone(), pkt, self.event_tx.clone())
                         .await;
                 };
-            AppEvent::SendPacket(device_id, packet) => {
-                info!("Sending packet to device: {}", device_id);
-                if let Some(sender) = guard.get(&device_id) {
-                    let _ = sender.send(packet);
-                }
-            }
             }
             AppEvent::SendFiles((device_id, files_list)) => {
                 info!("frontend trying to sent files to device: {}", device_id);
