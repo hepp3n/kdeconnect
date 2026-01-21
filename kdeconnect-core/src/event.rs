@@ -38,6 +38,7 @@ pub enum AppEvent {
     SendFiles((DeviceId, Vec<String>)),
     MprisAction((DeviceId, String, MprisAction)),
     SendMprisRequest((DeviceId, MprisRequest)),
+    SendPacket(DeviceId, ProtocolPacket)
 }
 
 #[derive(Debug, Clone)]
