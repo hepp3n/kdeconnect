@@ -376,8 +376,18 @@ impl KdeConnectCore {
             }
             AppEvent::SendPacket(device_id, packet) => {
                 info!("Sending packet to device: {}", device_id);
+                eprintln!("!!! SENDING PACKET !!!");
+                eprintln!("  Device: {}", device_id.0);
+                eprintln!("  Packet type: {:?}", packet.packet_type);
+                eprintln!("  Body: {}", serde_json::to_string_pretty(&packet.body).unwrap_or_default());
+    
                 if let Some(sender) = guard.get(&device_id) {
-                    let _ = sender.send(packet);
+                    eprintln!("  ✓ Found sender for device");
+                    let result = sender.send(packet);
+                    eprintln!("  Send result: {:?}", result.is_ok());
+                } else {
+                    eprintln!("  ✗ NO SENDER found for device!");
+                    eprintln!("  Available devices: {:?}", guard.keys().collect::<Vec<_>>());
                 }
             }
             AppEvent::SendFiles((device_id, files_list)) => {
