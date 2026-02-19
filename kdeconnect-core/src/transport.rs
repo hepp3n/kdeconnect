@@ -78,7 +78,10 @@ impl TcpTransport {
 
             match listener.accept().await {
                 Ok((mut stream, peer)) => {
-                    info!("[tcp] new connection from {}", peer);
+                    info!(
+                        peer = ?peer,
+                        "[tcp] new connection"
+                    );
 
                     let mut buffer = String::new();
                     let (reader, _writer) = stream.split();
@@ -98,7 +101,12 @@ impl TcpTransport {
                         let id = peer_identity.device_id.clone();
 
                         if identity.device_id == peer_identity.device_id {
-                            warn!("skipping the same device");
+                            warn!(
+                                peer = ?peer,
+                                device_id = ?id,
+                                device_name = name.clone(),
+                                "skipping the same device"
+                            );
                             continue;
                         }
 
@@ -126,7 +134,7 @@ impl TcpTransport {
                             writer,
                             write_rx,
                             peer,
-                            DeviceId(id),
+                            DeviceId(id.clone()),
                         ))
                         .await;
 
@@ -134,10 +142,15 @@ impl TcpTransport {
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
-                            name,
+                            name: name.clone(),
                             write_tx,
                         }) {
-                            error!("[tcp] transport event channel closed: {}", e);
+                            error!(
+                                peer = ?peer,
+                                device_id = ?id,
+                                device_name = name,
+                                "[tcp] transport event channel closed: {}", e
+                            );
                         }
                     }
                 }
@@ -207,8 +220,15 @@ impl UdpTransport {
 
             loop {
                 match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
-                    Ok(size) => debug!("Sent {} bytes to {}", size, BROADCAST_ADDR),
-                    Err(e) => warn!("Failed to send UDP packet: {}", e),
+                    Ok(size) => debug!(
+                        addr = ?BROADCAST_ADDR,
+                        packet.size = size,
+                        "Sending udp broadcast"
+                    ),
+                    Err(e) => warn!(
+                        addr = ?BROADCAST_ADDR,
+                        "Failed to send UDP packet: {}", e
+                    ),
                 }
 
                 interval.tick().await;
@@ -243,7 +263,12 @@ impl UdpTransport {
 
                         if let Some(new_port) = peer_identity.tcp_port {
                             peer.set_port(new_port);
-                            info!("Device {} supports TCP at {}", id, peer);
+                            info!(
+                                peer = ?peer,
+                                device_id = ?id,
+                                device_name = name,
+                                "Device supports TCP"
+                            );
                         }
 
                         let mut stream = TcpStream::connect(peer).await?;
@@ -264,7 +289,12 @@ impl UdpTransport {
                             .await
                             .expect("Failed to accept TLS connection");
 
-                        info!("[udp] Established TLS connection with device {} ", id);
+                        info!(
+                            peer = ?peer,
+                            device_id = ?id,
+                            device_name = name,
+                            "[udp] Established TLS connection"
+                        );
 
                         let packet = ProtocolPacket::new(
                             PacketType::Identity,
@@ -286,7 +316,7 @@ impl UdpTransport {
                             writer,
                             write_rx,
                             peer,
-                            id,
+                            id.clone(),
                         ))
                         .await;
 
@@ -294,10 +324,15 @@ impl UdpTransport {
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
-                            name,
+                            name: name.clone(),
                             write_tx,
                         }) {
-                            error!("[udp] transport event channel closed: {}", e);
+                            error!(
+                                peer = ?peer,
+                                device_id = ?id,
+                                device_name = name,
+                                "[udp] transport event channel closed: {}", e
+                            );
                         }
                     }
                 }
@@ -328,12 +363,17 @@ async fn handle_connection<R, W>(
             match reader.read_line(&mut buffer).await {
                 Ok(0) => {
                     // connection closed
-                    warn!("[reader loop] connection to {} closed", peer);
+                    warn!(
+                        peer = ?peer,
+                        "[reader loop] connection closed");
                     break;
                 }
                 Ok(_len) => {
                     if buffer.trim().is_empty() {
-                        warn!("[reader loop] peer {} sent empty message", peer);
+                        warn!(
+                            peer = ?peer,
+                            "[reader loop] sent empty message"
+                        );
                         continue;
                     }
 
@@ -343,32 +383,50 @@ async fn handle_connection<R, W>(
                         id: id.clone(),
                         raw: buffer.trim().to_string(),
                     }) {
-                        error!("[reader loop] transport event channel closed: {}", e);
+                        error!(
+                            peer = ?peer,
+                            "[reader loop] transport event channel closed: {}", e
+                        );
                         break;
                     }
                 }
                 Err(e) => {
-                    error!("[reader loop] error reading from {}, {}", peer, e);
+                    error!(
+                        peer = ?peer,
+                        "[reader loop] error reading: {}", e);
                     break;
                 }
             }
 
             buffer.clear();
         }
-        warn!("reader loop for {} ended", peer);
+        warn!(
+            peer = ?peer,
+            "reader loop ended"
+        );
     });
 
     tokio::spawn(async move {
         while let Some(msg) = write_rx.lock().await.recv().await {
-            debug!("writing {}", msg.packet_type);
+            debug!(
+                peer = ?peer,
+                packet_type = ?msg.packet_type,
+                "writing"
+            );
 
             if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
-                error!("Error writing to {}: {}", peer, e);
+                error!(
+                    peer = ?peer,
+                    "Error writing: {}", e
+                );
                 break;
             }
         }
         let _ = writer.shutdown().await;
-        info!("writer task for {} ended", peer);
+        info!(
+            peer = ?peer,
+            "writer task ended"
+        );
     });
 }
 
