@@ -52,7 +52,7 @@ impl Ping {
 
             if reply {
                 let _ = event.send(CoreEvent::SendPacket {
-                    device: device_id,
+                    device_id: device_id,
                     packet,
                 });
             }
@@ -67,7 +67,7 @@ impl Ping {
         );
 
         let _ = core_event.send(CoreEvent::SendPacket {
-            device: device.device_id.clone(),
+            device_id: device.device_id.clone(),
             packet,
         });
     }

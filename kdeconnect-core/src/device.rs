@@ -121,7 +121,10 @@ impl DeviceManager {
     }
 
     pub async fn add_or_update_device(&self, device_id: DeviceId, device: Device) {
-        info!("updating: {}", device_id);
+        info!(
+            device.id = ?device_id.clone(),
+            "updating device"
+        );
         let mut guard = self.devices.write().await;
         guard.entry(device_id).insert_entry(device.clone());
     }
