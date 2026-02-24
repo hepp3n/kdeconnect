@@ -166,7 +166,7 @@ impl PluginRegistry {
                 }
             }
             _ => {
-                warn!(
+                debug!(
                     "No plugin found to handle packet type: {:?}",
                     packet.packet_type
                 );
