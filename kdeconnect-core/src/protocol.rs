@@ -71,6 +71,9 @@ pub enum PacketType {
     SystemVolumeRequest,
     Telephony,
     TelephonyRequestMute,
+    /// Any packet type not recognized by this implementation.
+    /// Stored so it can be logged and gracefully ignored rather than panicking.
+    Unknown(String),
 }
 
 impl From<String> for PacketType {
@@ -122,7 +125,10 @@ impl From<String> for PacketType {
             "kdeconnect.systemvolume.request" => PacketType::SystemVolumeRequest,
             "kdeconnect.telephony" => PacketType::Telephony,
             "kdeconnect.telephony.request_mute" => PacketType::TelephonyRequestMute,
-            _ => panic!("Unknown packet type received: {}", value),
+            other => {
+                tracing::debug!("Unknown packet type received: {}", other);
+                PacketType::Unknown(other.to_string())
+            }
         }
     }
 }
@@ -186,6 +192,7 @@ impl Display for PacketType {
             PacketType::SystemVolumeRequest => write!(f, "kdeconnect.systemvolume.request"),
             PacketType::Telephony => write!(f, "kdeconnect.telephony"),
             PacketType::TelephonyRequestMute => write!(f, "kdeconnect.telephony.request_mute"),
+            PacketType::Unknown(s) => write!(f, "{}", s),
         }
     }
 }
@@ -283,43 +290,6 @@ impl ProtocolPacket {
     }
 }
 
-pub struct DeviceFile<S: AsyncRead + Sync + Send + Unpin> {
-    pub buf: S,
-    pub size: i64,
-}
-
-impl DeviceFile<File> {
-    pub async fn try_from_tokio(file: File) -> anyhow::Result<Self> {
-        file.sync_all().await?;
-        let metadata = file.metadata().await?;
-
-        Ok(DeviceFile {
-            buf: file,
-            size: metadata.size().try_into().map_err(std::io::Error::other)?,
-        })
-    }
-
-    pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let path: &Path = path.as_ref();
-
-        Self::try_from_tokio(File::open(path).await?).await
-    }
-}
-
-pub struct DevicePayload<S: AsyncRead + Sync + Send + Unpin> {
-    pub buf: S,
-    pub size: i64,
-}
-
-impl<S: AsyncRead + Sync + Send + Unpin> From<DeviceFile<S>> for DevicePayload<S> {
-    fn from(file: DeviceFile<S>) -> Self {
-        Self {
-            buf: file.buf,
-            size: file.size,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
@@ -348,16 +318,40 @@ impl Pair {
                     .unwrap_or_default()
                     .as_secs(),
             );
-
-            return Pair {
-                pair: true,
-                timestamp,
-            };
+            return Pair { pair: true, timestamp };
         }
+        Pair { pair: response, timestamp: None }
+    }
+}
 
-        Pair {
-            pair: response,
-            timestamp: None,
-        }
+pub struct DeviceFile<S: AsyncRead + Sync + Send + Unpin> {
+    pub buf: S,
+    pub size: i64,
+}
+
+pub struct DevicePayload<S: AsyncRead + Sync + Send + Unpin> {
+    pub buf: S,
+    pub size: i64,
+}
+
+impl<S: AsyncRead + Sync + Send + Unpin> From<DeviceFile<S>> for DevicePayload<S> {
+    fn from(file: DeviceFile<S>) -> Self {
+        Self { buf: file.buf, size: file.size }
+    }
+}
+
+impl DeviceFile<File> {
+    pub async fn try_from_tokio(file: File) -> anyhow::Result<Self> {
+        file.sync_all().await?;
+        let metadata = file.metadata().await?;
+        Ok(DeviceFile {
+            buf: file,
+            size: metadata.size().try_into().map_err(std::io::Error::other)?,
+        })
+    }
+
+    pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path: &Path = path.as_ref();
+        Self::try_from_tokio(File::open(path).await?).await
     }
 }
