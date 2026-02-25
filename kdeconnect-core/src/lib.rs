@@ -291,6 +291,12 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
+                // Send pair confirmation so phone knows we trust it and starts sending plugin data
+                let pair = Pair::new(true);
+                let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
+                let _ = write_tx.send(pair_pkt);
+
                 // request mpris players
                 let request = crate::plugins::mpris::MprisRequest {
                     player: None,
