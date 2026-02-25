@@ -76,7 +76,9 @@ impl PluginRegistry {
                     battery.received_packet(connection_tx).await;
                 }
             }
-            PacketType::BatteryRequest => todo!(),
+            PacketType::BatteryRequest => {
+                debug!("BatteryRequest received — not implemented, ignoring");
+            }
             PacketType::SmsMessages => {
                 eprintln!("!!! Received SmsMessages packet in core !!!");
                 if let Ok(sms_messages) = serde_json::from_value::<plugins::sms::SmsMessages>(body.clone()) {
