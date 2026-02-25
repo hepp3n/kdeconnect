@@ -291,11 +291,20 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
-                // Send pair confirmation so phone knows we trust it and starts sending plugin data
-                let pair = Pair::new(true);
-                let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
-                let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
-                let _ = write_tx.send(pair_pkt);
+                // Only send pair confirmation if this device is already trusted on disk.
+                // Blindly sending pair: true to an untrusted phone causes it to reject
+                // with pair: false, triggering an unpair loop.
+                let pair_state = self.device_manager.get_device(&id).await
+                    .map(|d| d.pair_state)
+                    .unwrap_or(crate::device::PairState::NotPaired);
+
+                if pair_state == crate::device::PairState::Paired {
+                    let pair = Pair::new(true);
+                    let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
+                    let _ = write_tx.send(pair_pkt);
+                    info!("Sent pair confirmation to already-trusted device: {}", id);
+                }
 
                 // request mpris players
                 let request = crate::plugins::mpris::MprisRequest {
@@ -365,7 +374,18 @@ impl KdeConnectCore {
             }
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
-                let _ = self.pairing.request_pairing(device_id).await;
+                // Send pair request packet to the phone so it shows a pairing dialog
+                if let Some(sender) = guard.get(&device_id) {
+                    let pair = Pair::new(true);
+                    let value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                    let _ = sender.send(pkt);
+                    info!("Sent pair request packet to device: {}", device_id);
+                }
+                // Mark local state as Requesting — will become Paired when phone accepts
+                self.device_manager
+                    .update_pair_state(&device_id, crate::device::PairState::Requesting)
+                    .await;
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
