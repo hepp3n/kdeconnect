@@ -291,6 +291,13 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
+                // Always send pair:true on connect. If the phone is already paired it will
+                // confirm silently. If not paired it will show a dialog on the phone.
+                let pair = Pair::new(true);
+                let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
+                let _ = write_tx.send(pair_pkt);
+
                 // request mpris players
                 let request = crate::plugins::mpris::MprisRequest {
                     player: None,
@@ -322,13 +329,13 @@ impl KdeConnectCore {
                             if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
-                                // Phone sent pair:false while we are not paired — it knows us but
-                                // doesn't trust us. Initiate pairing so the user gets a dialog.
+                                // If phone sends pair:false while we are NotPaired, it knows us
+                                // but doesn't trust us — initiate pairing to show dialog on phone.
                                 if !pair_body.pair
                                     && device.pair_state == crate::device::PairState::NotPaired
                                 {
                                     info!(
-                                        "[core] Phone sent unpair while we are NotPaired — \
+                                        "[core] Phone sent unpair while NotPaired — \
                                         auto-initiating pair request to {}",
                                         id
                                     );
