@@ -291,9 +291,16 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
-                // Do NOT send pair:true unconditionally — it causes the phone to close
-                // the TLS connection if it doesn't consider us trusted yet. Instead,
-                // we wait for the phone to send pair:false, then auto-initiate pairing.
+                // If this device is already trusted on disk, send pair:true to confirm.
+                // The phone expects this confirmation before sending plugin data.
+                // Only send when Paired — sending to an untrusted phone causes CloseNotify.
+                if device.pair_state == crate::device::PairState::Paired {
+                    let pair = Pair::new(true);
+                    let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
+                    let _ = write_tx.send(pair_pkt);
+                    info!("[core] Sent pair confirmation to trusted device: {}", id);
+                }
 
                 // request mpris players
                 let request = crate::plugins::mpris::MprisRequest {
