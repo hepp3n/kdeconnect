@@ -320,8 +320,26 @@ impl KdeConnectCore {
                 let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
                 let _ = write_tx.send(pkt);
 
+                // Only replace writer_map if there is no existing live connection.
+                // The phone sometimes opens duplicate connections — the second one gets
+                // rejected (CloseNotify) after we send pair:true, leaving a dead write_tx
+                // in the map. Keeping the first live connection prevents this.
                 {
-                    self.writer_map.lock().await.insert(id, write_tx.clone());
+                    let mut guard = self.writer_map.lock().await;
+                    let existing_is_live = guard
+                        .get(&id)
+                        .map(|s| !s.is_closed())
+                        .unwrap_or(false);
+
+                    if existing_is_live {
+                        info!(
+                            "[core] Ignoring duplicate connection from {} — existing connection \
+                            is still live",
+                            id
+                        );
+                    } else {
+                        guard.insert(id, write_tx.clone());
+                    }
                 }
             }
             TransportEvent::IncomingPacket { addr, id, raw } => {
