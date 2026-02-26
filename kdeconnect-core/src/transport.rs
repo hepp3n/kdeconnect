@@ -369,11 +369,14 @@ async fn handle_connection<R, W>(
                     break;
                 }
                 Ok(_len) => {
+                    eprintln!("[reader] raw bytes from {}: {:?}", peer, buffer.trim());
+
                     if buffer.trim().is_empty() {
                         warn!(
                             peer = ?peer,
                             "[reader loop] sent empty message"
                         );
+                        buffer.clear();
                         continue;
                     }
 
