@@ -305,10 +305,20 @@ impl KdeConnectCore {
                 // a new pair:true from us on this connection.
                 self.pending_pair.lock().await.remove(&id);
 
-                // Always replace the writer_map entry. The phone opens a brand-new
-                // TCP connection after the user accepts pairing on the phone side.
-                // If we kept the old (now-dead) write_tx, all subsequent sends would
-                // silently fail.
+                // If already trusted, send pair:true so the phone knows we trust it too.
+                // Both sides must confirm before plugin data flows. Mark as pending so we
+                // don't send a second pair:true if the phone also sends pair:false.
+                if device.pair_state == crate::device::PairState::Paired {
+                    let pair = Pair::new(true);
+                    let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
+                    let _ = write_tx.send(pair_pkt);
+                    self.pending_pair.lock().await.insert(id.clone());
+                    info!("[core] Sent pair confirmation to trusted device: {}", id);
+                }
+
+                // Always replace the writer_map entry — phone opens a fresh TCP connection
+                // after pairing; keeping the old dead write_tx would silently drop all sends.
                 {
                     let mut guard = self.writer_map.lock().await;
                     guard.insert(id, write_tx.clone());
