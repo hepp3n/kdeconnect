@@ -301,24 +301,19 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
-                // Clear pending_pair so a fresh pair:false from the phone triggers
-                // a new pair:true from us on this connection.
+                // Clear pending_pair so any incoming pair:false triggers a fresh pair:true.
                 self.pending_pair.lock().await.remove(&id);
 
-                // If already trusted, send pair:true so the phone knows we trust it too.
-                // Both sides must confirm before plugin data flows. Mark as pending so we
-                // don't send a second pair:true if the phone also sends pair:false.
-                if device.pair_state == crate::device::PairState::Paired {
-                    let pair = Pair::new(true);
-                    let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
-                    let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
-                    let _ = write_tx.send(pair_pkt);
-                    self.pending_pair.lock().await.insert(id.clone());
-                    info!("[core] Sent pair confirmation to trusted device: {}", id);
-                }
+                // Per the KDE Connect protocol, pair:true is only for new pairings.
+                // On a trusted reconnect, both sides exchange identities and go straight
+                // to plugin data. Sending an unsolicited pair:true causes the phone to
+                // interpret it as a NEW pairing request and show a dialog, blocking all
+                // plugin data until the user taps Accept.
+                // If the phone does NOT trust us, it will send pair:false — our handler
+                // below responds to that with pair:true.
 
-                // Always replace the writer_map entry — phone opens a fresh TCP connection
-                // after pairing; keeping the old dead write_tx would silently drop all sends.
+                // Always replace the writer_map entry — phone may open a fresh connection
+                // after pairing; keeping a dead write_tx silently drops all sends.
                 {
                     let mut guard = self.writer_map.lock().await;
                     guard.insert(id, write_tx.clone());
