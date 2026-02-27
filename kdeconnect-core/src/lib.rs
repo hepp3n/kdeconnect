@@ -253,9 +253,17 @@ impl KdeConnectCore {
                 );
 
                 if let Some(sender) = guard.get(&device_id) {
-                    debug!("sender available.");
-                    let _ = sender.send(packet);
-                    debug!("packet sent....");
+                    debug!(
+                        packet.type = ?packet.packet_type,
+                        device.id = ?device_id.clone(),
+                        "sender available."
+                    );
+                    let _ = sender.send(packet.clone());
+                    debug!(
+                        packet.type = ?packet.packet_type,
+                        device.id = ?device_id,
+                        "packet sent...."
+                    );
                 }
             }
             CoreEvent::SendPaylod {
@@ -512,16 +520,21 @@ impl KdeConnectCore {
             }
             AppEvent::Unpair(device_id) => {
                 info!(
-                    device.id = ?device_id.clone(),
                     "frontend sent unpair event to device"
                 );
                 let _ = self.pairing.cancel_pairing(device_id).await;
             }
             AppEvent::Disconnect(device_id) => {
-                info!("frontend sent disconnect event to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend sent disconnect event to device"
+                );
                 if guard.remove(&device_id).is_some() {
-                    let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
-                    info!("Connection closed.");
+                    let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id.clone()));
+                    info!(
+                        device.id = ?device_id,
+                        "Connection closed."
+                    );
                 }
             }
         };
