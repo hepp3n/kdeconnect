@@ -323,9 +323,18 @@ impl UdpTransport {
                             "[udp] Established TLS connection"
                         );
 
-                        // No post-TLS identity write here — already sent pre-TLS above.
-                        // Sending a second identity confuses the phone (it has already
-                        // parsed one and moved past the identity exchange stage).
+                        // Send identity post-TLS. KDE Connect requires identity on both
+                        // sides of TLS — the pre-TLS one is used to identify who is
+                        // connecting for the handshake, but the post-TLS identity is what
+                        // the phone uses for plugin negotiation and pairing authorization.
+                        let post_tls_identity = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = tls_stream.write_all(post_tls_identity.as_slice()).await;
                         let _ = tls_stream.flush().await;
 
                         let (reader, writer) = split(tls_stream);
