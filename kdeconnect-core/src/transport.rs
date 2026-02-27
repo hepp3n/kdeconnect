@@ -110,9 +110,16 @@ impl TcpTransport {
                             continue;
                         }
 
-                        let mut stream = TlsConnector::from(self.client_config.clone())
+                        let mut stream = match TlsConnector::from(self.client_config.clone())
                             .connect(id.clone().try_into()?, stream)
-                            .await?;
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "TLS connect failed: {}", e);
+                                continue;
+                            }
+                        };
 
                         let packet = ProtocolPacket::new(
                             PacketType::Identity,
@@ -128,15 +135,14 @@ impl TcpTransport {
                         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                         let write_rx = Arc::new(Mutex::new(write_rx));
 
-                        let _ = tokio::spawn(handle_connection(
+                        tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
                             write_rx,
                             peer,
                             DeviceId(id.clone()),
-                        ))
-                        .await;
+                        ));
 
                         // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
@@ -250,7 +256,13 @@ impl UdpTransport {
             match self.socket.recv_from(&mut buf).await {
                 Ok((len, mut peer)) => {
                     let raw = &buf[..len];
-                    let packet = ProtocolPacket::from_raw(raw).expect("Failed to parse UDP packet");
+                    let packet = match ProtocolPacket::from_raw(raw) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Failed to parse UDP packet: {}", e);
+                            continue;
+                        }
+                    };
 
                     if let Ok(peer_identity) = serde_json::from_value::<Identity>(packet.body) {
                         if this_identity.device_id == peer_identity.device_id {
@@ -271,7 +283,13 @@ impl UdpTransport {
                             );
                         }
 
-                        let mut stream = TcpStream::connect(peer).await?;
+                        let mut stream = match TcpStream::connect(peer).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "TCP connect failed: {}", e);
+                                continue;
+                            }
+                        };
 
                         // Send our identity before TLS — required by KDE Connect protocol
                         // so the phone knows who is connecting before the handshake
@@ -286,10 +304,13 @@ impl UdpTransport {
 
                         let acceptor = TlsAcceptor::from(self.server_config.clone());
 
-                        let mut tls_stream = acceptor
-                            .accept(stream)
-                            .await
-                            .expect("Failed to accept TLS connection");
+                        let mut tls_stream = match acceptor.accept(stream).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "TLS handshake failed: {}", e);
+                                continue;
+                            }
+                        };
 
                         info!(
                             peer = ?peer,
@@ -312,15 +333,14 @@ impl UdpTransport {
                         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                         let write_rx = Arc::new(Mutex::new(write_rx));
 
-                        let _ = tokio::spawn(handle_connection(
+                        tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
                             write_rx,
                             peer,
                             id.clone(),
-                        ))
-                        .await;
+                        ));
 
                         // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
