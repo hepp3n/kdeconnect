@@ -45,8 +45,9 @@ pub struct KdeConnectCore {
     out_tx: Arc<mpsc::UnboundedSender<AppEvent>>,
     in_rx: mpsc::UnboundedReceiver<AppEvent>,
     conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
-    // Separate channel for MPRIS proxy
     mpris_conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
+    // Devices we already sent pair:true to this session — prevent double-sending
+    pending_pair: Arc<Mutex<std::collections::HashSet<DeviceId>>>,
 }
 
 impl KdeConnectCore {
@@ -136,7 +137,8 @@ impl KdeConnectCore {
                 out_tx: Arc::new(out_tx),
                 in_rx,
                 conn_tx,
-                mpris_conn_tx, // Store the sender
+                mpris_conn_tx,
+                pending_pair: Arc::new(Mutex::new(std::collections::HashSet::new())),
             },
             conn_rx,
         ))
@@ -207,7 +209,27 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired.");
-                // pair:true confirmation is handled by the pairing module — do not send here
+                // Clear pending_pair — this device is now trusted
+                self.pending_pair.lock().await.remove(&device_id);
+                // Send MprisRequest now that the phone trusts us
+                if let Some(sender) = guard.get(&device_id) {
+                    let request = crate::plugins::mpris::MprisRequest {
+                        player: None,
+                        request_now_playing: Some(true),
+                        request_player_list: Some(true),
+                        request_volume: None,
+                        seek: None,
+                        set_loop_status: None,
+                        set_position: None,
+                        set_shuffle: None,
+                        set_volume: None,
+                        action: None,
+                        album_art_url: None,
+                    };
+                    let value = serde_json::to_value(request).expect("fail serializing mpris request");
+                    let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
+                    let _ = sender.send(pkt);
+                }
                 let conn_event = ConnectionEvent::DevicePaired((device_id, device));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
@@ -276,59 +298,20 @@ impl KdeConnectCore {
                     .await;
 
                 let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));
-                // Send to both channels
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
 
-                // If this device is already trusted on disk, send pair:true to confirm.
-                // The phone expects this confirmation before sending plugin data.
-                // Only send when Paired — sending to an untrusted phone causes CloseNotify.
-                if device.pair_state == crate::device::PairState::Paired {
-                    let pair = Pair::new(true);
-                    let pair_value = serde_json::to_value(pair).expect("fail serializing pair");
-                    let pair_pkt = ProtocolPacket::new(PacketType::Pair, pair_value);
-                    let _ = write_tx.send(pair_pkt);
-                    info!("[core] Sent pair confirmation to trusted device: {}", id);
-                }
+                // Clear pending_pair so a fresh pair:false from the phone triggers
+                // a new pair:true from us on this connection.
+                self.pending_pair.lock().await.remove(&id);
 
-                // request mpris players
-                let request = crate::plugins::mpris::MprisRequest {
-                    player: None,
-                    request_now_playing: Some(true),
-                    request_player_list: Some(true),
-                    request_volume: None,
-                    seek: None,
-                    set_loop_status: None,
-                    set_position: None,
-                    set_shuffle: None,
-                    set_volume: None,
-                    action: None,
-                    album_art_url: None,
-                };
-                let value = serde_json::to_value(request).expect("fail serializing packet body");
-                let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
-                let _ = write_tx.send(pkt);
-
-                // Only replace writer_map if there is no existing live connection.
-                // The phone sometimes opens duplicate connections — the second one gets
-                // rejected (CloseNotify) after we send pair:true, leaving a dead write_tx
-                // in the map. Keeping the first live connection prevents this.
+                // Always replace the writer_map entry. The phone opens a brand-new
+                // TCP connection after the user accepts pairing on the phone side.
+                // If we kept the old (now-dead) write_tx, all subsequent sends would
+                // silently fail.
                 {
                     let mut guard = self.writer_map.lock().await;
-                    let existing_is_live = guard
-                        .get(&id)
-                        .map(|s| !s.is_closed())
-                        .unwrap_or(false);
-
-                    if existing_is_live {
-                        info!(
-                            "[core] Ignoring duplicate connection from {} — existing connection \
-                            is still live",
-                            id
-                        );
-                    } else {
-                        guard.insert(id, write_tx.clone());
-                    }
+                    guard.insert(id, write_tx.clone());
                 }
             }
             TransportEvent::IncomingPacket { addr, id, raw } => {
@@ -343,27 +326,35 @@ impl KdeConnectCore {
                                 // If phone sends pair:false, it doesn't trust us — initiate
                                 // pairing regardless of our local state (NotPaired or Paired).
                                 if !pair_body.pair {
-                                    info!(
-                                        "[core] Phone sent pair:false — auto-initiating pair \
-                                        request to {}",
-                                        id
-                                    );
-                                    let guard = self.writer_map.lock().await;
-                                    if let Some(sender) = guard.get(&id) {
-                                        let pair = Pair::new(true);
-                                        let value = serde_json::to_value(pair)
-                                            .expect("fail serializing pair");
-                                        let pair_pkt =
-                                            ProtocolPacket::new(PacketType::Pair, value);
-                                        let _ = sender.send(pair_pkt);
+                                    if self.pending_pair.lock().await.contains(&id) {
+                                        info!(
+                                            "[core] pair:false from {} — already sent pair:true, ignoring duplicate",
+                                            id
+                                        );
+                                    } else {
+                                        info!(
+                                            "[core] Phone sent pair:false — auto-initiating pair \
+                                            request to {}",
+                                            id
+                                        );
+                                        let guard = self.writer_map.lock().await;
+                                        if let Some(sender) = guard.get(&id) {
+                                            let pair = Pair::new(true);
+                                            let value = serde_json::to_value(pair)
+                                                .expect("fail serializing pair");
+                                            let pair_pkt =
+                                                ProtocolPacket::new(PacketType::Pair, value);
+                                            let _ = sender.send(pair_pkt);
+                                            self.pending_pair.lock().await.insert(id.clone());
+                                        }
+                                        drop(guard);
+                                        self.device_manager
+                                            .update_pair_state(
+                                                &id,
+                                                crate::device::PairState::Requesting,
+                                            )
+                                            .await;
                                     }
-                                    drop(guard);
-                                    self.device_manager
-                                        .update_pair_state(
-                                            &id,
-                                            crate::device::PairState::Requesting,
-                                        )
-                                        .await;
                                 } else {
                                     let _ = self
                                         .pairing
