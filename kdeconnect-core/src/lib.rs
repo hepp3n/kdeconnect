@@ -291,53 +291,40 @@ impl KdeConnectCore {
                     .await
                     .expect("cannot create new device from metadata");
 
-                tracing::info!("new connection sent to frontend");
-
                 self.device_manager
                     .add_or_update_device(id.clone(), device.clone())
                     .await;
 
-                let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));
-                let _ = self.conn_tx.send(conn_event.clone());
-                let _ = self.mpris_conn_tx.send(conn_event);
+                // Duplicate guard: keep existing connection if still live.
+                // The phone re-broadcasts UDP identity every ~90s even when connected.
+                // Replacing the live writer entry drops the sender → CloseNotify →
+                // phone stops sending plugin data. Only replace when entry is dead.
+                let accepted = {
+                    let mut guard = self.writer_map.lock().await;
+                    match guard.get(&id) {
+                        Some(existing) if !existing.is_closed() => {
+                            info!("[core] Duplicate connection from {} — keeping existing live connection", id);
+                            false
+                        }
+                        _ => {
+                            guard.insert(id.clone(), write_tx);
+                            true
+                        }
+                    }
+                };
+
+                if !accepted {
+                    return;
+                }
+
+                tracing::info!("new connection sent to frontend");
 
                 // Clear pending_pair so any incoming pair:false triggers a fresh pair:true.
                 self.pending_pair.lock().await.remove(&id);
 
-                // Do NOT proactively send pair:true on reconnect.
-                // Per the KDE Connect protocol, pair:true is only for new pairings.
-                // On a trusted reconnect, both sides exchange identities and go straight
-                // to plugin data. Sending an unsolicited pair:true causes the phone to
-                // interpret it as a NEW pairing request and show a dialog, blocking all
-                // plugin data until the user taps Accept.
-                // If the phone does NOT trust us, it will send pair:false — our handler
-                // below responds to that with pair:true.
-
-                // Only replace writer_map if no live connection exists.
-                // The phone opens two connections in rapid succession — one from
-                // UDP discovery (us→phone) and one from TCP listener (phone→us).
-                // Replacing the first with the second drops the first write_tx,
-                // which causes its writer task to shutdown() and sends CloseNotify
-                // to the phone, making the phone stop sending plugin data entirely.
-                // Keep the first live connection; the duplicate will be ignored.
-                // Exception: if the existing entry is dead (channel closed), replace
-                // it — this handles reconnects after the previous session ended.
-                {
-                    let mut guard = self.writer_map.lock().await;
-                    let existing_is_live = guard
-                        .get(&id)
-                        .map(|s| !s.is_closed())
-                        .unwrap_or(false);
-
-                    if existing_is_live {
-                        info!(
-                            "[core] Duplicate connection from {} — keeping existing live connection",
-                            id
-                        );
-                    } else {
-                        guard.insert(id, write_tx.clone());
-                    }
-                }
+                let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));
+                let _ = self.conn_tx.send(conn_event.clone());
+                let _ = self.mpris_conn_tx.send(conn_event);
             }
             TransportEvent::IncomingPacket { addr, id, raw } => {
                 info!("[core] incoming packet.");
@@ -406,6 +393,15 @@ impl KdeConnectCore {
                         )));
                     }
                 }
+            }
+            TransportEvent::Disconnected { id } => {
+                // Reader loop ended — remove the dead write_tx so the next
+                // NewConnection for this device can insert a fresh one.
+                self.writer_map.lock().await.remove(&id);
+                info!("[core] removed dead connection for {}", id);
+                let conn_event = ConnectionEvent::Disconnected(id);
+                let _ = self.conn_tx.send(conn_event.clone());
+                let _ = self.mpris_conn_tx.send(conn_event);
             }
         }
     }
