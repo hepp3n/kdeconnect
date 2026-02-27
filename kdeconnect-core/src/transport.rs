@@ -292,16 +292,19 @@ impl UdpTransport {
                             }
                         };
 
-                        // Send our identity before TLS — required by KDE Connect protocol
-                        // so the phone knows who is connecting before the handshake
-                        let packet = ProtocolPacket::new(
+                        // Send our identity pre-TLS — required by KDE Connect UDP discovery
+                        // protocol. The phone reads this plaintext identity to know who is
+                        // connecting before initiating the TLS handshake. Do NOT send identity
+                        // again after TLS in this path.
+                        let pre_tls_identity = ProtocolPacket::new(
                             PacketType::Identity,
                             serde_json::to_value(&*self.identity).unwrap(),
                         )
                         .as_raw()
                         .expect("Failed to serialize identity packet");
 
-                        let _ = stream.write_all(packet.as_slice()).await;
+                        let _ = stream.write_all(pre_tls_identity.as_slice()).await;
+                        let _ = stream.flush().await;
 
                         let acceptor = TlsAcceptor::from(self.server_config.clone());
 
@@ -320,14 +323,9 @@ impl UdpTransport {
                             "[udp] Established TLS connection"
                         );
 
-                        let packet = ProtocolPacket::new(
-                            PacketType::Identity,
-                            serde_json::to_value(&*self.identity).unwrap(),
-                        )
-                        .as_raw()
-                        .expect("Failed to serialize identity packet");
-
-                        let _ = tls_stream.write_all(packet.as_slice()).await;
+                        // No post-TLS identity write here — already sent pre-TLS above.
+                        // Sending a second identity confuses the phone (it has already
+                        // parsed one and moved past the identity exchange stage).
                         let _ = tls_stream.flush().await;
 
                         let (reader, writer) = split(tls_stream);
