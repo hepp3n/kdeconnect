@@ -54,6 +54,6 @@ impl SmsMessages {
 
 impl Plugin for SmsMessages {
     fn id(&self) -> &'static str {
-        "sms"
+        "kdeconnect.sms.messages"
     }
 }
