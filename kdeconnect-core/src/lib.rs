@@ -304,6 +304,7 @@ impl KdeConnectCore {
                 // Clear pending_pair so any incoming pair:false triggers a fresh pair:true.
                 self.pending_pair.lock().await.remove(&id);
 
+                // Do NOT proactively send pair:true on reconnect.
                 // Per the KDE Connect protocol, pair:true is only for new pairings.
                 // On a trusted reconnect, both sides exchange identities and go straight
                 // to plugin data. Sending an unsolicited pair:true causes the phone to
@@ -312,11 +313,30 @@ impl KdeConnectCore {
                 // If the phone does NOT trust us, it will send pair:false — our handler
                 // below responds to that with pair:true.
 
-                // Always replace the writer_map entry — phone may open a fresh connection
-                // after pairing; keeping a dead write_tx silently drops all sends.
+                // Only replace writer_map if no live connection exists.
+                // The phone opens two connections in rapid succession — one from
+                // UDP discovery (us→phone) and one from TCP listener (phone→us).
+                // Replacing the first with the second drops the first write_tx,
+                // which causes its writer task to shutdown() and sends CloseNotify
+                // to the phone, making the phone stop sending plugin data entirely.
+                // Keep the first live connection; the duplicate will be ignored.
+                // Exception: if the existing entry is dead (channel closed), replace
+                // it — this handles reconnects after the previous session ended.
                 {
                     let mut guard = self.writer_map.lock().await;
-                    guard.insert(id, write_tx.clone());
+                    let existing_is_live = guard
+                        .get(&id)
+                        .map(|s| !s.is_closed())
+                        .unwrap_or(false);
+
+                    if existing_is_live {
+                        info!(
+                            "[core] Duplicate connection from {} — keeping existing live connection",
+                            id
+                        );
+                    } else {
+                        guard.insert(id, write_tx.clone());
+                    }
                 }
             }
             TransportEvent::IncomingPacket { addr, id, raw } => {
