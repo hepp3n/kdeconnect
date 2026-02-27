@@ -271,7 +271,18 @@ impl UdpTransport {
                             );
                         }
 
-                        let stream = TcpStream::connect(peer).await?;
+                        let mut stream = TcpStream::connect(peer).await?;
+
+                        // Send our identity before TLS — required by KDE Connect protocol
+                        // so the phone knows who is connecting before the handshake
+                        let packet = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = stream.write_all(packet.as_slice()).await;
 
                         let acceptor = TlsAcceptor::from(self.server_config.clone());
 
@@ -360,11 +371,14 @@ async fn handle_connection<R, W>(
                     break;
                 }
                 Ok(_len) => {
+                    eprintln!("[reader] raw bytes from {}: {:?}", peer, buffer.trim());
+
                     if buffer.trim().is_empty() {
                         warn!(
                             peer = ?peer,
                             "[reader loop] sent empty message"
                         );
+                        buffer.clear();
                         continue;
                     }
 

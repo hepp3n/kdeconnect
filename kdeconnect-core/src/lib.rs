@@ -207,19 +207,8 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired.");
-
-                let sender = guard.get(&device_id);
-
-                let pair = Pair::new(true);
-                let value = serde_json::to_value(pair).expect("failed serialize packet");
-                let pair_packet = ProtocolPacket::new(PacketType::Pair, value);
-
-                if let Some(sender) = sender {
-                    sender.send(pair_packet).unwrap();
-                }
-
+                // pair:true confirmation is handled by the pairing module — do not send here
                 let conn_event = ConnectionEvent::DevicePaired((device_id, device));
-                // Send to both channels
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
