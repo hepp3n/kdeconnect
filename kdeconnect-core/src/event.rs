@@ -12,15 +12,15 @@ pub enum CoreEvent {
     DevicePairCancelled(DeviceId),
     DevicePairStateChanged((DeviceId, PairState)),
     PacketReceived {
-        device: DeviceId,
+        device_id: DeviceId,
         packet: ProtocolPacket,
     },
     SendPacket {
-        device: DeviceId,
+        device_id: DeviceId,
         packet: ProtocolPacket,
     },
     SendPaylod {
-        device: DeviceId,
+        device_id: DeviceId,
         packet: ProtocolPacket,
         payload: Box<dyn AsyncRead + Sync + Send + Unpin>,
         payload_size: i64,

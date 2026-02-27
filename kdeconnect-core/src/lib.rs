@@ -6,7 +6,7 @@ use tokio::{
     select,
     sync::{Mutex, mpsc},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager},
@@ -129,7 +129,7 @@ impl KdeConnectCore {
     }
 
     pub async fn run_event_loop(&mut self) {
-        info!("Starting KdeConnect event loop");
+        info!("Starting KDE-Connect event loop");
 
         loop {
             select! {
@@ -153,7 +153,7 @@ impl KdeConnectCore {
                     match maybe_kde {
                         Some(event) => self.kde_events(event).await,
                         None => {
-                            let _ = self.event_tx.send(CoreEvent::Error("KdeEvent channel closed".to_string()));
+                            let _ = self.event_tx.send(CoreEvent::Error("KDEConnect Event channel closed".to_string()));
                         }
                     }
                 }
@@ -165,10 +165,14 @@ impl KdeConnectCore {
         let guard = self.writer_map.lock().await;
 
         match event {
-            CoreEvent::PacketReceived { device, packet } => {
-                info!("[core] packet received: {}", packet.packet_type);
+            CoreEvent::PacketReceived { device_id, packet } => {
+                info!(
+                    device.id = ?device_id.clone(),
+                    packet.type = ?packet.packet_type,
+                    "packet received"
+                );
 
-                if let Some(device) = self.device_manager.get_device(&device).await {
+                if let Some(device) = self.device_manager.get_device(&device_id).await {
                     // dispatch to plugins
                     self.plugin_registry
                         .dispatch(
@@ -180,15 +184,21 @@ impl KdeConnectCore {
                         .await;
                 };
             }
-            CoreEvent::DeviceDiscovered(device) => {
-                info!("[core] device discovered.");
+            CoreEvent::DeviceDiscovered(device_id) => {
+                info!(
+                    device.id = ?device_id.clone(),
+                    "device discovered"
+                );
                 let _ = self.conn_tx.send(ConnectionEvent::Connected((
-                    device.device_id.clone(),
-                    device,
+                    device_id.device_id.clone(),
+                    device_id,
                 )));
             }
             CoreEvent::DevicePaired((device_id, device)) => {
-                info!("[core] device paired.");
+                info!(
+                    device.id = ?device_id.clone(),
+                    "device paired."
+                );
 
                 let sender = guard.get(&device_id);
 
@@ -205,7 +215,10 @@ impl KdeConnectCore {
                     .send(ConnectionEvent::DevicePaired((device_id, device)));
             }
             CoreEvent::DevicePairCancelled(device_id) => {
-                info!("[core] device pair cancelled.");
+                info!(
+                    device.id = ?device_id.clone(),
+                    "device pair cancelled."
+                );
 
                 let sender = guard.get(&device_id);
 
@@ -223,31 +236,47 @@ impl KdeConnectCore {
                 )));
             }
             CoreEvent::DevicePairStateChanged((device_id, state)) => {
-                info!("[core] pair state updated: {:?}", state);
+                info!(
+                    device.id = ?device_id.clone(),
+                    state = ?state.clone(),
+                    "pair state updated"
+                );
                 let _ = self
                     .conn_tx
                     .send(ConnectionEvent::PairStateChanged((device_id, state)));
             }
-            CoreEvent::SendPacket { device, packet } => {
+            CoreEvent::SendPacket { device_id, packet } => {
                 info!(
-                    "[core] send packet: [{}] to device: {}",
-                    packet.packet_type, device
+                    packet.type = ?packet.packet_type,
+                    device.id = ?device_id.clone(),
+                    "send packet"
                 );
 
-                if let Some(sender) = guard.get(&device) {
-                    debug!("sender available.");
-                    let _ = sender.send(packet);
-                    debug!("packet sent....");
+                if let Some(sender) = guard.get(&device_id) {
+                    debug!(
+                        packet.type = ?packet.packet_type,
+                        device.id = ?device_id.clone(),
+                        "sender available."
+                    );
+                    let _ = sender.send(packet.clone());
+                    debug!(
+                        packet.type = ?packet.packet_type,
+                        device.id = ?device_id,
+                        "packet sent...."
+                    );
                 }
             }
             CoreEvent::SendPaylod {
-                device: device_id,
+                device_id,
                 packet,
                 payload,
                 payload_size,
             } => {
                 if let Some(sender) = guard.get(&device_id) {
-                    debug!("sender available.");
+                    debug!(
+                        device.id = ?device_id.clone(),
+                        "sender available."
+                    );
 
                     if let Some(_device) = self.device_manager.get_device(&device_id).await {
                         // dispatch to plugins
@@ -256,11 +285,14 @@ impl KdeConnectCore {
                             .await;
                     };
 
-                    debug!("packet sent....");
+                    debug!(
+                        device.id = ?device_id.clone(),
+                        "packet sent...."
+                    );
                 }
             }
             CoreEvent::Error(e) => {
-                tracing::error!("Core error: {}", e);
+                error!("Core error: {}", e);
             }
         }
     }
@@ -274,14 +306,24 @@ impl KdeConnectCore {
                 write_tx,
             } => {
                 // store write_tx for this addr
-                debug!("[core] new connection from: {}", addr);
+                debug!(
+                    address = ?addr.clone(),
+                    device.id = id.0.clone(),
+                    device.name = name.clone(),
+                    "new connection"
+                );
 
                 // create device entry
-                let device = Device::new(id.0.clone(), name, addr)
+                let device = Device::new(id.0.clone(), name.clone(), addr)
                     .await
                     .expect("cannot create new device from metadata");
 
-                tracing::info!("new connection sent to frontend");
+                info!(
+                    address = ?addr.clone(),
+                    device.id = id.0.clone(),
+                    device.name = name,
+                    "new connection sent to frontend"
+                );
 
                 self.device_manager
                     .add_or_update_device(id.clone(), device.clone())
@@ -314,7 +356,11 @@ impl KdeConnectCore {
                 }
             }
             TransportEvent::IncomingPacket { addr, id, raw } => {
-                info!("[core] incoming packet.");
+                info!(
+                    address = ?addr.clone(),
+                    device.id = id.0.clone(),
+                    "incoming packet."
+                );
                 match serde_json::from_str::<ProtocolPacket>(&raw) {
                     Ok(pkt) => {
                         // if packet is type `pair` handle it immediately
@@ -334,7 +380,7 @@ impl KdeConnectCore {
                             }
                         } else {
                             let _ = self.event_tx.send(CoreEvent::PacketReceived {
-                                device: id.clone(),
+                                device_id: id.clone(),
                                 packet: pkt.clone(),
                             });
                         }
@@ -358,11 +404,16 @@ impl KdeConnectCore {
                 let _ = self.udp_transport.send_identity().await;
             }
             AppEvent::Pair(device_id) => {
-                info!("frontend sent pair event to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend sent pair event to device");
                 let _ = self.pairing.request_pairing(device_id).await;
             }
             AppEvent::Ping((device_id, msg)) => {
-                info!("frontend sent ping event to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend sent ping event to device"
+                );
 
                 let value = serde_json::to_value(Ping { message: Some(msg) })
                     .expect("fail serializing packet body");
@@ -375,16 +426,25 @@ impl KdeConnectCore {
                 };
             }
             AppEvent::SendPacket(device_id, packet) => {
-                info!("Sending packet to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "Sending packet to device"
+                );
                 if let Some(sender) = guard.get(&device_id) {
                     let _ = sender.send(packet);
                 }
             }
             AppEvent::SendFiles((device_id, files_list)) => {
-                info!("frontend trying to sent files to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend trying to sent files to device"
+                );
 
                 if let Some(sender) = guard.get(&device_id) {
-                    debug!("sender available.");
+                    debug!(
+                        device.id = ?device_id.clone(),
+                        "sender available"
+                    );
 
                     let pkts = ShareRequest::share_files(files_list)
                         .await
@@ -407,13 +467,17 @@ impl KdeConnectCore {
                         };
                     }
 
-                    debug!("packet sent....");
+                    debug!(
+                        device.id = ?device_id.clone(),
+                        "packet sent...."
+                    );
                 }
             }
             AppEvent::MprisAction((device_id, player_name, action)) => {
                 info!(
-                    "frontend sent mpris action to device: {} player: {}",
-                    device_id, player_name
+                    device.id = ?device_id.clone(),
+                    player = player_name.clone(),
+                    "frontend sent mpris action to device"
                 );
 
                 let request = crate::plugins::mpris::MprisRequest {
@@ -440,7 +504,10 @@ impl KdeConnectCore {
                 };
             }
             AppEvent::SendMprisRequest((device_id, request)) => {
-                info!("frontend sent mpris request to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend sent mpris request to device"
+                );
 
                 let value = serde_json::to_value(request).expect("fail serializing packet body");
                 let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
@@ -452,14 +519,22 @@ impl KdeConnectCore {
                 };
             }
             AppEvent::Unpair(device_id) => {
-                info!("frontend sent unpair event to device: {}", device_id);
+                info!(
+                    "frontend sent unpair event to device"
+                );
                 let _ = self.pairing.cancel_pairing(device_id).await;
             }
             AppEvent::Disconnect(device_id) => {
-                info!("frontend sent disconnect event to device: {}", device_id);
+                info!(
+                    device.id = ?device_id.clone(),
+                    "frontend sent disconnect event to device"
+                );
                 if guard.remove(&device_id).is_some() {
-                    let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id));
-                    info!("Connection closed.");
+                    let _ = self.conn_tx.send(ConnectionEvent::Disconnected(device_id.clone()));
+                    info!(
+                        device.id = ?device_id,
+                        "Connection closed."
+                    );
                 }
             }
         };

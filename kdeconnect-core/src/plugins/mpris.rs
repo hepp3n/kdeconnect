@@ -242,7 +242,7 @@ impl MprisRequest {
                 );
 
                 let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                    device: device.device_id.clone(),
+                    device_id: device.device_id.clone(),
                     packet,
                 });
             }
@@ -324,7 +324,7 @@ impl MprisRequest {
                     );
 
                     let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
-                        device: device.device_id.clone(),
+                        device_id: device.device_id.clone(),
                         packet: construct_packet,
                         payload: Box::new(payload.buf),
                         payload_size: payload.size,
@@ -343,7 +343,7 @@ impl MprisRequest {
                 );
 
                 let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                    device: device.device_id.clone(),
+                    device_id: device.device_id.clone(),
                     packet: construct_packet,
                 });
             }
@@ -361,7 +361,7 @@ impl MprisRequest {
         );
 
         let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-            device: device.device_id.clone(),
+            device_id: device.device_id.clone(),
             packet,
         });
     }
@@ -420,7 +420,7 @@ pub fn monitor_mpris(
                                 let devices = dm.get_devices().await;
                                 for device in devices {
                                     let _ = ctx.send(crate::event::CoreEvent::SendPacket {
-                                        device: device.device_id.clone(),
+                                        device_id: device.device_id.clone(),
                                         packet: packet.clone(),
                                     });
                                 }
