@@ -129,6 +129,7 @@ impl TcpTransport {
                         .expect("Failed to serialize identity packet");
 
                         let _ = stream.write_all(packet.as_slice()).await;
+                        let _ = stream.flush().await;
 
                         let (reader, writer) = split(stream);
 
@@ -327,6 +328,7 @@ impl UdpTransport {
                         .expect("Failed to serialize identity packet");
 
                         let _ = tls_stream.write_all(packet.as_slice()).await;
+                        let _ = tls_stream.flush().await;
 
                         let (reader, writer) = split(tls_stream);
 
