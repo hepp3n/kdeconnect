@@ -1,6 +1,6 @@
 # Testing on COSMIC Desktop
 
-For testing COSMIC desktop applet, you can build it with help of Makefile.
+For testing COSMIC desktop applet, you can build it with help of justfile.
 
 # Cloning repository
 
@@ -12,15 +12,21 @@ For testing COSMIC desktop applet, you can build it with help of Makefile.
 
 # Building
 
-`make build`
+`just build`
 
 # Installing
 
-`sudo make install`
+`just install`
+
+# Enable kdeconnect-service
+
+`just enable-service`
+
+**Maybe need to reboot to get applet to show on panel**
 
 # Uninstalling
 
-`sudo make uninstall`
+`just uninstall`
 
 Make sure you have [rustup.rs](https://rustup.rs) installed on your system.
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=KDE Connect Service for COSMIC
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/kdeconnect-service
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

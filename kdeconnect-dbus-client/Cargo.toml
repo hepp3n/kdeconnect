@@ -1,0 +1,14 @@
+# kdeconnect-dbus-client/Cargo.toml
+[package]
+name = "kdeconnect-dbus-client"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+zbus = "5.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+futures = "0.3"

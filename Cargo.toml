@@ -1,13 +1,33 @@
+# Cargo.toml
 [workspace]
-members = ["cosmic-ext-applet-connect", "kdeconnect-core"]
-resolver = "3"
+members = [
+    "cosmic-connect-applet",
+    "kdeconnect-service",
+    "kdeconnect-dbus-client",
+    "kdeconnect-core",
+]
+resolver = "2"
 
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 anyhow = "1.0"
 ashpd = "0.12.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-tokio = { version = "1.48", features = ["full"] }
-tracing = "0.1"
+futures = "0.3"
+zbus = "5.9"
+
+kdeconnect-core = { path = "kdeconnect-core" }
+kdeconnect-dbus-client = { path = "kdeconnect-dbus-client" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
