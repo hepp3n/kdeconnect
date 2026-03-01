@@ -1,4 +1,27 @@
-target/
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation build
+/doc/
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# Dev Notes
+Dev/
+
+#move
 .cargo/
 vendor/
 vendor.tar

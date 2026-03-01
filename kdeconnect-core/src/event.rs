@@ -3,6 +3,7 @@ use tokio::io::AsyncRead;
 use crate::{
     device::{Device, DeviceId, DeviceState, PairState},
     plugins::mpris::{Mpris, MprisAction, MprisRequest},
+    plugins::sms::SmsMessages,
     protocol::ProtocolPacket,
 };
 
@@ -50,4 +51,5 @@ pub enum ConnectionEvent {
     StateUpdated(DeviceState),
     PairStateChanged((DeviceId, PairState)),
     Mpris((DeviceId, Mpris)),
+    SmsMessages(SmsMessages),
 }

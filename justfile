@@ -1,0 +1,82 @@
+# justfile
+
+APPID := "io.github.hepp3n.kdeconnect"
+
+build:
+    cargo build --release
+
+build-service:
+    cargo build --release -p kdeconnect-service
+
+build-applet:
+    cargo build --release -p cosmic-ext-connect-applet
+
+run-service:
+    cargo run --release -p kdeconnect-service
+
+run-applet:
+    cargo run --release -p cosmic-ext-connect-applet
+
+install-bins:
+    install -Dm755 target/release/kdeconnect-service ~/.local/bin/kdeconnect-service
+    install -Dm755 target/release/cosmic-ext-connect-applet ~/.local/bin/cosmic-ext-connect-applet
+    install -Dm755 target/release/cosmic-ext-connect-settings ~/.local/bin/cosmic-ext-connect-settings
+    install -Dm755 target/release/cosmic-ext-connect-sms ~/.local/bin/cosmic-ext-connect-sms
+    @echo "✓ Installed binaries to ~/.local/bin/"
+
+install-applet-desktop:
+    install -Dm644 resources/{{APPID}}.desktop ~/.local/share/applications/{{APPID}}.desktop
+    install -Dm644 resources/{{APPID}}.metainfo.xml ~/.local/share/metainfo/{{APPID}}.metainfo.xml
+    @echo "✓ Installed applet desktop file"
+
+install-systemd:
+    mkdir -p ~/.config/systemd/user/
+    install -Dm644 kdeconnect-service/kdeconnect.service ~/.config/systemd/user/
+    -systemctl --user daemon-reload || echo "⚠️  Could not reload systemd (not in graphical session)"
+    @echo "✓ Installed systemd service file"
+
+enable-service:
+    systemctl --user enable --now kdeconnect.service
+    @echo "✓ Service enabled and started"
+
+status:
+    systemctl --user status kdeconnect.service
+
+logs:
+    journalctl --user -u kdeconnect.service -f
+
+stop:
+    systemctl --user stop kdeconnect.service
+
+restart:
+    systemctl --user restart kdeconnect.service
+
+install: install-bins install-systemd install-applet-desktop
+    @echo ""
+    @echo "✓ Installation complete!"
+    @echo ""
+    @echo "Next steps:"
+    @echo "  1. Log into graphical session (if not already)"
+    @echo "  2. Run: just enable-service"
+    @echo "  3. Open COSMIC Settings → Desktop → Panel"
+    @echo "  4. Click 'Configure Panel Applets'"
+    @echo "  5. Add 'KDE Connect' applet"
+    @echo ""
+    @echo "Or test manually without systemd:"
+    @echo "  just run-service"
+
+clean:
+    cargo clean
+
+uninstall:
+    -systemctl --user stop kdeconnect.service
+    -systemctl --user disable kdeconnect.service
+    rm -f ~/.local/bin/kdeconnect-service
+    rm -f ~/.local/bin/cosmic-ext-connect-applet
+    rm -f ~/.local/bin/cosmic-ext-connect-settings
+    rm -f ~/.local/bin/cosmic-ext-connect-sms
+    rm -f ~/.config/systemd/user/kdeconnect.service
+    rm -f ~/.local/share/applications/{{APPID}}.desktop
+    rm -f ~/.local/share/metainfo/{{APPID}}.metainfo.xml
+    @echo "✓ Uninstalled"
+    

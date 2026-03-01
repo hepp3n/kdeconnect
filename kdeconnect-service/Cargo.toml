@@ -1,0 +1,20 @@
+[package]
+name = "kdeconnect-service"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "kdeconnect-service"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zbus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+kdeconnect-core = { workspace = true }

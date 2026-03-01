@@ -1,3 +1,4 @@
+// kdeconnect-core/src/transport.rs
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
@@ -44,6 +45,11 @@ pub enum TransportEvent {
         name: String,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
     },
+    /// Emitted when the reader loop ends (peer closed / broken pipe).
+    /// Core removes the dead write_tx so the next NewConnection can replace it.
+    Disconnected {
+        id: DeviceId,
+    },
 }
 
 pub struct TcpTransport {
@@ -78,10 +84,7 @@ impl TcpTransport {
 
             match listener.accept().await {
                 Ok((mut stream, peer)) => {
-                    info!(
-                        peer = ?peer,
-                        "[tcp] new connection"
-                    );
+                    info!(peer = ?peer, "[tcp] new connection");
 
                     let mut buffer = String::new();
                     let (reader, _writer) = stream.split();
@@ -101,18 +104,20 @@ impl TcpTransport {
                         let id = peer_identity.device_id.clone();
 
                         if identity.device_id == peer_identity.device_id {
-                            warn!(
-                                peer = ?peer,
-                                device_id = ?id,
-                                device_name = name.clone(),
-                                "skipping the same device"
-                            );
+                            warn!(peer = ?peer, device_id = ?id, "skipping the same device");
                             continue;
                         }
 
-                        let mut stream = TlsConnector::from(self.client_config.clone())
-                            .connect(id.clone().try_into()?, stream)
-                            .await?;
+                        let mut stream = match TlsConnector::from(self.client_config.clone())
+                            .connect(id.clone().try_into().unwrap(), stream)
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "[tcp] TLS connect failed: {}", e);
+                                continue;
+                            }
+                        };
 
                         let packet = ProtocolPacket::new(
                             PacketType::Identity,
@@ -122,40 +127,35 @@ impl TcpTransport {
                         .expect("Failed to serialize identity packet");
 
                         let _ = stream.write_all(packet.as_slice()).await;
+                        let _ = stream.flush().await;
 
                         let (reader, writer) = split(stream);
 
                         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                         let write_rx = Arc::new(Mutex::new(write_rx));
 
-                        let _ = tokio::spawn(handle_connection(
+                        // Do NOT .await the spawn — blocks the accept loop until connection closes.
+                        tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
                             write_rx,
                             peer,
                             DeviceId(id.clone()),
-                        ))
-                        .await;
+                        ));
 
-                        // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
                             name: name.clone(),
                             write_tx,
                         }) {
-                            error!(
-                                peer = ?peer,
-                                device_id = ?id,
-                                device_name = name,
-                                "[tcp] transport event channel closed: {}", e
-                            );
+                            error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to accept connection: {}", e);
+                    warn!("[tcp] accept error: {}", e);
                 }
             }
         }
@@ -196,10 +196,8 @@ impl UdpTransport {
 
     pub async fn send_identity(&self) -> anyhow::Result<()> {
         if std::env::var("KDECONNECT_DISABLE_UDP_BROADCAST").is_ok() {
-            warn!(
-                "UDP broadcast is disabled by environment variable KDECONNECT_DISABLE_UDP_BROADCAST"
-            );
-            return Ok(()); // Skip broadcasting in test mode
+            warn!("UDP broadcast disabled by environment variable");
+            return Ok(());
         }
 
         debug!("Broadcasting UDP identity packet");
@@ -220,17 +218,9 @@ impl UdpTransport {
 
             loop {
                 match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
-                    Ok(size) => debug!(
-                        addr = ?BROADCAST_ADDR,
-                        packet.size = size,
-                        "Sending udp broadcast"
-                    ),
-                    Err(e) => warn!(
-                        addr = ?BROADCAST_ADDR,
-                        "Failed to send UDP packet: {}", e
-                    ),
+                    Ok(size) => debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast"),
+                    Err(e) => warn!(addr = ?BROADCAST_ADDR, "Failed to send UDP packet: {}", e),
                 }
-
                 interval.tick().await;
             }
         });
@@ -244,17 +234,22 @@ impl UdpTransport {
 
         loop {
             let this_identity = this_identity.clone();
-
             let mut buf = vec![0u8; 8192];
 
             match self.socket.recv_from(&mut buf).await {
                 Ok((len, mut peer)) => {
                     let raw = &buf[..len];
-                    let packet = ProtocolPacket::from_raw(raw).expect("Failed to parse UDP packet");
+                    let packet = match ProtocolPacket::from_raw(raw) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("[udp] Failed to parse UDP packet: {}", e);
+                            continue;
+                        }
+                    };
 
                     if let Ok(peer_identity) = serde_json::from_value::<Identity>(packet.body) {
                         if this_identity.device_id == peer_identity.device_id {
-                            warn!("skipping the same device");
+                            warn!("[udp] skipping the same device");
                             continue;
                         }
 
@@ -263,81 +258,78 @@ impl UdpTransport {
 
                         if let Some(new_port) = peer_identity.tcp_port {
                             peer.set_port(new_port);
-                            info!(
-                                peer = ?peer,
-                                device_id = ?id,
-                                device_name = name,
-                                "Device supports TCP"
-                            );
+                            info!(peer = ?peer, device_id = ?id, device_name = name, "Device supports TCP");
                         }
 
-                        let mut stream = TcpStream::connect(peer).await?;
+                        let mut stream = match TcpStream::connect(peer).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "[udp] TCP connect failed: {}", e);
+                                continue;
+                            }
+                        };
 
-                        let packet = ProtocolPacket::new(
+                        // Send identity pre-TLS — phone reads this before initiating TLS.
+                        let pre_tls_identity = ProtocolPacket::new(
                             PacketType::Identity,
                             serde_json::to_value(&*self.identity).unwrap(),
                         )
                         .as_raw()
                         .expect("Failed to serialize identity packet");
 
-                        let _ = stream.write_all(packet.as_slice()).await;
+                        let _ = stream.write_all(pre_tls_identity.as_slice()).await;
+                        let _ = stream.flush().await;
 
                         let acceptor = TlsAcceptor::from(self.server_config.clone());
 
-                        let mut tls_stream = acceptor
-                            .accept(stream)
-                            .await
-                            .expect("Failed to accept TLS connection");
+                        let mut tls_stream = match acceptor.accept(stream).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "[udp] TLS handshake failed: {}", e);
+                                continue;
+                            }
+                        };
 
-                        info!(
-                            peer = ?peer,
-                            device_id = ?id,
-                            device_name = name,
-                            "[udp] Established TLS connection"
-                        );
+                        info!(peer = ?peer, device_id = ?id, device_name = name, "[udp] Established TLS connection");
 
-                        let packet = ProtocolPacket::new(
+                        // Send identity post-TLS — phone uses this for plugin negotiation.
+                        let post_tls_identity = ProtocolPacket::new(
                             PacketType::Identity,
                             serde_json::to_value(&*self.identity).unwrap(),
                         )
                         .as_raw()
                         .expect("Failed to serialize identity packet");
 
-                        let _ = tls_stream.write_all(packet.as_slice()).await;
+                        let _ = tls_stream.write_all(post_tls_identity.as_slice()).await;
+                        let _ = tls_stream.flush().await;
 
                         let (reader, writer) = split(tls_stream);
 
                         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                         let write_rx = Arc::new(Mutex::new(write_rx));
 
-                        let _ = tokio::spawn(handle_connection(
+                        // Do NOT .await the spawn — blocks the UDP listen loop.
+                        tokio::spawn(handle_connection(
                             event_tx.clone(),
                             reader,
                             writer,
                             write_rx,
                             peer,
                             id.clone(),
-                        ))
-                        .await;
+                        ));
 
-                        // notify about new connection (gives write_tx to allow sending)
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
                             name: name.clone(),
                             write_tx,
                         }) {
-                            error!(
-                                peer = ?peer,
-                                device_id = ?id,
-                                device_name = name,
-                                "[udp] transport event channel closed: {}", e
-                            );
+                            error!(peer = ?peer, device_id = ?id, "[udp] transport event channel closed: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to receive UDP packet: {}", e);
+                    warn!("[udp] recv_from error: {}", e);
                 }
             }
         }
@@ -358,100 +350,74 @@ async fn handle_connection<R, W>(
     let mut reader = BufReader::new(reader);
     let mut buffer = String::new();
 
+    // Reader task — forwards packets and emits Disconnected when the connection ends.
+    let event_tx_reader = event_tx.clone();
+    let id_reader = id.clone();
     tokio::spawn(async move {
         loop {
             match reader.read_line(&mut buffer).await {
                 Ok(0) => {
-                    // connection closed
-                    warn!(
-                        peer = ?peer,
-                        "[reader loop] connection closed");
+                    warn!(peer = ?peer, "[reader loop] connection closed");
                     break;
                 }
-                Ok(_len) => {
-                    if buffer.trim().is_empty() {
-                        warn!(
-                            peer = ?peer,
-                            "[reader loop] sent empty message"
-                        );
+                Ok(_) => {
+                    let trimmed = buffer.trim();
+                    if trimmed.is_empty() {
+                        buffer.clear();
                         continue;
                     }
 
-                    // forward raw packet string
-                    if let Err(e) = event_tx.send(TransportEvent::IncomingPacket {
+                    eprintln!("[reader] raw bytes from {}: {:?}", peer, trimmed);
+
+                    if let Err(e) = event_tx_reader.send(TransportEvent::IncomingPacket {
                         addr: peer,
-                        id: id.clone(),
-                        raw: buffer.trim().to_string(),
+                        id: id_reader.clone(),
+                        raw: trimmed.to_string(),
                     }) {
-                        error!(
-                            peer = ?peer,
-                            "[reader loop] transport event channel closed: {}", e
-                        );
+                        error!(peer = ?peer, "[reader loop] transport event channel closed: {}", e);
                         break;
                     }
                 }
                 Err(e) => {
-                    error!(
-                        peer = ?peer,
-                        "[reader loop] error reading: {}", e);
+                    error!(peer = ?peer, "[reader loop] error reading: {}", e);
                     break;
                 }
             }
-
             buffer.clear();
         }
-        warn!(
-            peer = ?peer,
-            "reader loop ended"
-        );
+        warn!(peer = ?peer, "reader loop ended");
+        // Notify core the connection is dead so the writer_map entry can be cleared.
+        let _ = event_tx_reader.send(TransportEvent::Disconnected { id: id_reader });
     });
 
+    // Writer task — drains the write channel and sends packets to the peer.
     tokio::spawn(async move {
         while let Some(msg) = write_rx.lock().await.recv().await {
-            debug!(
-                peer = ?peer,
-                packet_type = ?msg.packet_type,
-                "writing"
-            );
+            debug!(peer = ?peer, packet_type = ?msg.packet_type, "writing");
 
             if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
-                error!(
-                    peer = ?peer,
-                    "Error writing: {}", e
-                );
+                error!(peer = ?peer, "Error writing: {}", e);
+                break;
+            }
+            if let Err(e) = writer.flush().await {
+                error!(peer = ?peer, "Error flushing: {}", e);
                 break;
             }
         }
         let _ = writer.shutdown().await;
-        info!(
-            peer = ?peer,
-            "writer task ended"
-        );
+        info!(peer = ?peer, "writer task ended");
     });
 }
 
 pub(crate) async fn prepare_listener_for_payload() -> Result<TcpListener, String> {
-    let mut free_listener: Option<TcpListener> = None;
-    let mut free_port: Option<u16> = None;
-
     for port in 1739..1769 {
         if let Ok(listener) =
             TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).await
         {
-            free_listener = Some(listener);
-            free_port = Some(port);
-
-            break;
+            return Ok(listener);
         }
     }
-
-    if let Some(free_listener) = free_listener
-        && let Some(_free_port) = free_port
-    {
-        Ok(free_listener)
-    } else {
-        Err("no free port for payload, failed.".to_string())
-    }
+    Err("no free port for payload, failed.".to_string())
 }
 
 pub(crate) async fn receive_payload(

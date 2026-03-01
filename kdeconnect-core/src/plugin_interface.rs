@@ -54,10 +54,12 @@ impl PluginRegistry {
         packet: ProtocolPacket,
         core_tx: mpsc::UnboundedSender<CoreEvent>,
         tx: mpsc::UnboundedSender<ConnectionEvent>,
+        mpris_tx: mpsc::UnboundedSender<ConnectionEvent>,  // MPRIS channel
     ) {
         let body = packet.body.clone();
         let core_tx = core_tx.clone();
         let connection_tx = tx.clone();
+        let mpris_connection_tx = mpris_tx.clone();  // Clone MPRIS channel
         let payload_info = packet.payload_transfer_info;
 
         match packet.packet_type {
@@ -74,7 +76,20 @@ impl PluginRegistry {
                     battery.received_packet(connection_tx).await;
                 }
             }
-            PacketType::BatteryRequest => todo!(),
+            PacketType::BatteryRequest => {
+                debug!("BatteryRequest received — not implemented, ignoring");
+            }
+            PacketType::SmsMessages => {
+                eprintln!("!!! Received SmsMessages packet in core !!!");
+                if let Ok(sms_messages) = serde_json::from_value::<plugins::sms::SmsMessages>(body.clone()) {
+                    info!("Received SMS messages packet with {} messages", sms_messages.messages.len());
+                    eprintln!("Successfully parsed {} SMS messages", sms_messages.messages.len());
+                    sms_messages.received_packet(connection_tx).await;
+                } else {
+                    eprintln!("!!! Failed to parse SMS messages packet !!!");
+                    eprintln!("Body: {:?}", body);
+                }
+            }
             PacketType::Clipboard => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
                     clipboard.received_packet(connection_tx).await;
@@ -107,10 +122,13 @@ impl PluginRegistry {
             PacketType::Mpris => {
                 if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
                     info!("Received MPRIS packet: {:?}", mpris_packet);
-                    let _ = connection_tx.send(ConnectionEvent::Mpris((
+                    let mpris_event = ConnectionEvent::Mpris((
                         device.device_id.clone(),
                         mpris_packet,
-                    )));
+                    ));
+                    // Send to both channels
+                    let _ = connection_tx.send(mpris_event.clone());
+                    let _ = mpris_connection_tx.send(mpris_event);
                 }
             }
             PacketType::MprisRequest => {
@@ -150,7 +168,7 @@ impl PluginRegistry {
                 }
             }
             _ => {
-                warn!(
+                debug!(
                     "No plugin found to handle packet type: {:?}",
                     packet.packet_type
                 );

@@ -1,0 +1,42 @@
+[package]
+name = "cosmic-ext-connect-applet"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[lib]
+name = "cosmic_ext_connect_applet"
+path = "src/lib.rs"
+
+[dependencies]
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", branch = "master", default-features = false, features = [
+    "applet",
+    "tokio",
+    "wayland",
+] }
+kdeconnect-core = { workspace = true }
+kdeconnect-dbus-client = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+futures-util = "0.3"
+urlencoding = "2.1"
+serde_json = "1.0"
+lazy_static = "1.5"
+ctrlc = "3.4"
+async-stream = "0.3"
+anyhow = "1.0"
+ashpd = "0.12.1"
+percent-encoding = "2.3"
+
+[[bin]]
+name = "cosmic-ext-connect-applet"
+path = "src/main.rs"
+
+[[bin]]
+name = "cosmic-ext-connect-settings"
+path = "src/settings.rs"
+
+[[bin]]
+name = "cosmic-ext-connect-sms"
+path = "src/cosmic-ext-connect-sms.rs"

@@ -22,3 +22,4 @@ rustls = "0.23.35"
 tokio-rustls = "0.26.4"
 tracing = { workspace = true }
 mpris = "2.0.1"
+zbus = "5.9.0"

@@ -127,10 +127,6 @@ impl PairingManager {
         Ok(())
     }
 
-    pub async fn request_pairing(&self, device_id: DeviceId) {
-        self.device_manager.set_paired(&device_id, true).await;
-    }
-
     pub async fn cancel_pairing(&self, device_id: DeviceId) {
         self.device_manager.set_paired(&device_id, false).await
     }
