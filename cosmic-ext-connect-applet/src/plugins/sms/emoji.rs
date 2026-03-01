@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/emoji.rs
 //! Emoji data and categories for the emoji picker.
 // #[allow(dead_code)] = Placeholder for code that will be used once features are fully integrated
 
