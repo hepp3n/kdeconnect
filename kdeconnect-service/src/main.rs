@@ -1,4 +1,3 @@
-// kdeconnect-service/src/main.rs
 //! KDE Connect D-Bus Service Daemon
 
 use anyhow::Result;

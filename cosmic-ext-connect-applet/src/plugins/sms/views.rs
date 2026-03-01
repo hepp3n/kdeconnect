@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/views.rs
 //! UI view implementations for the SMS window.
 
 use cosmic::iced::{Alignment, Length};

@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/portal.rs
 // #[allow(dead_code)] = Placeholder for code that will be used once features are fully integrated
 
 use ashpd::desktop::file_chooser::SelectedFiles;

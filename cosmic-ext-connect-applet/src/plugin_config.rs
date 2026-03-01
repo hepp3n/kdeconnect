@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugin_config.rs
 //! Plugin configuration management for KDE Connect plugins.
 //!
 //! This module handles reading and writing plugin-specific configuration

@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/cosmic-connect-sms.rs
 //! Binary entry point for the SMS window application.
 
 fn main() -> cosmic::iced::Result {
@@ -13,7 +12,7 @@ fn main() -> cosmic::iced::Result {
     eprintln!("=== KDE Connect SMS Window ===");
     eprintln!("Device: {} ({})", device_name, device_id);
     
-    cosmic_connect_applet::plugins::sms::run(device_id, device_name)
+    cosmic_ext_connect_applet::plugins::sms::run(device_id, device_name)
 }
 
 fn setup_signal_handlers() {

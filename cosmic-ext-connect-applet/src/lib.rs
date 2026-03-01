@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/lib.rs
 //! COSMIC KDE Connect Applet library.
 //!
 //! This library provides shared modules for the KDE Connect applet,

@@ -21,7 +21,7 @@
       <mimetype>text/plain</mimetype>
     </mimetypes>
     <binaries>
-      <binary>cosmic-connect-applet</binary>
+      <binary>cosmic-ext-connect-applet</binary>
     </binaries>
   </provides>
 </component>

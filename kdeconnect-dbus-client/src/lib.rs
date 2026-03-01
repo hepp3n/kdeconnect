@@ -1,4 +1,3 @@
-// kdeconnect-dbus-client/src/lib.rs
 //! D-Bus client library for KDE Connect service
 
 use anyhow::Result;

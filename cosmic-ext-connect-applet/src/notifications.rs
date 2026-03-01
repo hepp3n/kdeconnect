@@ -1,5 +1,3 @@
-// cosmic-connect-applet/src/notifications.rs
-
 use tokio::sync::mpsc;
 use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
 use futures::StreamExt;

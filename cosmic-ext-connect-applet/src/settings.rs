@@ -1,7 +1,5 @@
-// cosmic-connect-applet/src/settings.rs
-
-use cosmic_connect_applet::backend;
-use cosmic_connect_applet::models::Device;
+use cosmic_ext_connect_applet::backend;
+use cosmic_ext_connect_applet::models::Device;
 
 #[derive(Debug, Clone)]
 pub struct DevicePermissions {

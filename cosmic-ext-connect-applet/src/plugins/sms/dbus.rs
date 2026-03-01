@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/dbus.rs
 use anyhow::Result;
 use kdeconnect_dbus_client::KdeConnectClient;
 use std::sync::Arc;

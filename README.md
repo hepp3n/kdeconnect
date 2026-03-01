@@ -1,3 +1,5 @@
+# WORK IN PROGRESS
+
 # Testing on COSMIC Desktop
 
 For testing COSMIC desktop applet, you can build it with help of justfile.
@@ -22,7 +24,7 @@ For testing COSMIC desktop applet, you can build it with help of justfile.
 
 `just enable-service`
 
-**Maybe need to reboot to get applet to show on panel**
+**May need to reboot to get applet to show on panel**
 
 # Uninstalling
 

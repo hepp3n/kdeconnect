@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/utils.rs
 //! Utility functions for phone number handling, timestamp formatting, and VCard parsing.
 
 // #[allow(dead_code)] = Placeholder for code that will be used once features are fully integrated

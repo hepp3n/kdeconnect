@@ -6,7 +6,7 @@
   "base-version": "stable",
   "sdk": "org.freedesktop.Sdk",
   "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
-  "command": "cosmic-connect-applet",
+  "command": "cosmic-ext-connect-applet",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
@@ -25,11 +25,11 @@
   },
   "modules": [
     {
-      "name": "cosmic-connect-applet",
+      "name": "cosmic-ext-connect-applet",
       "buildsystem": "simple",
       "build-options": {
         "env": {
-          "CARGO_HOME": "/run/build/cosmic-connect-applet/cargo"
+          "CARGO_HOME": "/run/build/cosmic-ext-connect-applet/cargo"
         }
       },
       "build-commands": [

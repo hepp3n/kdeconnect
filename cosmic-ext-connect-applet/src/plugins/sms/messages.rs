@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/messages.rs
 //! Message types for the SMS window application.
 
 // #[allow(dead_code)] = Placeholder for code that will be used once features are fully integrated

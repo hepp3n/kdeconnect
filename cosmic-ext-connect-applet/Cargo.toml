@@ -1,12 +1,11 @@
-# cosmic-connect-applet/Cargo.toml
 [package]
-name = "cosmic-connect-applet"
+name = "cosmic-ext-connect-applet"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 
 [lib]
-name = "cosmic_connect_applet"
+name = "cosmic_ext_connect_applet"
 path = "src/lib.rs"
 
 [dependencies]
@@ -31,13 +30,13 @@ ashpd = "0.12.1"
 percent-encoding = "2.3"
 
 [[bin]]
-name = "cosmic-connect-applet"
+name = "cosmic-ext-connect-applet"
 path = "src/main.rs"
 
 [[bin]]
-name = "cosmic-connect-settings"
+name = "cosmic-ext-connect-settings"
 path = "src/settings.rs"
 
 [[bin]]
-name = "cosmic-connect-sms"
-path = "src/cosmic-connect-sms.rs"
+name = "cosmic-ext-connect-sms"
+path = "src/cosmic-ext-connect-sms.rs"

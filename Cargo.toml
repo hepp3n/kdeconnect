@@ -1,7 +1,6 @@
-# Cargo.toml
 [workspace]
 members = [
-    "cosmic-connect-applet",
+    "cosmic-ext-connect-applet",
     "kdeconnect-service",
     "kdeconnect-dbus-client",
     "kdeconnect-core",

@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/plugins/sms/app.rs
 use cosmic::{
     app::Core,
     iced::{Length, Subscription},
@@ -63,7 +62,7 @@ impl Application for SmsWindow {
     type Executor = cosmic::executor::Default;
     type Flags = (String, String);
     type Message = SmsMessage;
-    const APP_ID: &'static str = "com.system76.CosmicConnectSms";
+    const APP_ID: &'static str = "io.github.hepp3n.kdeconnect.sms";
 
     fn core(&self) -> &Core { &self.core }
     fn core_mut(&mut self) -> &mut Core { &mut self.core }

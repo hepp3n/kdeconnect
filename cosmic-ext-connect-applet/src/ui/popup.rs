@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/ui/popup.rs
 use cosmic::app::Core;
 use cosmic::iced::{Alignment, Length};
 use cosmic::{widget, Element};
@@ -20,7 +19,7 @@ pub fn create_popup_view<'a>(
     // Header
     content = content.push(
         widget::row()
-            .push(widget::text("Cosmic Connect").size(18).width(Length::Fill))
+            .push(widget::text("Cosmic Ext Connect").size(18).width(Length::Fill))
             .push(
                 widget::button::standard("Settings")
                     .on_press(Message::OpenSettings)

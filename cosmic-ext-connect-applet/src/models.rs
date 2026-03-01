@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/models.rs
 // #[allow(dead_code)] = Placeholder for code that will be used once features are fully integrated
 
 #[derive(Debug, Clone)]

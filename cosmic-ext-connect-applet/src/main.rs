@@ -1,5 +1,3 @@
-// cosmic-connect-applet/src/main.rs
-
 mod backend;
 mod messages;
 mod models;
@@ -125,13 +123,13 @@ impl cosmic::Application for KdeConnectApplet {
 
                 // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
-                    match std::process::Command::new("cosmic-connect-sms")
+                    match std::process::Command::new("cosmic-ext-connect-sms")
                         .arg(&id)
                         .arg(&device_name)
                         .spawn()
                     {
-                        Ok(_) => eprintln!("[APPLET] cosmic-connect-sms launched OK"),
-                        Err(e) => eprintln!("[APPLET] Failed to launch cosmic-connect-sms: {:?}", e),
+                        Ok(_) => eprintln!("[APPLET] cosmic-ext-connect-sms launched OK"),
+                        Err(e) => eprintln!("[APPLET] Failed to launch cosmic-ext-connect-sms: {:?}", e),
                     }
                 });
             }
@@ -214,7 +212,7 @@ impl cosmic::Application for KdeConnectApplet {
                 eprintln!("MPRIS from {}: {:?}", device_id, mpris_data);
             }
             Message::OpenSettings => {
-                std::process::Command::new("cosmic-connect-settings").spawn().ok();
+                std::process::Command::new("cosmic-ext-connect-settings").spawn().ok();
             }
             Message::RemoteInput(ref device_id) => {
                 eprintln!("Remote input: {}", device_id);

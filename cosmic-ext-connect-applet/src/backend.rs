@@ -1,4 +1,3 @@
-// cosmic-connect-applet/src/backend.rs
 //! Backend interface using D-Bus client to communicate with kdeconnect-service
 
 use anyhow::Result;
