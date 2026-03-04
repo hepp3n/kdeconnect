@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use tokio::io::AsyncRead;
 
 use crate::{
@@ -39,7 +40,7 @@ pub enum AppEvent {
     SendFiles((DeviceId, Vec<String>)),
     MprisAction((DeviceId, String, MprisAction)),
     SendMprisRequest((DeviceId, MprisRequest)),
-    SendPacket(DeviceId, ProtocolPacket)
+    SendPacket(DeviceId, ProtocolPacket),
 }
 
 #[derive(Debug, Clone)]
@@ -52,4 +53,5 @@ pub enum ConnectionEvent {
     PairStateChanged((DeviceId, PairState)),
     Mpris((DeviceId, Mpris)),
     SmsMessages(SmsMessages),
+    ContactsReceived(HashMap<String, String>),
 }

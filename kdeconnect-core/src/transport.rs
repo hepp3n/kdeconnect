@@ -1,4 +1,3 @@
-// kdeconnect-core/src/transport.rs
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
@@ -7,6 +6,7 @@ use std::{
 };
 
 use rustls::pki_types::ServerName;
+use socket2::TcpKeepalive;
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, split},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -52,6 +52,19 @@ pub enum TransportEvent {
     },
 }
 
+/// Enable TCP keepalive so the OS detects a dead connection within ~60s
+/// (30s idle + 3 × 10s probes) rather than waiting indefinitely.
+fn apply_keepalive(stream: &TcpStream) {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    let sock_ref = socket2::SockRef::from(stream);
+    if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive) {
+        warn!("Failed to set TCP keepalive: {}", e);
+    }
+}
+
 pub struct TcpTransport {
     listen_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
@@ -85,6 +98,7 @@ impl TcpTransport {
             match listener.accept().await {
                 Ok((mut stream, peer)) => {
                     info!(peer = ?peer, "[tcp] new connection");
+                    apply_keepalive(&stream);
 
                     let mut buffer = String::new();
                     let (reader, _writer) = stream.split();
@@ -262,7 +276,10 @@ impl UdpTransport {
                         }
 
                         let mut stream = match TcpStream::connect(peer).await {
-                            Ok(s) => s,
+                            Ok(s) => {
+                                apply_keepalive(&s);
+                                s
+                            }
                             Err(e) => {
                                 warn!(peer = ?peer, "[udp] TCP connect failed: {}", e);
                                 continue;

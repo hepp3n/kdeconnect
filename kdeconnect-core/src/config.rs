@@ -1,4 +1,3 @@
-// kdeconnect-core/src/config.rs
 use std::{net::SocketAddr, time::Duration};
 
 use tokio::{
@@ -23,21 +22,23 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.clipboard",
     "kdeconnect.clipboard.connect",
     "kdeconnect.connectivity_report",
+    "kdeconnect.contacts.response_uids_timestamps",
+    "kdeconnect.contacts.response_vcards",
     "kdeconnect.mousepad.keyboardstate",
     "kdeconnect.mpris",
     "kdeconnect.notification",
     "kdeconnect.ping",
     "kdeconnect.share.request",
-    "kdeconnect.sms.messages",       // ← we handle SMS message packets from the phone
+    "kdeconnect.sms.messages",
     "kdeconnect.sms.attachment_file",
     "kdeconnect.telephony",
 ];
 
-/// Packet types we can SEND to the phone (phone's incomingCapabilities must overlap these).
-/// The phone checks this list before it will respond to requests from us.
 const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.battery.request",
     "kdeconnect.clipboard",
+    "kdeconnect.contacts.request_all_uids_timestamps",
+    "kdeconnect.contacts.request_vcards_by_uid",
     "kdeconnect.findmyphone.request",
     "kdeconnect.mousepad.keyboardstate",
     "kdeconnect.mousepad.request",
@@ -47,10 +48,10 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.runcommand.request",
     "kdeconnect.share.request",
     "kdeconnect.share.request.update",
-    "kdeconnect.sms.request",              // ← send SMS
-    "kdeconnect.sms.request_conversations", // ← request conversation list
-    "kdeconnect.sms.request_conversation",  // ← request single conversation
-    "kdeconnect.sms.request_attachment",    // ← request attachment
+    "kdeconnect.sms.request",
+    "kdeconnect.sms.request_conversations",
+    "kdeconnect.sms.request_conversation",
+    "kdeconnect.sms.request_attachment",
 ];
 
 #[derive(Debug)]

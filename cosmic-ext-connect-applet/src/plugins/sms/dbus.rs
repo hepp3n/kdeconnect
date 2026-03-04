@@ -61,6 +61,15 @@ pub async fn send_sms(device_id: &str, phone_number: &str, message: &str) {
     }
 }
 
+pub async fn fetch_contacts(device_id: &str) {
+    eprintln!("[SMS-DBUS] fetch_contacts() device={}", device_id);
+    let Some(client) = get_client().await else { return; };
+    match client.request_contacts(device_id).await {
+        Ok(_) => eprintln!("[SMS-DBUS] request_contacts sent OK"),
+        Err(e) => eprintln!("[SMS-DBUS] request_contacts FAILED: {:?}", e),
+    }
+}
+
 pub fn parse_sms_messages(messages_json: &str) -> (Vec<Message>, Vec<Conversation>) {
     use std::collections::HashMap;
 

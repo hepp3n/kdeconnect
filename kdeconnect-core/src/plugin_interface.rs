@@ -20,14 +20,10 @@ use crate::{
     transport::prepare_listener_for_payload,
 };
 
-/// All plugins must implement this trait.
-/// Plugins are loaded into the core and can react to incoming packets.
 pub trait Plugin: Sync + Send {
-    /// Unique identifier of the plugin.
     fn id(&self) -> &'static str;
 }
 
-/// A thread-safe registry that holds all loaded plugins and dispatches packets to them.
 #[derive(Clone)]
 pub struct PluginRegistry {
     plugins: Arc<RwLock<Vec<Arc<dyn Plugin>>>>,
@@ -40,34 +36,30 @@ impl PluginRegistry {
         }
     }
 
-    /// Registers a new plugin (usually called during initialization).
     pub async fn register(&self, plugin: Arc<dyn Plugin>) {
         let mut plugins = self.plugins.write().await;
         info!("Registering plugin: {}", plugin.id());
         plugins.push(plugin);
     }
 
-    /// Dispatches an incoming packet to the appropriate plugin based on its type.
     pub async fn dispatch(
         &self,
         device: Device,
         packet: ProtocolPacket,
         core_tx: mpsc::UnboundedSender<CoreEvent>,
         tx: mpsc::UnboundedSender<ConnectionEvent>,
-        mpris_tx: mpsc::UnboundedSender<ConnectionEvent>,  // MPRIS channel
+        mpris_tx: mpsc::UnboundedSender<ConnectionEvent>,
     ) {
         let body = packet.body.clone();
         let core_tx = core_tx.clone();
         let connection_tx = tx.clone();
-        let mpris_connection_tx = mpris_tx.clone();  // Clone MPRIS channel
+        let mpris_connection_tx = mpris_tx.clone();
         let payload_info = packet.payload_transfer_info;
 
         match packet.packet_type {
-            // if it's indentity we can skip
             PacketType::Identity => {
                 debug!("Skipping identity packet");
             }
-            // if it's pair we can also skip because we handle it elsewhere
             PacketType::Pair => {
                 debug!("Skipping pair packet");
             }
@@ -88,6 +80,49 @@ impl PluginRegistry {
                 } else {
                     eprintln!("!!! Failed to parse SMS messages packet !!!");
                     eprintln!("Body: {:?}", body);
+                }
+            }
+            PacketType::ContactsResponseUidsTimestamps => {
+                eprintln!("[contacts] Received ContactsResponseUidsTimestamps");
+                if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
+                    let uids: Vec<String> = uids_val
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !uids.is_empty() {
+                        eprintln!("[contacts] Requesting vcards for {} UIDs", uids.len());
+                        let packet = ProtocolPacket::new(
+                            PacketType::ContactsRequestVcardsByUid,
+                            serde_json::json!({ "uids": uids }),
+                        );
+                        let _ = core_tx.send(CoreEvent::SendPacket {
+                            device: device.device_id.clone(),
+                            packet,
+                        });
+                    }
+                }
+            }
+            PacketType::ContactsResponseVcards => {
+                eprintln!("[contacts] Received ContactsResponseVcards");
+                let mut contacts: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
+                    for uid_val in uids_val {
+                        if let Some(uid) = uid_val.as_str() {
+                            if let Some(vcard_str) = body.get(uid).and_then(|v| v.as_str()) {
+                                let (name_opt, phones) = parse_vcard(vcard_str);
+                                if let Some(name) = name_opt {
+                                    for phone in phones {
+                                        contacts.insert(phone, name.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                eprintln!("[contacts] Parsed {} phone->name entries", contacts.len());
+                if !contacts.is_empty() {
+                    let _ = connection_tx.send(ConnectionEvent::ContactsReceived(contacts));
                 }
             }
             PacketType::Clipboard => {
@@ -126,7 +161,6 @@ impl PluginRegistry {
                         device.device_id.clone(),
                         mpris_packet,
                     ));
-                    // Send to both channels
                     let _ = connection_tx.send(mpris_event.clone());
                     let _ = mpris_connection_tx.send(mpris_event);
                 }
@@ -203,7 +237,6 @@ impl PluginRegistry {
                 PacketType::Mpris => {
                     if let Ok(mpris) = serde_json::from_value::<plugins::mpris::Mpris>(body) {
                         debug!("got mpris packet, sending info.");
-
                         let _ = mpris
                             .send_art(device_writer, payload_size, payload_transfer_info)
                             .await;
@@ -214,7 +247,6 @@ impl PluginRegistry {
                         serde_json::from_value::<plugins::share::ShareRequest>(body)
                     {
                         debug!("got share request packet, sending info.");
-
                         let _ = share_request
                             .send_file(device_writer, payload_size, payload_transfer_info)
                             .await;
@@ -295,4 +327,32 @@ impl PluginRegistry {
         let plugins = self.plugins.read().await;
         plugins.iter().map(|p| p.id().to_string()).collect()
     }
+}
+
+fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
+    let mut name: Option<String> = None;
+    let mut phones: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("FN:") {
+            name = Some(line[3..].trim().to_string());
+        } else if name.is_none() && line.starts_with("N:") {
+            let parts: Vec<&str> = line[2..].split(';').collect();
+            if parts.len() >= 2 {
+                let full = format!("{} {}", parts[1].trim(), parts[0].trim());
+                let full = full.trim().to_string();
+                if !full.is_empty() {
+                    name = Some(full);
+                }
+            }
+        } else if line.starts_with("TEL") {
+            if let Some(pos) = line.rfind(':') {
+                let phone = line[pos + 1..].trim().to_string();
+                if !phone.is_empty() {
+                    phones.push(phone);
+                }
+            }
+        }
+    }
+    (name, phones)
 }
