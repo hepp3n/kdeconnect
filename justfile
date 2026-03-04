@@ -6,6 +6,10 @@ PREFIX := env_var("HOME") / ".local"
 build:
     cargo build --release
 
+build-rel-offline:
+    cargo --offline build --release -p kdeconnect-service
+    cargo --offline build --release -p cosmic-ext-connect-applet
+
 build-service:
     cargo build --release -p kdeconnect-service
 

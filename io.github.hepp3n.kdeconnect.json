@@ -30,14 +30,15 @@
         {
             "name": "cosmic-ext-connect-applet",
             "buildsystem": "simple",
+            "build-commands": [
+                "just build-rel-offline",
+                "just PREFIX=/app install"
+            ],
             "build-options": {
                 "env": {
                     "CARGO_HOME": "/run/build/cosmic-ext-connect-applet/cargo"
                 }
             },
-            "build-commands": [
-                "just PREFIX=/app install"
-            ],
             "sources": [
                 {
                     "type": "git",
