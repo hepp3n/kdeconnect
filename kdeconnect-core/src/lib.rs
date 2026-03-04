@@ -89,7 +89,9 @@ impl KdeConnectCore {
         let clipboard_plugin = plugins::clipboard::Clipboard::default();
         plugin_registry.register(Arc::new(clipboard_plugin)).await;
         let mousepad_keyboardstate = plugins::mousepad::KeyboardState::default();
-        plugin_registry.register(Arc::new(mousepad_keyboardstate)).await;
+        plugin_registry
+            .register(Arc::new(mousepad_keyboardstate))
+            .await;
         let mpris_plugin = plugins::mpris::Mpris::default();
         plugin_registry.register(Arc::new(mpris_plugin)).await;
 
@@ -100,14 +102,20 @@ impl KdeConnectCore {
         plugins::mpris::expose_phone_mpris(mpris_conn_rx, event_tx.clone());
 
         let notification_plugin = plugins::notification::Notification::default();
-        plugin_registry.register(Arc::new(notification_plugin)).await;
+        plugin_registry
+            .register(Arc::new(notification_plugin))
+            .await;
         let connectivity_report_plugin =
             plugins::connectivity_report::ConnectivityReport::default();
-        plugin_registry.register(Arc::new(connectivity_report_plugin)).await;
+        plugin_registry
+            .register(Arc::new(connectivity_report_plugin))
+            .await;
         let run_command_plugin = plugins::run_command::RunCommandRequest::default();
         plugin_registry.register(Arc::new(run_command_plugin)).await;
         let share_request_plugin = plugins::share::ShareRequest::default();
-        plugin_registry.register(Arc::new(share_request_plugin)).await;
+        plugin_registry
+            .register(Arc::new(share_request_plugin))
+            .await;
         let sms_plugin = plugins::sms::SmsMessages {
             messages: Vec::new(),
             version: None,
@@ -189,8 +197,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DeviceDiscovered(device) => {
                 info!("[core] device discovered.");
-                let conn_event =
-                    ConnectionEvent::Connected((device.device_id.clone(), device));
+                let conn_event = ConnectionEvent::Connected((device.device_id.clone(), device));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
@@ -339,8 +346,7 @@ impl KdeConnectCore {
                     Ok(pkt) => {
                         // if packet is type `pair` handle it immediately
                         if let PacketType::Pair = pkt.packet_type {
-                            if let Ok(pair_body) =
-                                serde_json::from_value::<Pair>(pkt.body.clone())
+                            if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 // If phone sends pair:false, it doesn't trust us — initiate

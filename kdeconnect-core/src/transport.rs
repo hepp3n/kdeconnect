@@ -47,9 +47,7 @@ pub enum TransportEvent {
     },
     /// Emitted when the reader loop ends (peer closed / broken pipe).
     /// Core removes the dead write_tx so the next NewConnection can replace it.
-    Disconnected {
-        id: DeviceId,
-    },
+    Disconnected { id: DeviceId },
 }
 
 /// Enable TCP keepalive so the OS detects a dead connection within ~60s
@@ -232,7 +230,9 @@ impl UdpTransport {
 
             loop {
                 match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
-                    Ok(size) => debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast"),
+                    Ok(size) => {
+                        debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast")
+                    }
                     Err(e) => warn!(addr = ?BROADCAST_ADDR, "Failed to send UDP packet: {}", e),
                 }
                 interval.tick().await;

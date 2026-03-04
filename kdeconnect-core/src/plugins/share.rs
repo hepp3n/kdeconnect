@@ -142,20 +142,22 @@ impl ShareRequest {
                     .await?
                     .response()?;
 
-                let file_path: Option<PathBuf> = file
+                let first_path: Option<String> = file
                     .uris()
                     .first()
-                    .map(|path| path.to_file_path().unwrap_or_default());
+                    .and_then(|p| Some(p.as_str().to_string()));
 
-                let Some(file_path) = file_path else {
+                let Some(file_path) = first_path else {
                     return Ok(());
                 };
 
-                if tokio::fs::rename(temp_file, &file_path).await.is_ok() {
+                let path = file_path.clone();
+
+                if tokio::fs::rename(temp_file, &path).await.is_ok() {
                     tokio::task::spawn_blocking(move || {
                         let mut notify = notify_rust::Notification::new();
                         notify.appname("KDE Connect");
-                        notify.summary(&format!("File saved to: {:?}", file_path));
+                        notify.summary(&format!("File saved to: {:?}", path));
 
                         notify
                             .hint(notify_rust::Hint::Resident(true))
