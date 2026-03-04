@@ -1,6 +1,7 @@
 # justfile
 
 APPID := "io.github.hepp3n.kdeconnect"
+PREFIX := env_var("HOME") / ".local" 
 
 build:
     cargo build --release
@@ -17,19 +18,19 @@ run-service:
 run-applet:
     cargo run --release -p cosmic-ext-connect-applet
 
-install-bins:
-    install -Dm755 target/release/kdeconnect-service ~/.local/bin/kdeconnect-service
-    install -Dm755 target/release/cosmic-ext-connect-applet ~/.local/bin/cosmic-ext-connect-applet
-    install -Dm755 target/release/cosmic-ext-connect-settings ~/.local/bin/cosmic-ext-connect-settings
-    install -Dm755 target/release/cosmic-ext-connect-sms ~/.local/bin/cosmic-ext-connect-sms
-    @echo "✓ Installed binaries to ~/.local/bin/"
+install-bins: build
+    install -Dm755 target/release/kdeconnect-service {{PREFIX}}/bin/kdeconnect-service
+    install -Dm755 target/release/cosmic-ext-connect-applet {{PREFIX}}/bin/cosmic-ext-connect-applet
+    install -Dm755 target/release/cosmic-ext-connect-settings {{PREFIX}}/bin/cosmic-ext-connect-settings
+    install -Dm755 target/release/cosmic-ext-connect-sms {{PREFIX}}/bin/cosmic-ext-connect-sms
+    @echo "✓ Installed binaries to {{PREFIX}}/bin/"
 
 install-applet-desktop:
-    install -Dm644 resources/{{APPID}}.desktop ~/.local/share/applications/{{APPID}}.desktop
-    install -Dm644 resources/{{APPID}}.metainfo.xml ~/.local/share/metainfo/{{APPID}}.metainfo.xml
+    install -Dm644 resources/{{APPID}}.desktop {{PREFIX}}/share/applications/{{APPID}}.desktop
+    install -Dm644 resources/{{APPID}}.metainfo.xml {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     @echo "✓ Installed applet desktop file"
 
-install-systemd:
+install-systemd: build-service
     mkdir -p ~/.config/systemd/user/
     install -Dm644 kdeconnect-service/kdeconnect.service ~/.config/systemd/user/
     -systemctl --user daemon-reload || echo "⚠️  Could not reload systemd (not in graphical session)"
@@ -71,12 +72,12 @@ clean:
 uninstall:
     -systemctl --user stop kdeconnect.service
     -systemctl --user disable kdeconnect.service
-    rm -f ~/.local/bin/kdeconnect-service
-    rm -f ~/.local/bin/cosmic-ext-connect-applet
-    rm -f ~/.local/bin/cosmic-ext-connect-settings
-    rm -f ~/.local/bin/cosmic-ext-connect-sms
+    rm -f {{PREFIX}}/bin/kdeconnect-service
+    rm -f {{PREFIX}}/bin/cosmic-ext-connect-applet
+    rm -f {{PREFIX}}/bin/cosmic-ext-connect-settings
+    rm -f {{PREFIX}}/bin/cosmic-ext-connect-sms
     rm -f ~/.config/systemd/user/kdeconnect.service
-    rm -f ~/.local/share/applications/{{APPID}}.desktop
-    rm -f ~/.local/share/metainfo/{{APPID}}.metainfo.xml
+    rm -f {{PREFIX}}/share/applications/{{APPID}}.desktop
+    rm -f {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     @echo "✓ Uninstalled"
     
