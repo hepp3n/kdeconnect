@@ -23,44 +23,50 @@ pub fn view_main(app: &SmsWindow) -> Element<'_, SmsMessage> {
 /// New chat dialog view
 pub fn view_new_chat_dialog(app: &SmsWindow) -> Element<'_, SmsMessage> {
     let spacing = cosmic::theme::active().cosmic().spacing;
-    
-    let mut dialog_content = widget::column()
+
+    // Left column: title, input, actions
+    let left = widget::column()
         .spacing(spacing.space_m)
-        .padding(spacing.space_l);
+        .padding(spacing.space_l)
+        .push(
+            widget::text("Start New Chat")
+                .size(20)
+                .font(cosmic::font::bold())
+        )
+        .push(
+            widget::column()
+                .spacing(spacing.space_xs)
+                .push(widget::text("Enter phone number or contact name:").size(14))
+                .push(
+                    widget::text_input("e.g., +1-555-123-4567 or John Doe", &app.new_chat_phone_input)
+                        .on_input(SmsMessage::UpdateNewChatPhone)
+                        .width(Length::Fill)
+                )
+        )
+        .push(view_new_chat_actions(app, &spacing))
+        .width(Length::Fixed(340.0));
 
-    // Title
-    dialog_content = dialog_content.push(
-        widget::text("Start New Chat")
-            .size(20)
-            .font(cosmic::font::bold())
-    );
+    // Right column: contacts list
+    let right = widget::column()
+        .spacing(spacing.space_s)
+        .padding(spacing.space_l)
+        .push(
+            widget::text("Contacts")
+                .size(16)
+                .font(cosmic::font::bold())
+        )
+        .push(view_contacts_list(app, &spacing))
+        .width(Length::Fill);
 
-    // Phone number input
-    dialog_content = dialog_content.push(
-        widget::column()
-            .spacing(spacing.space_xs)
-            .push(widget::text("Enter phone number or contact name:").size(14))
-            .push(
-                widget::text_input("e.g., +1-555-123-4567 or John Doe", &app.new_chat_phone_input)
-                    .on_input(SmsMessage::UpdateNewChatPhone)
-                    .width(Length::Fill)
-            )
-    );
+    let content = widget::row()
+        .push(left)
+        .push(widget::divider::vertical::default())
+        .push(right)
+        .height(Length::Fixed(500.0));
 
-    // Action buttons
-    dialog_content = dialog_content.push(view_new_chat_actions(app, &spacing));
-
-    // Divider and contacts section
-    dialog_content = dialog_content.push(widget::divider::horizontal::default());
-    dialog_content = dialog_content.push(widget::text("Or select from contacts:").size(14));
-
-    // Contacts list
-    dialog_content = dialog_content.push(view_contacts_list(app, &spacing));
-
-    widget::container(dialog_content)
+    widget::container(content)
         .class(cosmic::theme::Container::Card)
-        .width(Length::Fixed(500.0))
-        .max_height(600.0)
+        .width(Length::Fill)
         .into()
 }
 
@@ -87,20 +93,18 @@ fn view_contacts_list<'a>(app: &'a SmsWindow, spacing: &cosmic::cosmic_theme::Sp
     }
 
     let mut contacts_list = widget::column().spacing(spacing.space_xxs);
-    
     let filtered_contacts = get_filtered_contacts(app);
-    
+
     if filtered_contacts.is_empty() {
         contacts_list = contacts_list.push(widget::text("No matching contacts").size(12));
     } else {
         for (phone, name) in filtered_contacts.iter() {
-            let contact_btn = widget::button::text(format!("{} ({})", name, phone))
-                .on_press(SmsMessage::SelectContactForNewChat(phone.to_string(), name.to_string()))
-                .width(Length::Fill);
-            
-            contacts_list = contacts_list.push(contact_btn);
+            contacts_list = contacts_list.push(
+                widget::button::text(format!("{} ({})", name, phone))
+                    .on_press(SmsMessage::SelectContactForNewChat(phone.to_string(), name.to_string()))
+                    .width(Length::Fill)
+            );
         }
-        
         contacts_list = contacts_list.push(
             widget::container(
                 widget::text(format!(
@@ -113,9 +117,9 @@ fn view_contacts_list<'a>(app: &'a SmsWindow, spacing: &cosmic::cosmic_theme::Sp
             .padding([spacing.space_xs, 0, 0, 0])
         );
     }
-    
+
     widget::scrollable(contacts_list)
-        .height(Length::Fixed(400.0))
+        .height(Length::Fill)
         .into()
 }
 
