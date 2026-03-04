@@ -88,8 +88,8 @@ impl From<String> for PacketType {
             "kdeconnect.contacts.request_all_uids_timestamps" => {
                 PacketType::ContactsRequestAllUidsTimestamps
             }
-            "kdeconnect.contacts.request_vcards_by_uid" => PacketType::ContactsRequestVcardsByUid,
-            "kdeconnect.contacts.response_uids_timestamps" => {
+            "kdeconnect.contacts.response_uids_timestamps" |
+            "kdeconnect.contacts.response_all_uids_timestamps" => {
                 PacketType::ContactsResponseUidsTimestamps
             }
             "kdeconnect.contacts.response_vcards" => PacketType::ContactsResponseVcards,

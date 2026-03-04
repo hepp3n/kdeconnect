@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use zbus::{Connection, proxy};
 use futures::StreamExt;
 
@@ -22,6 +23,7 @@ pub enum ServiceEvent {
     DevicePaired(String, Device),
     DeviceDisconnected(String),
     SmsMessagesReceived(String), // JSON string
+    ContactsReceived(HashMap<String, String>), // phone -> name
 }
 
 /// D-Bus proxy for daemon interface
@@ -41,10 +43,10 @@ trait Daemon {
 
     #[zbus(signal)]
     async fn device_connected(&self, device_id: String, device: Device) -> zbus::Result<()>;
-    
+
     #[zbus(signal)]
     async fn device_paired(&self, device_id: String, device: Device) -> zbus::Result<()>;
-    
+
     #[zbus(signal)]
     async fn device_disconnected(&self, device_id: String) -> zbus::Result<()>;
 }
@@ -64,23 +66,39 @@ trait Sms {
     async fn sms_messages_received(&self, messages_json: String) -> zbus::Result<()>;
 }
 
+/// D-Bus proxy for Contacts interface
+#[proxy(
+    interface = "org.cosmic.KdeConnect.Contacts",
+    default_service = "org.cosmic.KdeConnect",
+    default_path = "/org/cosmic/KdeConnect/Contacts"
+)]
+trait Contacts {
+    async fn request_contacts(&self, device_id: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn contacts_received(&self, contacts_json: String) -> zbus::Result<()>;
+}
+
 /// Main client for KDE Connect service
 pub struct KdeConnectClient {
     daemon_proxy: DaemonProxy<'static>,
     sms_proxy: SmsProxy<'static>,
+    contacts_proxy: ContactsProxy<'static>,
 }
 
 impl KdeConnectClient {
     /// Connect to the KDE Connect service
     pub async fn new() -> Result<Self> {
         let connection = Connection::session().await?;
-        
+
         let daemon_proxy = DaemonProxy::new(&connection).await?;
         let sms_proxy = SmsProxy::new(&connection).await?;
+        let contacts_proxy = ContactsProxy::new(&connection).await?;
 
         Ok(Self {
             daemon_proxy,
             sms_proxy,
+            contacts_proxy,
         })
     }
 
@@ -134,14 +152,19 @@ impl KdeConnectClient {
         Ok(self.sms_proxy.send_sms(device_id, phone_number, message).await?)
     }
 
+    /// Manually request contacts sync for a device
+    pub async fn request_contacts(&self, device_id: &str) -> Result<()> {
+        Ok(self.contacts_proxy.request_contacts(device_id).await?)
+    }
+
     /// Listen for service events (signals)
     pub async fn listen_for_events(&self) -> impl futures::Stream<Item = ServiceEvent> + '_ {
         let daemon_connected = self.daemon_proxy.receive_device_connected().await.unwrap();
         let daemon_paired = self.daemon_proxy.receive_device_paired().await.unwrap();
         let daemon_disconnected = self.daemon_proxy.receive_device_disconnected().await.unwrap();
         let sms_messages = self.sms_proxy.receive_sms_messages_received().await.unwrap();
+        let contacts = self.contacts_proxy.receive_contacts_received().await.unwrap();
 
-        // Map each stream to ServiceEvent - args() returns specific Args structs
         let connected_stream = daemon_connected.filter_map(|signal| async move {
             match signal.args() {
                 Ok(args) => Some(ServiceEvent::DeviceConnected(args.device_id, args.device)),
@@ -182,13 +205,31 @@ impl KdeConnectClient {
             }
         });
 
-        // Merge all streams
+        let contacts_stream = contacts.filter_map(|signal| async move {
+            match signal.args() {
+                Ok(args) => {
+                    match serde_json::from_str::<HashMap<String, String>>(&args.contacts_json) {
+                        Ok(map) => Some(ServiceEvent::ContactsReceived(map)),
+                        Err(e) => {
+                            eprintln!("Failed to parse contacts JSON: {:?}", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse ContactsReceived signal: {:?}", e);
+                    None
+                }
+            }
+        });
+
         use futures::stream::select_all;
         select_all(vec![
             Box::pin(connected_stream) as std::pin::Pin<Box<dyn futures::Stream<Item = ServiceEvent> + Send + '_>>,
             Box::pin(paired_stream),
             Box::pin(disconnected_stream),
             Box::pin(sms_stream),
+            Box::pin(contacts_stream),
         ])
     }
 }

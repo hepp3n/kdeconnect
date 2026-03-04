@@ -29,7 +29,7 @@ pub(crate) mod protocol;
 pub(crate) mod transport;
 
 // Re-export commonly used protocol types for external crates - M4L
-pub use protocol::{ProtocolPacket, PacketType};
+pub use protocol::{PacketType, ProtocolPacket};
 
 pub static GLOBAL_CONFIG: OnceLock<config::Config> = OnceLock::new();
 
@@ -77,7 +77,6 @@ impl KdeConnectCore {
         });
 
         let udp = Arc::clone(&udp_transport);
-
         tokio::spawn(async move {
             let _ = udp.listen().await;
         });
@@ -90,9 +89,7 @@ impl KdeConnectCore {
         let clipboard_plugin = plugins::clipboard::Clipboard::default();
         plugin_registry.register(Arc::new(clipboard_plugin)).await;
         let mousepad_keyboardstate = plugins::mousepad::KeyboardState::default();
-        plugin_registry
-            .register(Arc::new(mousepad_keyboardstate))
-            .await;
+        plugin_registry.register(Arc::new(mousepad_keyboardstate)).await;
         let mpris_plugin = plugins::mpris::Mpris::default();
         plugin_registry.register(Arc::new(mpris_plugin)).await;
 
@@ -103,24 +100,17 @@ impl KdeConnectCore {
         plugins::mpris::expose_phone_mpris(mpris_conn_rx, event_tx.clone());
 
         let notification_plugin = plugins::notification::Notification::default();
-        plugin_registry
-            .register(Arc::new(notification_plugin))
-            .await;
+        plugin_registry.register(Arc::new(notification_plugin)).await;
         let connectivity_report_plugin =
             plugins::connectivity_report::ConnectivityReport::default();
-        plugin_registry
-            .register(Arc::new(connectivity_report_plugin))
-            .await;
+        plugin_registry.register(Arc::new(connectivity_report_plugin)).await;
         let run_command_plugin = plugins::run_command::RunCommandRequest::default();
         plugin_registry.register(Arc::new(run_command_plugin)).await;
         let share_request_plugin = plugins::share::ShareRequest::default();
-        plugin_registry
-            .register(Arc::new(share_request_plugin))
-            .await;
-         // Add SMS plugin registration
-        let sms_plugin = plugins::sms::SmsMessages { 
-            messages: Vec::new(), 
-            version: None 
+        plugin_registry.register(Arc::new(share_request_plugin)).await;
+        let sms_plugin = plugins::sms::SmsMessages {
+            messages: Vec::new(),
+            version: None,
         };
         plugin_registry.register(Arc::new(sms_plugin)).await;
 
@@ -185,25 +175,22 @@ impl KdeConnectCore {
                 info!("[core] packet received: {}", packet.packet_type);
 
                 if let Some(device) = self.device_manager.get_device(&device).await {
-                    // dispatch to plugins
+                    // dispatch to plugins — all 5 args required
                     self.plugin_registry
                         .dispatch(
                             device,
                             packet.clone(),
                             self.event_tx.clone(),
                             self.conn_tx.clone(),
-                            self.mpris_conn_tx.clone(), // Pass mpris channel
+                            self.mpris_conn_tx.clone(),
                         )
                         .await;
                 };
             }
             CoreEvent::DeviceDiscovered(device) => {
                 info!("[core] device discovered.");
-                let conn_event = ConnectionEvent::Connected((
-                    device.device_id.clone(),
-                    device,
-                ));
-                // Send to both channels
+                let conn_event =
+                    ConnectionEvent::Connected((device.device_id.clone(), device));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
@@ -211,8 +198,8 @@ impl KdeConnectCore {
                 info!("[core] device paired.");
                 // Clear pending_pair — this device is now trusted
                 self.pending_pair.lock().await.remove(&device_id);
-                // Send MprisRequest now that the phone trusts us
                 if let Some(sender) = guard.get(&device_id) {
+                    // Request MPRIS player list
                     let request = crate::plugins::mpris::MprisRequest {
                         player: None,
                         request_now_playing: Some(true),
@@ -226,9 +213,17 @@ impl KdeConnectCore {
                         action: None,
                         album_art_url: None,
                     };
-                    let value = serde_json::to_value(request).expect("fail serializing mpris request");
+                    let value =
+                        serde_json::to_value(request).expect("fail serializing mpris request");
                     let pkt = ProtocolPacket::new(PacketType::MprisRequest, value);
                     let _ = sender.send(pkt);
+
+                    // Request all contact UIDs now that device is paired
+                    let contacts_pkt = ProtocolPacket::new(
+                        PacketType::ContactsRequestAllUidsTimestamps,
+                        serde_json::json!({}),
+                    );
+                    let _ = sender.send(contacts_pkt);
                 }
                 let conn_event = ConnectionEvent::DevicePaired((device_id, device));
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -240,13 +235,11 @@ impl KdeConnectCore {
                     device_id,
                     crate::device::PairState::NotPaired,
                 ));
-                // Send to both channels
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
             CoreEvent::DevicePairStateChanged((device_id, pair_state)) => {
                 let conn_event = ConnectionEvent::PairStateChanged((device_id, pair_state));
-                // Send to both channels
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
@@ -283,10 +276,9 @@ impl KdeConnectCore {
                 name,
                 write_tx,
             } => {
-                // store write_tx for this addr
                 debug!("[core] new connection from: {}", addr);
 
-                // create device entry
+                // Create or load device entry using Device::new
                 let device = Device::new(id.0.clone(), name, addr)
                     .await
                     .expect("cannot create new device from metadata");
@@ -297,13 +289,16 @@ impl KdeConnectCore {
 
                 // Duplicate guard: keep existing connection if still live.
                 // The phone re-broadcasts UDP identity every ~90s even when connected.
-                // Replacing the live writer entry drops the sender → CloseNotify →
+                // Replacing the live writer entry drops the sender -> CloseNotify ->
                 // phone stops sending plugin data. Only replace when entry is dead.
                 let accepted = {
                     let mut guard = self.writer_map.lock().await;
                     match guard.get(&id) {
                         Some(existing) if !existing.is_closed() => {
-                            info!("[core] Duplicate connection from {} — keeping existing live connection", id);
+                            info!(
+                                "[core] Duplicate connection from {} — keeping existing live connection",
+                                id
+                            );
                             false
                         }
                         _ => {
@@ -322,6 +317,18 @@ impl KdeConnectCore {
                 // Clear pending_pair so any incoming pair:false triggers a fresh pair:true.
                 self.pending_pair.lock().await.remove(&id);
 
+                // If already paired, request contacts immediately on reconnect
+                if device.pair_state == crate::device::PairState::Paired {
+                    let guard = self.writer_map.lock().await;
+                    if let Some(sender) = guard.get(&id) {
+                        let contacts_pkt = ProtocolPacket::new(
+                            PacketType::ContactsRequestAllUidsTimestamps,
+                            serde_json::json!({}),
+                        );
+                        let _ = sender.send(contacts_pkt);
+                    }
+                }
+
                 let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
@@ -332,7 +339,8 @@ impl KdeConnectCore {
                     Ok(pkt) => {
                         // if packet is type `pair` handle it immediately
                         if let PacketType::Pair = pkt.packet_type {
-                            if let Ok(pair_body) = serde_json::from_value::<Pair>(pkt.body.clone())
+                            if let Ok(pair_body) =
+                                serde_json::from_value::<Pair>(pkt.body.clone())
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 // If phone sends pair:false, it doesn't trust us — initiate
@@ -444,15 +452,21 @@ impl KdeConnectCore {
                 eprintln!("!!! SENDING PACKET !!!");
                 eprintln!("  Device: {}", device_id.0);
                 eprintln!("  Packet type: {:?}", packet.packet_type);
-                eprintln!("  Body: {}", serde_json::to_string_pretty(&packet.body).unwrap_or_default());
-    
+                eprintln!(
+                    "  Body: {}",
+                    serde_json::to_string_pretty(&packet.body).unwrap_or_default()
+                );
+
                 if let Some(sender) = guard.get(&device_id) {
                     eprintln!("  ✓ Found sender for device");
                     let result = sender.send(packet);
                     eprintln!("  Send result: {:?}", result.is_ok());
                 } else {
                     eprintln!("  ✗ NO SENDER found for device!");
-                    eprintln!("  Available devices: {:?}", guard.keys().collect::<Vec<_>>());
+                    eprintln!(
+                        "  Available devices: {:?}",
+                        guard.keys().collect::<Vec<_>>()
+                    );
                 }
             }
             AppEvent::SendFiles((device_id, files_list)) => {
@@ -475,7 +489,6 @@ impl KdeConnectCore {
                         let payload = DevicePayload::from(file);
 
                         if let Some(_device) = self.device_manager.get_device(&device_id).await {
-                            // dispatch to plugins
                             self.plugin_registry
                                 .send_payload(packet, sender, payload.buf, payload.size)
                                 .await;

@@ -105,10 +105,6 @@ impl Application for SmsWindow {
                     return;
                 }
 
-                eprintln!("[SMS-SUB] D-Bus init OK, requesting conversations");
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                dbus::fetch_conversations(&device_id).await;
-
                 let Some(client) = dbus::get_client().await else {
                     eprintln!("[SMS-SUB] no client, stream idle");
                     std::future::pending::<()>().await;
@@ -121,19 +117,33 @@ impl Application for SmsWindow {
                     eprintln!("[SMS-SUB] subscribing to events");
                     let mut event_stream = client.listen_for_events().await;
 
+                    // Subscribe FIRST, then request — contacts response is a
+                    // fire-and-forget D-Bus signal; if we request before subscribing
+                    // the signal arrives while nobody is listening and is lost.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                    dbus::fetch_conversations(&device_id).await;
+                    dbus::fetch_contacts(&device_id).await;
+
                     while let Some(event) = event_stream.next().await {
                         use kdeconnect_dbus_client::ServiceEvent;
-                        if let ServiceEvent::SmsMessagesReceived(json) = event {
-                            eprintln!("[SMS-SUB] SmsMessagesReceived len={}", json.len());
-                            let (messages, conversations) = dbus::parse_sms_messages(&json);
-                            for msg in messages {
+                        match event {
+                            ServiceEvent::SmsMessagesReceived(json) => {
+                                eprintln!("[SMS-SUB] SmsMessagesReceived len={}", json.len());
+                                let (messages, conversations) = dbus::parse_sms_messages(&json);
+                                for msg in messages {
+                                    yield SmsMessage::ProtocolEventReceived(
+                                        ProtocolEvent::MessageReceived(msg)
+                                    );
+                                }
                                 yield SmsMessage::ProtocolEventReceived(
-                                    ProtocolEvent::MessageReceived(msg)
+                                    ProtocolEvent::ConversationsReceived(conversations)
                                 );
                             }
-                            yield SmsMessage::ProtocolEventReceived(
-                                ProtocolEvent::ConversationsReceived(conversations)
-                            );
+                            ServiceEvent::ContactsReceived(contacts) => {
+                                eprintln!("[SMS-SUB] ContactsReceived {} entries", contacts.len());
+                                yield SmsMessage::ContactsLoaded(contacts);
+                            }
+                            _ => {}
                         }
                     }
 
@@ -159,6 +169,7 @@ impl Application for SmsWindow {
                 self.update_conversation_names();
             }
             SmsMessage::ContactsLoaded(contacts) => {
+                eprintln!("[SMS-APP] ContactsLoaded: {} contacts", contacts.len());
                 self.contacts = contacts;
                 self.update_conversation_names();
             }
@@ -264,12 +275,16 @@ impl SmsWindow {
             ProtocolEvent::ConversationsReceived(conversations) => {
                 eprintln!("[SMS-APP] ConversationsReceived: {} conversations", conversations.len());
 
-                // Merge: preserve new_* threads, update/add real ones
+                // Capture selected new_* phone BEFORE we mutate merged
+                let pending_new_phone: Option<String> = self.selected_thread.as_ref()
+                    .filter(|t| t.starts_with("new_"))
+                    .and_then(|sel| self.conversations.iter().find(|c| c.thread_id == *sel))
+                    .map(|c| c.phone_number.clone());
+
                 let mut merged = self.conversations.clone();
                 for incoming in &conversations {
                     if incoming.thread_id.starts_with("new_") { continue; }
 
-                    // Check if we have a new_* placeholder for this phone number
                     if let Some(pos) = merged.iter().position(|c| {
                         c.thread_id.starts_with("new_")
                             && super::utils::phone_numbers_match(&c.phone_number, &incoming.phone_number)
@@ -282,7 +297,6 @@ impl SmsWindow {
                     }
                 }
 
-                // Remove any new_* threads that now have a real counterpart
                 merged.retain(|c| {
                     if !c.thread_id.starts_with("new_") { return true; }
                     !conversations.iter().any(|r| super::utils::phone_numbers_match(&r.phone_number, &c.phone_number))
@@ -291,12 +305,13 @@ impl SmsWindow {
                 self.conversations = merged;
                 self.update_conversation_names();
 
-                // If selected thread was new_*, update to real thread_id
-                if let Some(sel) = &self.selected_thread.clone() {
-                    if sel.starts_with("new_") {
-                        if let Some(conv) = self.conversations.iter().find(|c| !c.thread_id.starts_with("new_")) {
-                            self.selected_thread = Some(conv.thread_id.clone());
-                        }
+                // If we had a new_* selected, find its real thread by phone number now
+                if let Some(phone) = pending_new_phone {
+                    if let Some(real) = self.conversations.iter().find(|c| {
+                        !c.thread_id.starts_with("new_")
+                            && super::utils::phone_numbers_match(&c.phone_number, &phone)
+                    }) {
+                        self.selected_thread = Some(real.thread_id.clone());
                     }
                 }
             }
@@ -344,8 +359,10 @@ impl SmsWindow {
 
     fn update_conversation_names(&mut self) {
         for conv in &mut self.conversations {
-            if let Some(name) = self.contacts.get(&conv.phone_number) {
-                conv.contact_name = name.clone();
+            if let Some(name) = self.contacts.iter().find(|(phone, _)| {
+                super::utils::phone_numbers_match(phone, &conv.phone_number)
+            }).map(|(_, name)| name.clone()) {
+                conv.contact_name = name;
             }
         }
     }
