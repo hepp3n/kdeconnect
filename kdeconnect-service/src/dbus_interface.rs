@@ -38,15 +38,16 @@ pub struct DbusDevice {
     pub is_reachable: bool,
 }
 
-// --- Contacts cache helpers --------------------------------------------------
+// --- Per-device cache helpers ------------------------------------------------
+// Caches live at ~/.local/share/kdeconnect/{device_id}/{contacts,sms}_cache.json
 
-fn contacts_cache_path() -> std::path::PathBuf {
+fn device_cache_dir(device_id: &str) -> std::path::PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
-    base.join("kdeconnect").join("contacts_cache.json")
+    base.join("kdeconnect").join(device_id)
 }
 
-async fn save_contacts_cache(contacts: &HashMap<String, String>) {
-    let path = contacts_cache_path();
+async fn save_contacts_cache(device_id: &str, contacts: &HashMap<String, String>) {
+    let path = device_cache_dir(device_id).join("contacts_cache.json");
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -55,20 +56,20 @@ async fn save_contacts_cache(contacts: &HashMap<String, String>) {
             if let Err(e) = tokio::fs::write(&path, json).await {
                 eprintln!("📇 Failed to save contacts cache: {}", e);
             } else {
-                eprintln!("📇 Contacts cache saved ({} entries)", contacts.len());
+                eprintln!("📇 Contacts cache saved ({} entries) for {}", contacts.len(), device_id);
             }
         }
         Err(e) => eprintln!("📇 Failed to serialize contacts for cache: {}", e),
     }
 }
 
-async fn load_contacts_cache() -> Option<HashMap<String, String>> {
-    let path = contacts_cache_path();
+async fn load_contacts_cache(device_id: &str) -> Option<HashMap<String, String>> {
+    let path = device_cache_dir(device_id).join("contacts_cache.json");
     match tokio::fs::read_to_string(&path).await {
         Ok(json) => match serde_json::from_str(&json) {
-            Ok(contacts) => {
-                let map: HashMap<String, String> = contacts;
-                eprintln!("📇 Loaded contacts cache ({} entries)", map.len());
+            Ok(map) => {
+                let map: HashMap<String, String> = map;
+                eprintln!("📇 Loaded contacts cache ({} entries) for {}", map.len(), device_id);
                 Some(map)
             }
             Err(e) => {
@@ -76,10 +77,30 @@ async fn load_contacts_cache() -> Option<HashMap<String, String>> {
                 None
             }
         },
-        Err(_) => {
-            eprintln!("📇 No contacts cache found");
-            None
+        Err(_) => None,
+    }
+}
+
+async fn save_sms_cache(device_id: &str, messages_json: &str) {
+    let path = device_cache_dir(device_id).join("sms_cache.json");
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Err(e) = tokio::fs::write(&path, messages_json).await {
+        eprintln!("📱 Failed to save SMS cache: {}", e);
+    } else {
+        eprintln!("📱 SMS cache saved ({} bytes) for {}", messages_json.len(), device_id);
+    }
+}
+
+async fn load_sms_cache(device_id: &str) -> Option<String> {
+    let path = device_cache_dir(device_id).join("sms_cache.json");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(json) if !json.is_empty() => {
+            eprintln!("📱 Loaded SMS cache ({} bytes) for {}", json.len(), device_id);
+            Some(json)
         }
+        _ => None,
     }
 }
 
@@ -193,10 +214,27 @@ impl DaemonInterface {
 /// SMS-specific D-Bus interface
 pub struct SmsInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
+    /// In-memory SMS cache — survives app close/reopen as long as service runs
+    sms_cache: Arc<Mutex<Option<String>>>,
+    /// Last known connected device ID — needed to key the disk cache
+    #[allow(dead_code)]
+    current_device_id: Arc<Mutex<Option<String>>>,
 }
 
 #[interface(name = "io.github.hepp3n.kdeconnect.Sms")]
 impl SmsInterface {
+    /// Return cached SMS JSON — in-memory first, disk fallback, empty if neither
+    async fn get_cached_sms(&self, device_id: String) -> String {
+        if let Some(json) = self.sms_cache.lock().await.as_ref() {
+            eprintln!("📱 Returning in-memory SMS cache ({} bytes)", json.len());
+            return json.clone();
+        }
+        match load_sms_cache(&device_id).await {
+            Some(json) => json,
+            None => String::new(),
+        }
+    }
+
     /// Request all conversations from device
     async fn request_conversations(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RequestConversations called for {}", device_id);
@@ -306,6 +344,14 @@ impl ContactsInterface {
         Ok(())
     }
 
+    /// Return cached contacts from disk — no phone required
+    async fn get_cached_contacts(&self, device_id: String) -> String {
+        match load_contacts_cache(&device_id).await {
+            Some(contacts) => serde_json::to_string(&contacts).unwrap_or_else(|_| "{}".to_string()),
+            None => "{}".to_string(),
+        }
+    }
+
     /// Signal: contacts received — JSON object mapping phone → name
     #[zbus(signal)]
     async fn contacts_received(
@@ -355,9 +401,15 @@ impl KdeConnectService {
             .await?;
         eprintln!("✓ Daemon interface registered at {}", DAEMON_PATH);
 
+        // Shared state for per-device caching
+        let sms_cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let current_device_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
         // Register SMS interface
         let sms_interface = SmsInterface {
             event_sender: event_sender.clone(),
+            sms_cache: sms_cache.clone(),
+            current_device_id: current_device_id.clone(),
         };
         connection
             .object_server()
@@ -388,6 +440,8 @@ impl KdeConnectService {
         let devices_clone = devices.clone();
         let event_sender_clone = event_sender.clone();
         let sms_synced: SmsSyncedSet = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let sms_cache_clone = sms_cache.clone();
+        let current_device_id_clone = current_device_id.clone();
         tokio::spawn(async move {
             eprintln!("Event processor task running");
             loop {
@@ -399,6 +453,8 @@ impl KdeConnectService {
                         &devices_clone,
                         &event_sender_clone,
                         &sms_synced,
+                        &sms_cache_clone,
+                        &current_device_id_clone,
                     )
                     .await
                     {
@@ -433,11 +489,16 @@ impl KdeConnectService {
         devices: &Arc<Mutex<HashMap<String, DbusDevice>>>,
         event_sender: &Arc<mpsc::UnboundedSender<AppEvent>>,
         sms_synced: &SmsSyncedSet,
+        sms_cache: &Arc<Mutex<Option<String>>>,
+        current_device_id: &Arc<Mutex<Option<String>>>,
     ) -> Result<()> {
         match event {
             ConnectionEvent::Connected((device_id, device)) => {
                 info!("Event: Device connected - {}", device.name);
                 eprintln!("🔌 Device connected: {} ({})", device.name, device_id.0);
+
+                // Track the active device so SMS/contacts events key their caches correctly
+                *current_device_id.lock().await = Some(device_id.0.clone());
 
                 let is_paired = matches!(device.pair_state, PairState::Paired);
                 let dbus_device = DbusDevice {
@@ -467,9 +528,10 @@ impl KdeConnectService {
                 eprintln!("✓ Device connected signal emitted");
 
                 if is_paired {
-                    // Emit cached contacts immediately so the SMS app has names
-                    // available before the live sync completes (or if phone is asleep).
-                    if let Some(cached) = load_contacts_cache().await {
+                    let did = device_id.0.clone();
+
+                    // Emit cached contacts immediately so SMS app has names before live sync
+                    if let Some(cached) = load_contacts_cache(&did).await {
                         if let Ok(contacts_json) = serde_json::to_string(&cached) {
                             let iface_ref = connection
                                 .object_server()
@@ -487,15 +549,21 @@ impl KdeConnectService {
                         }
                     }
 
+                    // Seed in-memory SMS cache from disk on reconnect so get_cached_sms()
+                    // returns data immediately even if the service restarted
+                    if sms_cache.lock().await.is_none() {
+                        if let Some(cached_sms) = load_sms_cache(&did).await {
+                            *sms_cache.lock().await = Some(cached_sms);
+                            eprintln!("📱 Seeded in-memory SMS cache from disk on connect");
+                        }
+                    }
+
                     let already_synced = sms_synced.lock().await.contains(&device_id.0);
                     if !already_synced {
                         sms_synced.lock().await.insert(device_id.0.clone());
                     }
 
-                    // Always request live SMS + contacts sync on every connect so
-                    // any changes made while the phone was away are picked up.
                     let sender = event_sender.clone();
-                    let did = device_id.0.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         let sms_packet =
@@ -515,6 +583,8 @@ impl KdeConnectService {
             ConnectionEvent::DevicePaired((device_id, device)) => {
                 info!("Event: Device paired - {}", device.name);
                 eprintln!("🔐 Device paired: {} ({})", device.name, device_id.0);
+
+                *current_device_id.lock().await = Some(device_id.0.clone());
 
                 let dbus_device = DbusDevice {
                     id: device_id.0.clone(),
@@ -567,6 +637,12 @@ impl KdeConnectService {
                 sms_synced.lock().await.remove(&device_id.0);
                 devices.lock().await.remove(&device_id.0);
 
+                // Clear active device; will be set again on reconnect
+                let mut cid = current_device_id.lock().await;
+                if cid.as_deref() == Some(&device_id.0) {
+                    *cid = None;
+                }
+
                 let iface_ref = connection
                     .object_server()
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
@@ -601,6 +677,14 @@ impl KdeConnectService {
                 let messages_json = serde_json::to_string(&sms_data)?;
                 eprintln!("    JSON size: {} bytes", messages_json.len());
 
+                // Update in-memory cache
+                *sms_cache.lock().await = Some(messages_json.clone());
+
+                // Persist to disk keyed by device ID
+                if let Some(did) = current_device_id.lock().await.as_deref() {
+                    save_sms_cache(did, &messages_json).await;
+                }
+
                 let iface_ref = connection
                     .object_server()
                     .interface::<_, SmsInterface>(SMS_PATH)
@@ -615,8 +699,9 @@ impl KdeConnectService {
                 info!("Event: Contacts received - {} contacts", contacts.len());
                 eprintln!("📇 Contacts received: {} entries", contacts.len());
 
-                // Save to disk for use on next reconnect / when phone is asleep
-                save_contacts_cache(&contacts).await;
+                if let Some(did) = current_device_id.lock().await.as_deref() {
+                    save_contacts_cache(did, &contacts).await;
+                }
 
                 let contacts_json = serde_json::to_string(&contacts)?;
 

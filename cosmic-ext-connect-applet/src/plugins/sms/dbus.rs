@@ -84,6 +84,44 @@ pub async fn fetch_contacts(device_id: &str) {
     }
 }
 
+pub async fn get_cached_contacts(device_id: &str) -> std::collections::HashMap<String, String> {
+    eprintln!("[SMS-DBUS] get_cached_contacts() device={}", device_id);
+    let Some(client) = get_client().await else {
+        return std::collections::HashMap::new();
+    };
+    match client.get_cached_contacts(device_id).await {
+        Ok(contacts) => {
+            eprintln!("[SMS-DBUS] got {} cached contacts", contacts.len());
+            contacts
+        }
+        Err(e) => {
+            eprintln!("[SMS-DBUS] get_cached_contacts FAILED: {:?}", e);
+            std::collections::HashMap::new()
+        }
+    }
+}
+
+pub async fn get_cached_sms(device_id: &str) -> Option<String> {
+    eprintln!("[SMS-DBUS] get_cached_sms() device={}", device_id);
+    let Some(client) = get_client().await else {
+        return None;
+    };
+    match client.get_cached_sms(device_id).await {
+        Ok(json) if !json.is_empty() => {
+            eprintln!("[SMS-DBUS] got cached SMS ({} bytes)", json.len());
+            Some(json)
+        }
+        Ok(_) => {
+            eprintln!("[SMS-DBUS] no SMS cache found");
+            None
+        }
+        Err(e) => {
+            eprintln!("[SMS-DBUS] get_cached_sms FAILED: {:?}", e);
+            None
+        }
+    }
+}
+
 pub fn parse_sms_messages(messages_json: &str) -> (Vec<Message>, Vec<Conversation>) {
     use std::collections::HashMap;
 
