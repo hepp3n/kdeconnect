@@ -15,7 +15,7 @@ lazy_static::lazy_static! {
 }
 
 /// Initialize the D-Bus client connection
-pub async fn iritialize() -> Result<()> {
+pub async fn initialize() -> Result<()> {
     eprintln!("=== Initializing D-Bus Client ===");
 
     let client = KdeConnectClient::new().await?;

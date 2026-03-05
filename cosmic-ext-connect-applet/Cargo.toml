@@ -3,6 +3,7 @@ name = "cosmic-ext-connect-applet"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
+default-run = "cosmic-ext-connect-applet"
 
 [lib]
 name = "cosmic_ext_connect_applet"
