@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=KDE Connect Service (Background)
+Exec=kdeconnect-service
+Terminal=false
+Type=Application
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-Flatpak=io.github.hepp3n.kdeconnect

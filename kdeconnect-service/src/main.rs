@@ -18,8 +18,8 @@ async fn main() -> Result<()> {
     info!("=== KDE Connect Service Starting ===");
 
     let service = dbus_interface::KdeConnectService::new().await?;
-    eprintln!("✓ D-Bus service started on org.cosmic.KdeConnect");
-    info!("✓ D-Bus service started on org.cosmic.KdeConnect");
+    eprintln!("✓ D-Bus service started on io.github.hepp3n.kdeconnect");
+    info!("✓ D-Bus service started on io.github.hepp3n.kdeconnect");
 
     service.run().await?;
 

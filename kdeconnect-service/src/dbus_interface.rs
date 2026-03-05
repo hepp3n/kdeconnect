@@ -17,10 +17,10 @@ use tracing::info;
 use zbus::{Connection, interface};
 use zbus::object_server::SignalEmitter;
 
-const SERVICE_NAME: &str = "org.cosmic.KdeConnect";
-const DAEMON_PATH: &str = "/org/cosmic/KdeConnect/Daemon";
-const SMS_PATH: &str = "/org/cosmic/KdeConnect/Sms";
-const CONTACTS_PATH: &str = "/org/cosmic/KdeConnect/Contacts";
+const SERVICE_NAME: &str = "io.github.hepp3n.kdeconnect";
+const DAEMON_PATH: &str = "/io/github/hepp3n/kdeconnect/Daemon";
+const SMS_PATH: &str = "/io/github/hepp3n/kdeconnect/Sms";
+const CONTACTS_PATH: &str = "/io/github/hepp3n/kdeconnect/Contacts";
 
 /// Simplified device info for D-Bus
 #[derive(Debug, Clone, Serialize, Deserialize, zbus::zvariant::Type, zbus::zvariant::Value, zbus::zvariant::OwnedValue)]
@@ -86,7 +86,7 @@ pub struct DaemonInterface {
     devices: Arc<Mutex<HashMap<String, DbusDevice>>>,
 }
 
-#[interface(name = "org.cosmic.KdeConnect.Daemon")]
+#[interface(name = "io.github.hepp3n.kdeconnect.Daemon")]
 impl DaemonInterface {
     /// List all known devices
     async fn list_devices(&self) -> Vec<DbusDevice> {
@@ -175,7 +175,7 @@ pub struct SmsInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
 }
 
-#[interface(name = "org.cosmic.KdeConnect.Sms")]
+#[interface(name = "io.github.hepp3n.kdeconnect.Sms")]
 impl SmsInterface {
     /// Request all conversations from device
     async fn request_conversations(&self, device_id: String) -> zbus::fdo::Result<()> {
@@ -259,7 +259,7 @@ pub struct ContactsInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
 }
 
-#[interface(name = "org.cosmic.KdeConnect.Contacts")]
+#[interface(name = "io.github.hepp3n.kdeconnect.Contacts")]
 impl ContactsInterface {
     /// Manually trigger a contacts sync from a device
     async fn request_contacts(&self, device_id: String) -> zbus::fdo::Result<()> {

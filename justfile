@@ -8,8 +8,8 @@ build:
     cargo build --release
 
 build-rel-offline:
-    cargo --offline build --release -p kdeconnect-service
-    cargo --offline build --release -p cosmic-ext-connect-applet
+    cargo build --offline --release
+    cargo build --offline --release -p kdeconnect-service
 
 build-service:
     cargo build --release -p kdeconnect-service
@@ -33,7 +33,9 @@ install-bins: build
 install-applet-desktop:
     install -Dm644 resources/{{APPID}}.desktop {{PREFIX}}/share/applications/{{APPID}}.desktop
     install -Dm644 resources/{{APPID}}.metainfo.xml {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
-    @echo "✓ Installed applet desktop file"
+    install -Dm644 resources/{{APPID}}.service {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
+    install -Dm644 resources/{{APPID}}.daemon.desktop {{PREFIX}}/etc/xdg/autostart/{{APPID}}.daemon.desktop
+    @echo "✓ Installed applet desktop, dbus service, and autostart files"
 
 install-systemd: build-service
     mkdir -p {{ XDG_CONFIG }}/systemd/user/

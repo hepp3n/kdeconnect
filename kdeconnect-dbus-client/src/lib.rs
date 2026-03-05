@@ -28,9 +28,9 @@ pub enum ServiceEvent {
 
 /// D-Bus proxy for daemon interface
 #[proxy(
-    interface = "org.cosmic.KdeConnect.Daemon",
-    default_service = "org.cosmic.KdeConnect",
-    default_path = "/org/cosmic/KdeConnect/Daemon"
+    interface = "io.github.hepp3n.kdeconnect.Daemon",
+    default_service = "io.github.hepp3n.kdeconnect",
+    default_path = "/io/github/hepp3n/kdeconnect/Daemon"
 )]
 trait Daemon {
     async fn list_devices(&self) -> zbus::Result<Vec<Device>>;
@@ -53,9 +53,9 @@ trait Daemon {
 
 /// D-Bus proxy for SMS interface
 #[proxy(
-    interface = "org.cosmic.KdeConnect.Sms",
-    default_service = "org.cosmic.KdeConnect",
-    default_path = "/org/cosmic/KdeConnect/Sms"
+    interface = "io.github.hepp3n.kdeconnect.Sms",
+    default_service = "io.github.hepp3n.kdeconnect",
+    default_path = "/io/github/hepp3n/kdeconnect/Sms"
 )]
 trait Sms {
     async fn request_conversations(&self, device_id: &str) -> zbus::Result<()>;
@@ -68,9 +68,9 @@ trait Sms {
 
 /// D-Bus proxy for Contacts interface
 #[proxy(
-    interface = "org.cosmic.KdeConnect.Contacts",
-    default_service = "org.cosmic.KdeConnect",
-    default_path = "/org/cosmic/KdeConnect/Contacts"
+    interface = "io.github.hepp3n.kdeconnect.Contacts",
+    default_service = "io.github.hepp3n.kdeconnect",
+    default_path = "/io/github/hepp3n/kdeconnect/Contacts"
 )]
 trait Contacts {
     async fn request_contacts(&self, device_id: &str) -> zbus::Result<()>;

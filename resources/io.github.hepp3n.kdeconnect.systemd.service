@@ -1,0 +1,12 @@
+[Unit]
+Description=KDE Connect Service (Flatpak)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/flatpak run --command=kdeconnect-service io.github.hepp3n.kdeconnect
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
