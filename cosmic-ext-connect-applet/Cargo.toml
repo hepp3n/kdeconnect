@@ -9,25 +9,21 @@ name = "cosmic_ext_connect_applet"
 path = "src/lib.rs"
 
 [dependencies]
-libcosmic = { git = "https://github.com/pop-os/libcosmic.git", rev = "86dcf8af6cfcb3ab65e41649e4793f47c5595433", default-features = false, features = [
-    "applet",
-    "tokio",
-    "wayland",
-] }
 kdeconnect-core = { workspace = true }
 kdeconnect-dbus-client = { workspace = true }
 ashpd = { workspace = true }
+libcosmic = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = "0.1"
-futures = "0.3"
-futures-util = "0.3"
-urlencoding = "2.1"
-serde_json = "1.0"
-lazy_static = "1.5"
-ctrlc = "3.4"
-async-stream = "0.3"
-anyhow = "1.0"
-percent-encoding = "2.3"
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+urlencoding = { workspace = true }
+serde_json = { workspace = true }
+lazy_static = { workspace = true }
+ctrlc = { workspace = true }
+async-stream = { workspace = true }
+anyhow = { workspace = true }
+percent-encoding = { workspace = true }
 
 [[bin]]
 name = "cosmic-ext-connect-applet"
@@ -40,4 +36,3 @@ path = "src/settings.rs"
 [[bin]]
 name = "cosmic-ext-connect-sms"
 path = "src/cosmic-ext-connect-sms.rs"
-

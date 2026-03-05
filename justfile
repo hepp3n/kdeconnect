@@ -2,6 +2,7 @@
 
 APPID := "io.github.hepp3n.kdeconnect"
 PREFIX := env_var("HOME") / ".local" 
+XDG_CONFIG := env_var_or_default("XDG_CONFIG_DIR", "~/.config")
 
 build:
     cargo build --release
@@ -35,8 +36,8 @@ install-applet-desktop:
     @echo "✓ Installed applet desktop file"
 
 install-systemd: build-service
-    mkdir -p ~/.config/systemd/user/
-    install -Dm644 kdeconnect-service/kdeconnect.service ~/.config/systemd/user/
+    mkdir -p {{ XDG_CONFIG }}/systemd/user/
+    install -Dm644 kdeconnect-service/kdeconnect.service {{ XDG_CONFIG }}/systemd/user/
     -systemctl --user daemon-reload || echo "⚠️  Could not reload systemd (not in graphical session)"
     @echo "✓ Installed systemd service file"
 
@@ -80,7 +81,7 @@ uninstall:
     rm -f {{PREFIX}}/bin/cosmic-ext-connect-applet
     rm -f {{PREFIX}}/bin/cosmic-ext-connect-settings
     rm -f {{PREFIX}}/bin/cosmic-ext-connect-sms
-    rm -f ~/.config/systemd/user/kdeconnect.service
+    rm -f {{ XDG_CONFIG }}/systemd/user/kdeconnect.service
     rm -f {{PREFIX}}/share/applications/{{APPID}}.desktop
     rm -f {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     @echo "✓ Uninstalled"

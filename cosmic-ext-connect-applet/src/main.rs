@@ -259,7 +259,7 @@ impl cosmic::Application for KdeConnectApplet {
         )
     }
 
-    fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
+    fn style(&self) -> Option<cosmic::iced::theme::Style> {
         Some(cosmic::applet::style())
     }
 

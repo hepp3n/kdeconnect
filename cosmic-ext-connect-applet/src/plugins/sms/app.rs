@@ -1,10 +1,11 @@
+use async_stream::stream;
 use cosmic::{
+    Action, Application, ApplicationExt, Element, Task,
     app::Core,
     iced::{Length, Subscription},
     iced_futures::futures::StreamExt,
-    widget, Application, ApplicationExt, Element, Task, Action,
+    widget,
 };
-use async_stream::stream;
 use std::collections::HashMap;
 
 use super::dbus;
@@ -14,10 +15,7 @@ use super::views;
 
 #[allow(dead_code)]
 pub fn run(device_id: String, device_name: String) -> cosmic::iced::Result {
-    cosmic::app::run::<SmsWindow>(
-        cosmic::app::Settings::default(),
-        (device_id, device_name),
-    )
+    cosmic::app::run::<SmsWindow>(cosmic::app::Settings::default(), (device_id, device_name))
 }
 
 #[derive(Clone, Debug)]
@@ -64,8 +62,12 @@ impl Application for SmsWindow {
     type Message = SmsMessage;
     const APP_ID: &'static str = "io.github.hepp3n.kdeconnect.sms";
 
-    fn core(&self) -> &Core { &self.core }
-    fn core_mut(&mut self) -> &mut Core { &mut self.core }
+    fn core(&self) -> &Core {
+        &self.core
+    }
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.core
+    }
 
     fn init(core: Core, flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
         let (device_id, device_name) = flags;
@@ -94,8 +96,8 @@ impl Application for SmsWindow {
     fn subscription(&self) -> Subscription<Self::Message> {
         let device_id = self.device_id.clone();
 
-        Subscription::run_with_id(
-            format!("sms-{}", device_id),
+        Subscription::run_with(device_id, |device_id| {
+            let device_id = device_id.clone();
             stream! {
                 eprintln!("[SMS-SUB] stream started for device={}", device_id);
 
@@ -151,7 +153,7 @@ impl Application for SmsWindow {
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 }
             }
-        )
+        })
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
@@ -190,9 +192,16 @@ impl Application for SmsWindow {
                 self.search_query = query;
             }
             SmsMessage::SendMessage => {
-                if self.message_input.trim().is_empty() { return Task::none(); }
-                let Some(thread_id) = self.selected_thread.clone() else { return Task::none(); };
-                let Some(conv) = self.conversations.iter().find(|c| c.thread_id == thread_id) else { return Task::none(); };
+                if self.message_input.trim().is_empty() {
+                    return Task::none();
+                }
+                let Some(thread_id) = self.selected_thread.clone() else {
+                    return Task::none();
+                };
+                let Some(conv) = self.conversations.iter().find(|c| c.thread_id == thread_id)
+                else {
+                    return Task::none();
+                };
 
                 let device_id = self.device_id.clone();
                 let phone = conv.phone_number.clone();
@@ -218,7 +227,10 @@ impl Application for SmsWindow {
             }
             SmsMessage::RefreshThread => {}
             SmsMessage::ProtocolEventReceived(event) => {
-                eprintln!("[SMS-APP] ProtocolEventReceived: {:?}", std::mem::discriminant(&event));
+                eprintln!(
+                    "[SMS-APP] ProtocolEventReceived: {:?}",
+                    std::mem::discriminant(&event)
+                );
                 self.handle_protocol_event(event);
             }
             SmsMessage::OpenNewChatDialog => {
@@ -238,14 +250,17 @@ impl Application for SmsWindow {
                 let phone = self.new_chat_phone_input.trim().to_string();
                 if !phone.is_empty() {
                     let thread_id = format!("new_{}", utils::now_millis());
-                    self.conversations.insert(0, Conversation {
-                        thread_id: thread_id.clone(),
-                        phone_number: phone,
-                        contact_name: String::new(),
-                        last_message: String::new(),
-                        timestamp: utils::now_millis(),
-                        unread: false,
-                    });
+                    self.conversations.insert(
+                        0,
+                        Conversation {
+                            thread_id: thread_id.clone(),
+                            phone_number: phone,
+                            contact_name: String::new(),
+                            last_message: String::new(),
+                            timestamp: utils::now_millis(),
+                            unread: false,
+                        },
+                    );
                     self.show_new_chat_dialog = false;
                     self.new_chat_phone_input.clear();
                     return cosmic::task::message(Action::App(SmsMessage::SelectThread(thread_id)));
@@ -273,24 +288,37 @@ impl SmsWindow {
     fn handle_protocol_event(&mut self, event: ProtocolEvent) {
         match event {
             ProtocolEvent::ConversationsReceived(conversations) => {
-                eprintln!("[SMS-APP] ConversationsReceived: {} conversations", conversations.len());
+                eprintln!(
+                    "[SMS-APP] ConversationsReceived: {} conversations",
+                    conversations.len()
+                );
 
                 // Capture selected new_* phone BEFORE we mutate merged
-                let pending_new_phone: Option<String> = self.selected_thread.as_ref()
+                let pending_new_phone: Option<String> = self
+                    .selected_thread
+                    .as_ref()
                     .filter(|t| t.starts_with("new_"))
                     .and_then(|sel| self.conversations.iter().find(|c| c.thread_id == *sel))
                     .map(|c| c.phone_number.clone());
 
                 let mut merged = self.conversations.clone();
                 for incoming in &conversations {
-                    if incoming.thread_id.starts_with("new_") { continue; }
+                    if incoming.thread_id.starts_with("new_") {
+                        continue;
+                    }
 
                     if let Some(pos) = merged.iter().position(|c| {
                         c.thread_id.starts_with("new_")
-                            && super::utils::phone_numbers_match(&c.phone_number, &incoming.phone_number)
+                            && super::utils::phone_numbers_match(
+                                &c.phone_number,
+                                &incoming.phone_number,
+                            )
                     }) {
                         merged[pos] = incoming.clone();
-                    } else if let Some(existing) = merged.iter_mut().find(|c| c.thread_id == incoming.thread_id) {
+                    } else if let Some(existing) = merged
+                        .iter_mut()
+                        .find(|c| c.thread_id == incoming.thread_id)
+                    {
                         *existing = incoming.clone();
                     } else {
                         merged.push(incoming.clone());
@@ -298,8 +326,12 @@ impl SmsWindow {
                 }
 
                 merged.retain(|c| {
-                    if !c.thread_id.starts_with("new_") { return true; }
-                    !conversations.iter().any(|r| super::utils::phone_numbers_match(&r.phone_number, &c.phone_number))
+                    if !c.thread_id.starts_with("new_") {
+                        return true;
+                    }
+                    !conversations.iter().any(|r| {
+                        super::utils::phone_numbers_match(&r.phone_number, &c.phone_number)
+                    })
                 });
 
                 self.conversations = merged;
@@ -322,20 +354,18 @@ impl SmsWindow {
                 if is_selected {
                     let already_exists = self.messages.iter().any(|m| {
                         m.id == message.id
-                        || (m.id.starts_with("sending_")
-                            && m.type_ == 2
-                            && message.type_ == 2
-                            && m.body == message.body
-                            && (m.date - message.date).abs() < 300_000)
+                            || (m.id.starts_with("sending_")
+                                && m.type_ == 2
+                                && message.type_ == 2
+                                && m.body == message.body
+                                && (m.date - message.date).abs() < 300_000)
                     });
 
                     if !already_exists {
                         self.messages.push(message.clone());
                     } else {
                         if let Some(existing) = self.messages.iter_mut().find(|m| {
-                            m.id.starts_with("sending_")
-                            && m.type_ == 2
-                            && m.body == message.body
+                            m.id.starts_with("sending_") && m.type_ == 2 && m.body == message.body
                         }) {
                             existing.id = message.id.clone();
                             existing.thread_id = message.thread_id.clone();
@@ -345,13 +375,16 @@ impl SmsWindow {
                     self.messages.sort_by_key(|m| m.date);
                 }
 
-                if let Some(conv) = self.conversations.iter_mut()
+                if let Some(conv) = self
+                    .conversations
+                    .iter_mut()
                     .find(|c| c.thread_id == message.thread_id)
                 {
                     conv.last_message = message.body;
                     conv.timestamp = message.date;
                 }
-                self.conversations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                self.conversations
+                    .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
             }
             ProtocolEvent::Error(e) => eprintln!("[SMS-APP] error: {}", e),
         }
@@ -359,9 +392,12 @@ impl SmsWindow {
 
     fn update_conversation_names(&mut self) {
         for conv in &mut self.conversations {
-            if let Some(name) = self.contacts.iter().find(|(phone, _)| {
-                super::utils::phone_numbers_match(phone, &conv.phone_number)
-            }).map(|(_, name)| name.clone()) {
+            if let Some(name) = self
+                .contacts
+                .iter()
+                .find(|(phone, _)| super::utils::phone_numbers_match(phone, &conv.phone_number))
+                .map(|(_, name)| name.clone())
+            {
                 conv.contact_name = name;
             }
         }

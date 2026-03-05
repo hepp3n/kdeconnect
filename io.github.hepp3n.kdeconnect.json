@@ -41,9 +41,8 @@
             },
             "sources": [
                 {
-                    "type": "git",
-                    "url": "https://github.com/hepp3n/kdeconnect",
-                    "branch": "master"
+                    "type": "dir",
+                    "path": "."
                 },
                 "cargo-sources.json"
             ]
