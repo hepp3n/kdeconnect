@@ -15,21 +15,21 @@ pub enum SmsMessage {
     ConversationsLoaded(Vec<Conversation>),
     ContactsLoaded(ContactsMap),
     SelectThread(String),
-    
+
     // Message input
     UpdateInput(String),
     UpdateSearch(String),
     SendMessage,
     #[allow(dead_code)] // May be used in future for manual refresh
     RefreshThread,
-    
+
     // Window control
     #[allow(dead_code)] // Will be used when window close event is hooked up
     CloseWindow,
-    
+
     // Protocol events (replacing D-Bus signals)
     ProtocolEventReceived(ProtocolEvent),
-    
+
     // New chat dialog
     OpenNewChatDialog,
     CloseNewChatDialog,
@@ -38,7 +38,7 @@ pub enum SmsMessage {
     SelectContactForNewChat(String, String),
     /// Start a chat with a specific phone number
     StartChatWithNumber(String),
-    
+
     // Emoji picker
     ToggleEmojiPicker,
     SelectEmojiCategory(EmojiCategory),

@@ -1,13 +1,21 @@
 //! D-Bus client library for KDE Connect service
 
 use anyhow::Result;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use zbus::{Connection, proxy};
-use futures::StreamExt;
 
 /// Device information
-#[derive(Debug, Clone, Serialize, Deserialize, zbus::zvariant::Type, zbus::zvariant::Value, zbus::zvariant::OwnedValue)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    zbus::zvariant::Type,
+    zbus::zvariant::Value,
+    zbus::zvariant::OwnedValue,
+)]
 pub struct Device {
     pub id: String,
     pub name: String,
@@ -22,7 +30,7 @@ pub enum ServiceEvent {
     DeviceConnected(String, Device),
     DevicePaired(String, Device),
     DeviceDisconnected(String),
-    SmsMessagesReceived(String), // JSON string
+    SmsMessagesReceived(String),               // JSON string
     ContactsReceived(HashMap<String, String>), // phone -> name
 }
 
@@ -60,7 +68,12 @@ trait Daemon {
 trait Sms {
     async fn request_conversations(&self, device_id: &str) -> zbus::Result<()>;
     async fn request_conversation(&self, device_id: &str, thread_id: i64) -> zbus::Result<()>;
-    async fn send_sms(&self, device_id: &str, phone_number: &str, message: &str) -> zbus::Result<()>;
+    async fn send_sms(
+        &self,
+        device_id: &str,
+        phone_number: &str,
+        message: &str,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn sms_messages_received(&self, messages_json: String) -> zbus::Result<()>;
@@ -144,12 +157,18 @@ impl KdeConnectClient {
 
     /// Request specific conversation
     pub async fn request_conversation(&self, device_id: &str, thread_id: i64) -> Result<()> {
-        Ok(self.sms_proxy.request_conversation(device_id, thread_id).await?)
+        Ok(self
+            .sms_proxy
+            .request_conversation(device_id, thread_id)
+            .await?)
     }
 
     /// Send SMS
     pub async fn send_sms(&self, device_id: &str, phone_number: &str, message: &str) -> Result<()> {
-        Ok(self.sms_proxy.send_sms(device_id, phone_number, message).await?)
+        Ok(self
+            .sms_proxy
+            .send_sms(device_id, phone_number, message)
+            .await?)
     }
 
     /// Manually request contacts sync for a device
@@ -161,9 +180,21 @@ impl KdeConnectClient {
     pub async fn listen_for_events(&self) -> impl futures::Stream<Item = ServiceEvent> + '_ {
         let daemon_connected = self.daemon_proxy.receive_device_connected().await.unwrap();
         let daemon_paired = self.daemon_proxy.receive_device_paired().await.unwrap();
-        let daemon_disconnected = self.daemon_proxy.receive_device_disconnected().await.unwrap();
-        let sms_messages = self.sms_proxy.receive_sms_messages_received().await.unwrap();
-        let contacts = self.contacts_proxy.receive_contacts_received().await.unwrap();
+        let daemon_disconnected = self
+            .daemon_proxy
+            .receive_device_disconnected()
+            .await
+            .unwrap();
+        let sms_messages = self
+            .sms_proxy
+            .receive_sms_messages_received()
+            .await
+            .unwrap();
+        let contacts = self
+            .contacts_proxy
+            .receive_contacts_received()
+            .await
+            .unwrap();
 
         let connected_stream = daemon_connected.filter_map(|signal| async move {
             match signal.args() {
@@ -225,7 +256,8 @@ impl KdeConnectClient {
 
         use futures::stream::select_all;
         select_all(vec![
-            Box::pin(connected_stream) as std::pin::Pin<Box<dyn futures::Stream<Item = ServiceEvent> + Send + '_>>,
+            Box::pin(connected_stream)
+                as std::pin::Pin<Box<dyn futures::Stream<Item = ServiceEvent> + Send + '_>>,
             Box::pin(paired_stream),
             Box::pin(disconnected_stream),
             Box::pin(sms_stream),

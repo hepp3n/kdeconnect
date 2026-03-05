@@ -128,4 +128,3 @@ pub async fn read_clipboard() -> Result<String, std::io::Error> {
         ))
     }
 }
-

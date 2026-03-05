@@ -5,9 +5,9 @@ mod messages;
 mod utils;
 mod views;
 
+pub mod app;
 pub mod dbus;
 pub mod models;
-pub mod app;
 
 pub use app::SmsWindow;
 

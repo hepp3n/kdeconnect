@@ -45,8 +45,11 @@ pub struct SmsAttachment {
 
 impl SmsMessages {
     pub async fn received_packet(&self, tx: mpsc::UnboundedSender<ConnectionEvent>) {
-        info!("Received SMS messages packet with {} messages", self.messages.len());
-        
+        info!(
+            "Received SMS messages packet with {} messages",
+            self.messages.len()
+        );
+
         let event = ConnectionEvent::SmsMessages(self.clone());
         let _ = tx.send(event);
     }

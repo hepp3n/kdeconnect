@@ -29,9 +29,9 @@ pub struct Device {
     pub has_virtualmonitor: bool,
     pub pairing_requests: i32,
     // Connectivity information
-    pub signal_strength: Option<i32>,  // 0-4 bars, or -1 for no signal
+    pub signal_strength: Option<i32>, // 0-4 bars, or -1 for no signal
     #[allow(dead_code)]
-    pub network_type: Option<String>,  // "5G", "4G", "3G", "2G", etc.
+    pub network_type: Option<String>, // "5G", "4G", "3G", "2G", etc.
 }
 
 impl Device {
@@ -65,7 +65,7 @@ impl Device {
     pub fn signal_icon(&self) -> Option<&'static str> {
         self.signal_strength.map(|strength| {
             match strength {
-                -1 => "network-cellular-offline-symbolic",  // No signal
+                -1 => "network-cellular-offline-symbolic", // No signal
                 0 => "network-cellular-signal-none-symbolic",
                 1 => "network-cellular-signal-weak-symbolic",
                 2 => "network-cellular-signal-ok-symbolic",

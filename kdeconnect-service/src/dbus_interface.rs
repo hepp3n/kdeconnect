@@ -2,20 +2,18 @@
 
 use anyhow::Result;
 use kdeconnect_core::{
-    KdeConnectCore,
-    event::{AppEvent, ConnectionEvent},
+    KdeConnectCore, PacketType, ProtocolPacket,
     device::{DeviceId, PairState},
-    ProtocolPacket,
-    PacketType,
+    event::{AppEvent, ConnectionEvent},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::info;
-use zbus::{Connection, interface};
 use zbus::object_server::SignalEmitter;
+use zbus::{Connection, interface};
 
 const SERVICE_NAME: &str = "io.github.hepp3n.kdeconnect";
 const DAEMON_PATH: &str = "/io/github/hepp3n/kdeconnect/Daemon";
@@ -23,7 +21,15 @@ const SMS_PATH: &str = "/io/github/hepp3n/kdeconnect/Sms";
 const CONTACTS_PATH: &str = "/io/github/hepp3n/kdeconnect/Contacts";
 
 /// Simplified device info for D-Bus
-#[derive(Debug, Clone, Serialize, Deserialize, zbus::zvariant::Type, zbus::zvariant::Value, zbus::zvariant::OwnedValue)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    zbus::zvariant::Type,
+    zbus::zvariant::Value,
+    zbus::zvariant::OwnedValue,
+)]
 pub struct DbusDevice {
     pub id: String,
     pub name: String,
@@ -35,8 +41,7 @@ pub struct DbusDevice {
 // --- Contacts cache helpers --------------------------------------------------
 
 fn contacts_cache_path() -> std::path::PathBuf {
-    let base = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+    let base = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
     base.join("kdeconnect").join("contacts_cache.json")
 }
 
@@ -100,7 +105,8 @@ impl DaemonInterface {
     /// Pair with a device
     async fn pair_device(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: PairDevice called for {}", device_id);
-        self.event_sender.send(AppEvent::Pair(DeviceId(device_id)))
+        self.event_sender
+            .send(AppEvent::Pair(DeviceId(device_id)))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
@@ -108,27 +114,34 @@ impl DaemonInterface {
     /// Unpair from a device
     async fn unpair_device(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: UnpairDevice called for {}", device_id);
-        self.event_sender.send(AppEvent::Unpair(DeviceId(device_id)))
+        self.event_sender
+            .send(AppEvent::Unpair(DeviceId(device_id)))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
     /// Send a ping to a device
     async fn send_ping(&self, device_id: String, message: String) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendPing called for {} with message: {}", device_id, message);
-        let packet = ProtocolPacket::new(
-            PacketType::Ping,
-            json!({ "message": message })
+        info!(
+            "D-Bus: SendPing called for {} with message: {}",
+            device_id, message
         );
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        let packet = ProtocolPacket::new(PacketType::Ping, json!({ "message": message }));
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
     /// Send files to a device
     async fn send_files(&self, device_id: String, files: Vec<String>) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendFiles called for {} ({} files)", device_id, files.len());
-        self.event_sender.send(AppEvent::SendFiles((DeviceId(device_id), files)))
+        info!(
+            "D-Bus: SendFiles called for {} ({} files)",
+            device_id,
+            files.len()
+        );
+        self.event_sender
+            .send(AppEvent::SendFiles((DeviceId(device_id), files)))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
@@ -136,11 +149,9 @@ impl DaemonInterface {
     /// Send clipboard content
     async fn send_clipboard(&self, device_id: String, content: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: SendClipboard called for {}", device_id);
-        let packet = ProtocolPacket::new(
-            PacketType::Clipboard,
-            json!({ "content": content })
-        );
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        let packet = ProtocolPacket::new(PacketType::Clipboard, json!({ "content": content }));
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
@@ -148,26 +159,35 @@ impl DaemonInterface {
     /// Ring a device (findmyphone)
     async fn ring_device(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RingDevice called for {}", device_id);
-        let packet = ProtocolPacket::new(
-            PacketType::FindMyPhoneRequest,
-            json!({})
-        );
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        let packet = ProtocolPacket::new(PacketType::FindMyPhoneRequest, json!({}));
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
     /// Signal: Device connected
     #[zbus(signal)]
-    async fn device_connected(signal_emitter: &SignalEmitter<'_>, device_id: String, device: DbusDevice) -> zbus::Result<()>;
+    async fn device_connected(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        device: DbusDevice,
+    ) -> zbus::Result<()>;
 
     /// Signal: Device paired
     #[zbus(signal)]
-    async fn device_paired(signal_emitter: &SignalEmitter<'_>, device_id: String, device: DbusDevice) -> zbus::Result<()>;
+    async fn device_paired(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        device: DbusDevice,
+    ) -> zbus::Result<()>;
 
     /// Signal: Device disconnected
     #[zbus(signal)]
-    async fn device_disconnected(signal_emitter: &SignalEmitter<'_>, device_id: String) -> zbus::Result<()>;
+    async fn device_disconnected(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+    ) -> zbus::Result<()>;
 }
 
 /// SMS-specific D-Bus interface
@@ -183,14 +203,12 @@ impl SmsInterface {
         eprintln!("=== SMS D-Bus Request ===");
         eprintln!("Device: {}", device_id);
 
-        let packet = ProtocolPacket::new(
-            PacketType::SmsRequestConversations,
-            json!({})
-        );
+        let packet = ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
 
         eprintln!("Packet type: {:?}", packet.packet_type);
 
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id.clone()), packet))
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id.clone()), packet))
             .map_err(|e| {
                 eprintln!("✗ Failed to send packet: {}", e);
                 zbus::fdo::Error::Failed(e.to_string())
@@ -201,17 +219,25 @@ impl SmsInterface {
     }
 
     /// Request messages from a specific conversation
-    async fn request_conversation(&self, device_id: String, thread_id: i64) -> zbus::fdo::Result<()> {
-        info!("D-Bus: RequestConversation called for {} thread {}", device_id, thread_id);
+    async fn request_conversation(
+        &self,
+        device_id: String,
+        thread_id: i64,
+    ) -> zbus::fdo::Result<()> {
+        info!(
+            "D-Bus: RequestConversation called for {} thread {}",
+            device_id, thread_id
+        );
         eprintln!("=== SMS Conversation Request ===");
         eprintln!("Device: {}, Thread: {}", device_id, thread_id);
 
         let packet = ProtocolPacket::new(
             PacketType::SmsRequestConversation,
-            json!({ "threadID": thread_id })
+            json!({ "threadID": thread_id }),
         );
 
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| {
                 eprintln!("✗ Failed to send packet: {}", e);
                 zbus::fdo::Error::Failed(e.to_string())
@@ -222,7 +248,12 @@ impl SmsInterface {
     }
 
     /// Send an SMS message
-    async fn send_sms(&self, device_id: String, phone_number: String, message: String) -> zbus::fdo::Result<()> {
+    async fn send_sms(
+        &self,
+        device_id: String,
+        phone_number: String,
+        message: String,
+    ) -> zbus::fdo::Result<()> {
         info!("D-Bus: SendSms called for {}", device_id);
         eprintln!("=== SMS Send Request ===");
         eprintln!("Device: {}", device_id);
@@ -236,10 +267,11 @@ impl SmsInterface {
                 "addresses": [{ "address": phone_number }],
                 "messageBody": message,
                 "version": 2
-            })
+            }),
         );
 
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| {
                 eprintln!("✗ Failed to send SMS: {}", e);
                 zbus::fdo::Error::Failed(e.to_string())
@@ -251,7 +283,10 @@ impl SmsInterface {
 
     /// Signal: SMS messages received
     #[zbus(signal)]
-    async fn sms_messages_received(signal_emitter: &SignalEmitter<'_>, messages_json: String) -> zbus::Result<()>;
+    async fn sms_messages_received(
+        signal_emitter: &SignalEmitter<'_>,
+        messages_json: String,
+    ) -> zbus::Result<()>;
 }
 
 /// Contacts D-Bus interface
@@ -264,18 +299,19 @@ impl ContactsInterface {
     /// Manually trigger a contacts sync from a device
     async fn request_contacts(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RequestContacts called for {}", device_id);
-        let packet = ProtocolPacket::new(
-            PacketType::ContactsRequestAllUidsTimestamps,
-            json!({})
-        );
-        self.event_sender.send(AppEvent::SendPacket(DeviceId(device_id), packet))
+        let packet = ProtocolPacket::new(PacketType::ContactsRequestAllUidsTimestamps, json!({}));
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
     /// Signal: contacts received — JSON object mapping phone → name
     #[zbus(signal)]
-    async fn contacts_received(signal_emitter: &SignalEmitter<'_>, contacts_json: String) -> zbus::Result<()>;
+    async fn contacts_received(
+        signal_emitter: &SignalEmitter<'_>,
+        contacts_json: String,
+    ) -> zbus::Result<()>;
 }
 
 /// Main service coordinator
@@ -313,21 +349,30 @@ impl KdeConnectService {
             event_sender: event_sender.clone(),
             devices: devices.clone(),
         };
-        connection.object_server().at(DAEMON_PATH, daemon_interface).await?;
+        connection
+            .object_server()
+            .at(DAEMON_PATH, daemon_interface)
+            .await?;
         eprintln!("✓ Daemon interface registered at {}", DAEMON_PATH);
 
         // Register SMS interface
         let sms_interface = SmsInterface {
             event_sender: event_sender.clone(),
         };
-        connection.object_server().at(SMS_PATH, sms_interface).await?;
+        connection
+            .object_server()
+            .at(SMS_PATH, sms_interface)
+            .await?;
         eprintln!("✓ SMS interface registered at {}", SMS_PATH);
 
         // Register Contacts interface
         let contacts_interface = ContactsInterface {
             event_sender: event_sender.clone(),
         };
-        connection.object_server().at(CONTACTS_PATH, contacts_interface).await?;
+        connection
+            .object_server()
+            .at(CONTACTS_PATH, contacts_interface)
+            .await?;
         eprintln!("✓ Contacts interface registered at {}", CONTACTS_PATH);
 
         // Spawn core event loop
@@ -348,7 +393,15 @@ impl KdeConnectService {
             loop {
                 if let Some(event) = event_receiver.recv().await {
                     eprintln!("📨 Received event from core");
-                    if let Err(e) = Self::handle_event(event, &connection_clone, &devices_clone, &event_sender_clone, &sms_synced).await {
+                    if let Err(e) = Self::handle_event(
+                        event,
+                        &connection_clone,
+                        &devices_clone,
+                        &event_sender_clone,
+                        &sms_synced,
+                    )
+                    .await
+                    {
                         eprintln!("❌ Error handling event: {:?}", e);
                     }
                 } else {
@@ -395,12 +448,22 @@ impl KdeConnectService {
                     is_reachable: true,
                 };
 
-                devices.lock().await.insert(device_id.0.clone(), dbus_device.clone());
+                devices
+                    .lock()
+                    .await
+                    .insert(device_id.0.clone(), dbus_device.clone());
 
-                let iface_ref = connection.object_server()
-                    .interface::<_, DaemonInterface>(DAEMON_PATH).await?;
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
 
-                DaemonInterface::device_connected(iface_ref.signal_emitter(), device_id.0.clone(), dbus_device).await?;
+                DaemonInterface::device_connected(
+                    iface_ref.signal_emitter(),
+                    device_id.0.clone(),
+                    dbus_device,
+                )
+                .await?;
                 eprintln!("✓ Device connected signal emitted");
 
                 if is_paired {
@@ -408,10 +471,19 @@ impl KdeConnectService {
                     // available before the live sync completes (or if phone is asleep).
                     if let Some(cached) = load_contacts_cache().await {
                         if let Ok(contacts_json) = serde_json::to_string(&cached) {
-                            let iface_ref = connection.object_server()
-                                .interface::<_, ContactsInterface>(CONTACTS_PATH).await?;
-                            ContactsInterface::contacts_received(iface_ref.signal_emitter(), contacts_json).await?;
-                            eprintln!("📇 Emitted cached contacts on connect ({} entries)", cached.len());
+                            let iface_ref = connection
+                                .object_server()
+                                .interface::<_, ContactsInterface>(CONTACTS_PATH)
+                                .await?;
+                            ContactsInterface::contacts_received(
+                                iface_ref.signal_emitter(),
+                                contacts_json,
+                            )
+                            .await?;
+                            eprintln!(
+                                "📇 Emitted cached contacts on connect ({} entries)",
+                                cached.len()
+                            );
                         }
                     }
 
@@ -426,11 +498,14 @@ impl KdeConnectService {
                     let did = device_id.0.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        let sms_packet = ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
-                        let _ = sender.send(AppEvent::SendPacket(DeviceId(did.clone()), sms_packet));
+                        let sms_packet =
+                            ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
+                        let _ =
+                            sender.send(AppEvent::SendPacket(DeviceId(did.clone()), sms_packet));
                         eprintln!("📱 Auto-requested SMS conversations on connect");
                         let contacts_packet = ProtocolPacket::new(
-                            PacketType::ContactsRequestAllUidsTimestamps, json!({})
+                            PacketType::ContactsRequestAllUidsTimestamps,
+                            json!({}),
                         );
                         let _ = sender.send(AppEvent::SendPacket(DeviceId(did), contacts_packet));
                         eprintln!("📇 Auto-requested live contacts sync on connect");
@@ -449,24 +524,38 @@ impl KdeConnectService {
                     is_reachable: true,
                 };
 
-                devices.lock().await.insert(device_id.0.clone(), dbus_device.clone());
+                devices
+                    .lock()
+                    .await
+                    .insert(device_id.0.clone(), dbus_device.clone());
 
-                let iface_ref = connection.object_server()
-                    .interface::<_, DaemonInterface>(DAEMON_PATH).await?;
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
 
-                DaemonInterface::device_paired(iface_ref.signal_emitter(), device_id.0.clone(), dbus_device).await?;
+                DaemonInterface::device_paired(
+                    iface_ref.signal_emitter(),
+                    device_id.0.clone(),
+                    dbus_device,
+                )
+                .await?;
                 eprintln!("✓ Device paired signal emitted");
 
                 let sender = event_sender.clone();
                 let did = device_id.0.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    let sms_packet = ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
+                    let sms_packet =
+                        ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
                     let _ = sender.send(AppEvent::SendPacket(DeviceId(did.clone()), sms_packet));
                     eprintln!("📱 Auto-requested SMS conversations after pairing (delayed)");
 
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let contacts_packet = ProtocolPacket::new(PacketType::ContactsRequestAllUidsTimestamps, json!({}));
+                    let contacts_packet = ProtocolPacket::new(
+                        PacketType::ContactsRequestAllUidsTimestamps,
+                        json!({}),
+                    );
                     let _ = sender.send(AppEvent::SendPacket(DeviceId(did), contacts_packet));
                     eprintln!("📇 Auto-requested contacts after pairing");
                 });
@@ -478,16 +567,22 @@ impl KdeConnectService {
                 sms_synced.lock().await.remove(&device_id.0);
                 devices.lock().await.remove(&device_id.0);
 
-                let iface_ref = connection.object_server()
-                    .interface::<_, DaemonInterface>(DAEMON_PATH).await?;
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
 
-                DaemonInterface::device_disconnected(iface_ref.signal_emitter(), device_id.0).await?;
+                DaemonInterface::device_disconnected(iface_ref.signal_emitter(), device_id.0)
+                    .await?;
                 eprintln!("✓ Device disconnected signal emitted");
             }
             ConnectionEvent::SmsMessages(sms_data) => {
                 eprintln!("📱 !!! SMS MESSAGES EVENT RECEIVED !!!");
                 eprintln!("    Number of messages: {}", sms_data.messages.len());
-                info!("Event: SMS messages received - {} messages", sms_data.messages.len());
+                info!(
+                    "Event: SMS messages received - {} messages",
+                    sms_data.messages.len()
+                );
 
                 for (i, msg) in sms_data.messages.iter().take(3).enumerate() {
                     let preview = if msg.body.len() > 50 {
@@ -495,17 +590,25 @@ impl KdeConnectService {
                     } else {
                         msg.body.clone()
                     };
-                    eprintln!("    Message {}: thread={}, body={}", i + 1, msg.thread_id, preview);
+                    eprintln!(
+                        "    Message {}: thread={}, body={}",
+                        i + 1,
+                        msg.thread_id,
+                        preview
+                    );
                 }
 
                 let messages_json = serde_json::to_string(&sms_data)?;
                 eprintln!("    JSON size: {} bytes", messages_json.len());
 
-                let iface_ref = connection.object_server()
-                    .interface::<_, SmsInterface>(SMS_PATH).await?;
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, SmsInterface>(SMS_PATH)
+                    .await?;
 
                 eprintln!("    Emitting D-Bus signal...");
-                SmsInterface::sms_messages_received(iface_ref.signal_emitter(), messages_json).await?;
+                SmsInterface::sms_messages_received(iface_ref.signal_emitter(), messages_json)
+                    .await?;
                 eprintln!("    ✓ SMS D-Bus signal emitted successfully!");
             }
             ConnectionEvent::ContactsReceived(contacts) => {
@@ -517,10 +620,13 @@ impl KdeConnectService {
 
                 let contacts_json = serde_json::to_string(&contacts)?;
 
-                let iface_ref = connection.object_server()
-                    .interface::<_, ContactsInterface>(CONTACTS_PATH).await?;
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, ContactsInterface>(CONTACTS_PATH)
+                    .await?;
 
-                ContactsInterface::contacts_received(iface_ref.signal_emitter(), contacts_json).await?;
+                ContactsInterface::contacts_received(iface_ref.signal_emitter(), contacts_json)
+                    .await?;
                 eprintln!("✓ Contacts D-Bus signal emitted");
             }
             _ => {

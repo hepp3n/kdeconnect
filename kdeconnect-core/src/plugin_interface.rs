@@ -73,9 +73,17 @@ impl PluginRegistry {
             }
             PacketType::SmsMessages => {
                 eprintln!("!!! Received SmsMessages packet in core !!!");
-                if let Ok(sms_messages) = serde_json::from_value::<plugins::sms::SmsMessages>(body.clone()) {
-                    info!("Received SMS messages packet with {} messages", sms_messages.messages.len());
-                    eprintln!("Successfully parsed {} SMS messages", sms_messages.messages.len());
+                if let Ok(sms_messages) =
+                    serde_json::from_value::<plugins::sms::SmsMessages>(body.clone())
+                {
+                    info!(
+                        "Received SMS messages packet with {} messages",
+                        sms_messages.messages.len()
+                    );
+                    eprintln!(
+                        "Successfully parsed {} SMS messages",
+                        sms_messages.messages.len()
+                    );
                     sms_messages.received_packet(connection_tx).await;
                 } else {
                     eprintln!("!!! Failed to parse SMS messages packet !!!");
@@ -157,10 +165,8 @@ impl PluginRegistry {
             PacketType::Mpris => {
                 if let Ok(mpris_packet) = serde_json::from_value::<Mpris>(body) {
                     info!("Received MPRIS packet: {:?}", mpris_packet);
-                    let mpris_event = ConnectionEvent::Mpris((
-                        device.device_id.clone(),
-                        mpris_packet,
-                    ));
+                    let mpris_event =
+                        ConnectionEvent::Mpris((device.device_id.clone(), mpris_packet));
                     let _ = connection_tx.send(mpris_event.clone());
                     let _ = mpris_connection_tx.send(mpris_event);
                 }

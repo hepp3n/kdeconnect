@@ -128,8 +128,14 @@ async fn make_identity(device_id: String, tcp_port: Option<u16>) -> Identity {
             .to_string_lossy()
             .to_string(),
         device_type: identify_device_type().await,
-        incoming_capabilities: INCOMING_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
-        outgoing_capabilities: OUTGOING_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
+        incoming_capabilities: INCOMING_CAPABILITIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        outgoing_capabilities: OUTGOING_CAPABILITIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         protocol_version: PROTOCOL_VERSION,
         tcp_port,
     }

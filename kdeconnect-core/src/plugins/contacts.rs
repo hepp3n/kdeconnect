@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde_json::Value;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -41,7 +41,10 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
 /// and returns the list of UIDs.
 pub fn parse_uids_timestamps(body: &Value) -> Vec<String> {
     let uids: Vec<String> = match body.get("uids").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         None => return vec![],
     };
     info!("[contacts] received {} UIDs from phone", uids.len());
@@ -52,7 +55,10 @@ pub fn parse_uids_timestamps(body: &Value) -> Vec<String> {
 /// a `ConnectionEvent::ContactsReceived` with a phone → name map.
 pub fn parse_vcards_and_emit(body: &Value, tx: &mpsc::UnboundedSender<ConnectionEvent>) {
     let uids: Vec<String> = match body.get("uids").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         None => {
             tracing::warn!("[contacts] response_vcards missing 'uids' field");
             return;
@@ -72,7 +78,11 @@ pub fn parse_vcards_and_emit(body: &Value, tx: &mpsc::UnboundedSender<Connection
         }
     }
 
-    info!("[contacts] parsed {} contacts from {} vCards", contacts.len(), uids.len());
+    info!(
+        "[contacts] parsed {} contacts from {} vCards",
+        contacts.len(),
+        uids.len()
+    );
     let _ = tx.send(ConnectionEvent::ContactsReceived(contacts));
 }
 

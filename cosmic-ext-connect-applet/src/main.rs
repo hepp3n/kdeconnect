@@ -13,7 +13,7 @@ use cosmic::app::Core;
 use cosmic::iced::window::Id as SurfaceId;
 use cosmic::iced::{Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
-use cosmic::{widget, Element, Task};
+use cosmic::{Element, Task, widget};
 use std::collections::HashMap;
 
 pub struct KdeConnectApplet {
@@ -29,8 +29,12 @@ impl cosmic::Application for KdeConnectApplet {
     type Message = Message;
     const APP_ID: &'static str = "io.github.hepp3n.kdeconnect";
 
-    fn core(&self) -> &Core { &self.core }
-    fn core_mut(&mut self) -> &mut Core { &mut self.core }
+    fn core(&self) -> &Core {
+        &self.core
+    }
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.core
+    }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
         tokio::spawn(async {
@@ -113,13 +117,17 @@ impl cosmic::Application for KdeConnectApplet {
             }
             Message::SendSMS(ref device_id) => {
                 // Look up device name for the window title
-                let device_name = self.devices
+                let device_name = self
+                    .devices
                     .get(device_id)
                     .map(|d| d.name.clone())
                     .unwrap_or_else(|| "Unknown Device".to_string());
                 let id = device_id.clone();
 
-                eprintln!("[APPLET] Launching SMS window for device={} name={}", id, device_name);
+                eprintln!(
+                    "[APPLET] Launching SMS window for device={} name={}",
+                    id, device_name
+                );
 
                 // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
@@ -129,42 +137,54 @@ impl cosmic::Application for KdeConnectApplet {
                         .spawn()
                     {
                         Ok(_) => eprintln!("[APPLET] cosmic-ext-connect-sms launched OK"),
-                        Err(e) => eprintln!("[APPLET] Failed to launch cosmic-ext-connect-sms: {:?}", e),
+                        Err(e) => {
+                            eprintln!("[APPLET] Failed to launch cosmic-ext-connect-sms: {:?}", e)
+                        }
                     }
                 });
             }
             Message::PingDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::ping_device(id).await.ok(); },
+                    async move {
+                        backend::ping_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::RingDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::ring_device(id).await.ok(); },
+                    async move {
+                        backend::ring_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::BrowseDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::browse_device_filesystem(id).await.ok(); },
+                    async move {
+                        backend::browse_device_filesystem(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::PairDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::pair_device(id).await.ok(); },
+                    async move {
+                        backend::pair_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::UnpairDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::unpair_device(id).await.ok(); },
+                    async move {
+                        backend::unpair_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
@@ -194,25 +214,34 @@ impl cosmic::Application for KdeConnectApplet {
             Message::AcceptPairing(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::accept_pairing(id).await.ok(); },
+                    async move {
+                        backend::accept_pairing(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::RejectPairing(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::reject_pairing(id).await.ok(); },
+                    async move {
+                        backend::reject_pairing(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::PairingRequestReceived(device_id, device_name, device_type) => {
-                eprintln!("Pairing request: {} ({}) [{}]", device_name, device_id, device_type);
+                eprintln!(
+                    "Pairing request: {} ({}) [{}]",
+                    device_name, device_id, device_type
+                );
             }
             Message::MprisReceived(device_id, mpris_data) => {
                 eprintln!("MPRIS from {}: {:?}", device_id, mpris_data);
             }
             Message::OpenSettings => {
-                std::process::Command::new("cosmic-ext-connect-settings").spawn().ok();
+                std::process::Command::new("cosmic-ext-connect-settings")
+                    .spawn()
+                    .ok();
             }
             Message::RemoteInput(ref device_id) => {
                 eprintln!("Remote input: {}", device_id);

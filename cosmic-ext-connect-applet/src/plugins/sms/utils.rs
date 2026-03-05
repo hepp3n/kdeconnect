@@ -12,9 +12,9 @@ pub fn format_timestamp(timestamp: i64) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    
+
     let diff = now - (timestamp / 1000);
-    
+
     match diff {
         d if d < 60 => "Just now".to_string(),
         d if d < 3600 => format!("{} min ago", d / 60),
@@ -47,12 +47,12 @@ pub fn normalize_phone_number(phone: &str) -> String {
 pub fn phone_numbers_match(phone1: &str, phone2: &str) -> bool {
     let norm1 = normalize_phone_number(phone1);
     let norm2 = normalize_phone_number(phone2);
-    
+
     // Exact match
     if norm1 == norm2 {
         return true;
     }
-    
+
     // Handle US country code (+1) prefix
     if norm1.len() == 10 && norm2.len() == 11 && norm2.starts_with('1') {
         return norm1 == &norm2[1..];
@@ -60,7 +60,7 @@ pub fn phone_numbers_match(phone1: &str, phone2: &str) -> bool {
     if norm2.len() == 10 && norm1.len() == 11 && norm1.starts_with('1') {
         return norm2 == &norm1[1..];
     }
-    
+
     // Check last 7 digits for international numbers
     if norm1.len() >= 7 && norm2.len() >= 7 {
         let last7_1 = &norm1[norm1.len().saturating_sub(7)..];
@@ -69,7 +69,7 @@ pub fn phone_numbers_match(phone1: &str, phone2: &str) -> bool {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -86,10 +86,10 @@ pub fn truncate_message(s: &str, max_len: usize) -> String {
 pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
     let mut name: Option<String> = None;
     let mut phones: Vec<String> = Vec::new();
-    
+
     for line in content.lines() {
         let line = line.trim();
-        
+
         // Extract name (FN = Formatted Name)
         if line.starts_with("FN:") {
             name = Some(line[3..].trim().to_string());
@@ -117,7 +117,7 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
             }
         }
     }
-    
+
     (name, phones)
 }
 

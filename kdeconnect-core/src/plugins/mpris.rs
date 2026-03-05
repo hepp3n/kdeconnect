@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing::debug;
 use zbus::interface;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 use crate::{
     device::{Device, DeviceManager},
@@ -458,31 +458,31 @@ impl PhoneMprisPlayer {
         } else {
             MprisAction::Play
         };
-        
+
         // Optimistically update state immediately
         state.is_playing = Some(!is_playing);
-        
+
         let request = MprisRequest {
             player: Some(state.player.clone()),
             action: Some(action),
             ..Default::default()
         };
         drop(state); // Release lock before async call
-        
+
         self.send_request(request).await;
     }
 
     async fn pause(&self) {
         let mut state = self.player_state.write().await;
         state.is_playing = Some(false);
-        
+
         let request = MprisRequest {
             player: Some(state.player.clone()),
             action: Some(MprisAction::Pause),
             ..Default::default()
         };
         drop(state);
-        
+
         self.send_request(request).await;
     }
 
@@ -490,14 +490,14 @@ impl PhoneMprisPlayer {
         let mut state = self.player_state.write().await;
         let is_playing = state.is_playing.unwrap_or(false);
         state.is_playing = Some(!is_playing);
-        
+
         let request = MprisRequest {
             player: Some(state.player.clone()),
             action: Some(MprisAction::PlayPause),
             ..Default::default()
         };
         drop(state);
-        
+
         self.send_request(request).await;
     }
 
@@ -508,7 +508,7 @@ impl PhoneMprisPlayer {
             action: Some(MprisAction::Next),
             ..Default::default()
         };
-        
+
         self.send_request(request).await;
     }
 
@@ -519,7 +519,7 @@ impl PhoneMprisPlayer {
             action: Some(MprisAction::Previous),
             ..Default::default()
         };
-        
+
         self.send_request(request).await;
     }
 
@@ -530,7 +530,7 @@ impl PhoneMprisPlayer {
             action: Some(MprisAction::Stop),
             ..Default::default()
         };
-        
+
         self.send_request(request).await;
     }
 
@@ -548,24 +548,32 @@ impl PhoneMprisPlayer {
     async fn metadata(&self) -> HashMap<String, zbus::zvariant::Value<'static>> {
         let state = self.player_state.read().await;
         let mut metadata = HashMap::new();
-        
+
         if let Some(ref title) = state.title {
-            metadata.insert("xesam:title".to_string(), 
-                zbus::zvariant::Value::new(title.clone()));
+            metadata.insert(
+                "xesam:title".to_string(),
+                zbus::zvariant::Value::new(title.clone()),
+            );
         }
         if let Some(ref artist) = state.artist {
-            metadata.insert("xesam:artist".to_string(), 
-                zbus::zvariant::Value::new(vec![artist.clone()]));
+            metadata.insert(
+                "xesam:artist".to_string(),
+                zbus::zvariant::Value::new(vec![artist.clone()]),
+            );
         }
         if let Some(ref album) = state.album {
-            metadata.insert("xesam:album".to_string(), 
-                zbus::zvariant::Value::new(album.clone()));
+            metadata.insert(
+                "xesam:album".to_string(),
+                zbus::zvariant::Value::new(album.clone()),
+            );
         }
         if let Some(length) = state.length {
-            metadata.insert("mpris:length".to_string(), 
-                zbus::zvariant::Value::new(length as i64 * 1000));
+            metadata.insert(
+                "mpris:length".to_string(),
+                zbus::zvariant::Value::new(length as i64 * 1000),
+            );
         }
-        
+
         metadata
     }
 
@@ -612,12 +620,12 @@ impl PhoneMprisPlayer {
             PacketType::MprisRequest,
             serde_json::to_value(request).unwrap(),
         );
-        
+
         let _ = self.core_tx.send(crate::event::CoreEvent::SendPacket {
             device: self.device_id.clone(),
             packet,
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let player_name = self.player_state.read().await.player.clone();
         let info_request = MprisRequest {
@@ -642,11 +650,9 @@ struct PhoneMprisRoot {
 
 #[interface(name = "org.mpris.MediaPlayer2")]
 impl PhoneMprisRoot {
-    async fn raise(&self) {
-    }
+    async fn raise(&self) {}
 
-    async fn quit(&self) {
-    }
+    async fn quit(&self) {}
 
     #[zbus(property)]
     async fn identity(&self) -> String {
@@ -692,15 +698,15 @@ pub fn expose_phone_mpris(
                             match mpris_data {
                                 Mpris::Info(player_info) => {
                                     let player_key = format!("{}_{}", device_id.0, player_info.player);
-                                    
+
                                     if let Some(player_conn) = active_players.get_mut(&player_key) {
                                         let old_state = player_conn.player_state.read().await.clone();
-                                        
+
                                         {
                                             let mut state = player_conn.player_state.write().await;
                                             *state = player_info.clone();
                                         }
-                                        
+
                                         if old_state.is_playing != player_info.is_playing {
                                             let obj_server = player_conn.connection.object_server();
                                             if let Ok(iface_ref) = obj_server.interface::<_, PhoneMprisPlayer>("/org/mpris/MediaPlayer2").await {
@@ -709,7 +715,7 @@ pub fn expose_phone_mpris(
                                                 let _ = iface.playback_status_changed(&emitter).await;
                                             }
                                         }
-                                        
+
                                         tracing::debug!("Updated phone MPRIS player: {}", player_key);
                                     } else {
                                         match register_phone_player(&device_id, &player_info, core_tx.clone()).await {
@@ -766,27 +772,29 @@ async fn register_phone_player(
     player_info: &MprisPlayer,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) -> anyhow::Result<(zbus::Connection, Arc<RwLock<MprisPlayer>>)> {
-    let service_name = format!("org.mpris.MediaPlayer2.KDEConnect_{}", 
-        device_id.0.replace("-", "_"));
-    
+    let service_name = format!(
+        "org.mpris.MediaPlayer2.KDEConnect_{}",
+        device_id.0.replace("-", "_")
+    );
+
     let player_state = Arc::new(RwLock::new(player_info.clone()));
-    
+
     let phone_player = PhoneMprisPlayer {
         device_id: device_id.clone(),
         player_state: player_state.clone(),
         core_tx: core_tx.clone(),
     };
-    
+
     let phone_root = PhoneMprisRoot {
         device_name: device_id.0.clone(),
     };
-    
+
     let conn = zbus::connection::Builder::session()?
         .name(service_name)?
         .serve_at("/org/mpris/MediaPlayer2", phone_player)?
         .serve_at("/org/mpris/MediaPlayer2", phone_root)?
         .build()
         .await?;
-    
+
     Ok((conn, player_state))
 }

@@ -88,8 +88,8 @@ impl From<String> for PacketType {
             "kdeconnect.contacts.request_all_uids_timestamps" => {
                 PacketType::ContactsRequestAllUidsTimestamps
             }
-            "kdeconnect.contacts.response_uids_timestamps" |
-            "kdeconnect.contacts.response_all_uids_timestamps" => {
+            "kdeconnect.contacts.response_uids_timestamps"
+            | "kdeconnect.contacts.response_all_uids_timestamps" => {
                 PacketType::ContactsResponseUidsTimestamps
             }
             "kdeconnect.contacts.response_vcards" => PacketType::ContactsResponseVcards,
@@ -318,9 +318,15 @@ impl Pair {
                     .unwrap_or_default()
                     .as_secs(),
             );
-            return Pair { pair: true, timestamp };
+            return Pair {
+                pair: true,
+                timestamp,
+            };
         }
-        Pair { pair: response, timestamp: None }
+        Pair {
+            pair: response,
+            timestamp: None,
+        }
     }
 }
 
@@ -336,7 +342,10 @@ pub struct DevicePayload<S: AsyncRead + Sync + Send + Unpin> {
 
 impl<S: AsyncRead + Sync + Send + Unpin> From<DeviceFile<S>> for DevicePayload<S> {
     fn from(file: DeviceFile<S>) -> Self {
-        Self { buf: file.buf, size: file.size }
+        Self {
+            buf: file.buf,
+            size: file.size,
+        }
     }
 }
 
