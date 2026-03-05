@@ -115,6 +115,23 @@ impl Application for SmsWindow {
 
                 eprintln!("[SMS-SUB] entering event loop");
 
+                // Load cached contacts keyed by device — works even with phone asleep
+                let cached_contacts = dbus::get_cached_contacts(&device_id).await;
+                if !cached_contacts.is_empty() {
+                    eprintln!("[SMS-SUB] yielding {} cached contacts at startup", cached_contacts.len());
+                    yield SmsMessage::ContactsLoaded(cached_contacts);
+                }
+
+                // Load cached SMS — in-memory in service (if running), disk fallback otherwise
+                if let Some(cached_json) = dbus::get_cached_sms(&device_id).await {
+                    eprintln!("[SMS-SUB] yielding cached SMS at startup");
+                    let (messages, conversations) = dbus::parse_sms_messages(&cached_json);
+                    for msg in messages {
+                        yield SmsMessage::ProtocolEventReceived(ProtocolEvent::MessageReceived(msg));
+                    }
+                    yield SmsMessage::ProtocolEventReceived(ProtocolEvent::ConversationsReceived(conversations));
+                }
+
                 loop {
                     eprintln!("[SMS-SUB] subscribing to events");
                     let mut event_stream = client.listen_for_events().await;

@@ -74,6 +74,7 @@ trait Sms {
         phone_number: &str,
         message: &str,
     ) -> zbus::Result<()>;
+    async fn get_cached_sms(&self, device_id: &str) -> zbus::Result<String>;
 
     #[zbus(signal)]
     async fn sms_messages_received(&self, messages_json: String) -> zbus::Result<()>;
@@ -87,6 +88,7 @@ trait Sms {
 )]
 trait Contacts {
     async fn request_contacts(&self, device_id: &str) -> zbus::Result<()>;
+    async fn get_cached_contacts(&self, device_id: &str) -> zbus::Result<String>;
 
     #[zbus(signal)]
     async fn contacts_received(&self, contacts_json: String) -> zbus::Result<()>;
@@ -171,9 +173,20 @@ impl KdeConnectClient {
             .await?)
     }
 
+    /// Fetch cached SMS — in-memory in service, disk fallback, empty string if neither
+    pub async fn get_cached_sms(&self, device_id: &str) -> Result<String> {
+        Ok(self.sms_proxy.get_cached_sms(device_id).await?)
+    }
+
     /// Manually request contacts sync for a device
     pub async fn request_contacts(&self, device_id: &str) -> Result<()> {
         Ok(self.contacts_proxy.request_contacts(device_id).await?)
+    }
+
+    /// Fetch cached contacts from the service — works with phone asleep
+    pub async fn get_cached_contacts(&self, device_id: &str) -> Result<HashMap<String, String>> {
+        let json = self.contacts_proxy.get_cached_contacts(device_id).await?;
+        Ok(serde_json::from_str(&json).unwrap_or_default())
     }
 
     /// Listen for service events (signals)
