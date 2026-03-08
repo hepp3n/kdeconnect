@@ -177,8 +177,10 @@ impl TcpTransport {
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
     discovery_interval: Duration,
+    #[allow(dead_code)]
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     identity: Arc<Identity>,
+    #[allow(dead_code)]
     server_config: Arc<rustls::ServerConfig>,
 }
 
@@ -242,6 +244,7 @@ impl UdpTransport {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn listen(&self) -> anyhow::Result<()> {
         let event_tx = self.event_tx.clone();
         let this_identity = self.identity.clone();

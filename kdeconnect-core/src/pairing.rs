@@ -18,6 +18,7 @@ impl PairingManager {
         Self { device_manager }
     }
 
+    #[allow(dead_code)]
     pub async fn handle_pair_request(
         &self,
         id: DeviceId,
@@ -99,7 +100,7 @@ impl PairingManager {
                         "accept" => decision = true,
                         "decline" => decision = false,
                         "__closed" => decision = false,
-                        _ => decision = false, // Default to safe (decline)
+                        _ => decision = false,
                     });
                 }
                 Err(e) => {

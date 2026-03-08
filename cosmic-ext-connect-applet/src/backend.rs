@@ -97,55 +97,45 @@ pub async fn remove_device(device_id: &str) {
 /// Pair with a device
 pub async fn pair_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.pair_device(&device_id).await
 }
 
 /// Unpair from a device
 pub async fn unpair_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.unpair_device(&device_id).await
 }
 
 /// Send a ping to a device
 pub async fn ping_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_ping(&device_id, "Ping from COSMIC!").await
 }
 
 /// Send files to a device
 pub async fn send_files(device_id: String, files: Vec<String>) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_files(&device_id, files).await
 }
 
 /// Send clipboard content to a device
 pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_clipboard(&device_id, &content).await
 }
 
@@ -168,23 +158,37 @@ pub async fn reject_pairing(device_id: String) -> Result<()> {
 /// Ring a device (findmyphone)
 pub async fn ring_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.ring_device(&device_id).await
+}
+
+/// Enable or disable a plugin for a device.
+/// The change is forwarded to kdeconnect-service, which persists it and
+/// gates all subsequent incoming packets for that plugin.
+#[allow(dead_code)]
+pub async fn set_plugin_enabled(
+    device_id: String,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client
+        .set_plugin_enabled(&device_id, &plugin_id, enabled)
+        .await
 }
 
 /// Request SMS conversations from a device
 #[allow(dead_code)]
 pub async fn request_conversations(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.request_conversations(&device_id).await
 }
 
@@ -192,11 +196,9 @@ pub async fn request_conversations(device_id: String) -> Result<()> {
 #[allow(dead_code)]
 pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.request_conversation(&device_id, thread_id).await
 }
 
@@ -204,11 +206,9 @@ pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<(
 #[allow(dead_code)]
 pub async fn send_sms(device_id: String, phone_number: String, message: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_sms(&device_id, &phone_number, &message).await
 }
 
