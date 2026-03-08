@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Cosmic EXT Connect
 Comment=Connect to KDE Connect devices
-Icon=phone-symbolic
+Icon=io.github.hepp3n.kdeconnect
 Exec=cosmic-ext-connect-applet
 Terminal=false
 Type=Application

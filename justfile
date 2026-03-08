@@ -32,6 +32,7 @@ install-bins: build
 
 install-applet-desktop:
     install -Dm644 resources/{{APPID}}.desktop {{PREFIX}}/share/applications/{{APPID}}.desktop
+    install -Dm644 resources/{{APPID}}.svg {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     install -Dm644 resources/{{APPID}}.service {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
     install -Dm644 resources/{{APPID}}.daemon.desktop {{PREFIX}}/etc/xdg/autostart/{{APPID}}.daemon.desktop
@@ -79,12 +80,13 @@ clean:
 uninstall:
     -systemctl --user stop kdeconnect.service
     -systemctl --user disable kdeconnect.service
-    rm -f {{PREFIX}}/bin/kdeconnect-service
-    rm -f {{PREFIX}}/bin/cosmic-ext-connect-applet
-    rm -f {{PREFIX}}/bin/cosmic-ext-connect-settings
-    rm -f {{PREFIX}}/bin/cosmic-ext-connect-sms
-    rm -f {{ XDG_CONFIG }}/systemd/user/kdeconnect.service
-    rm -f {{PREFIX}}/share/applications/{{APPID}}.desktop
-    rm -f {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
+    rm -v {{PREFIX}}/bin/kdeconnect-service
+    rm -v {{PREFIX}}/bin/cosmic-ext-connect-applet
+    rm -v {{PREFIX}}/bin/cosmic-ext-connect-settings
+    rm -v {{PREFIX}}/bin/cosmic-ext-connect-sms
+    rm -v {{ XDG_CONFIG }}/systemd/user/kdeconnect.service
+    rm -v {{PREFIX}}/share/applications/{{APPID}}.desktop
+    rm -v {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
+    rm -v {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     @echo "✓ Uninstalled"
     
