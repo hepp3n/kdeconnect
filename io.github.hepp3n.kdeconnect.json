@@ -16,13 +16,8 @@
         "--socket=session-bus",
         "--device=dri",
         "--share=network",
-        "--filesystem=home:ro",
         "--filesystem=xdg-download",
-        "--filesystem=xdg-config/systemd",
-        "--filesystem=xdg-config/cosmic:rw",
-        "--talk-name=org.freedesktop.Notifications",
-        "--talk-name=org.freedesktop.portal.Desktop",
-        "--own-name=io.github.hepp3n.kdeconnect"
+        "--filesystem=xdg-config/cosmic:rw"
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin"

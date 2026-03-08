@@ -1,3 +1,3 @@
 [D-BUS Service]
 Name=io.github.hepp3n.kdeconnect
-Exec=/app/bin/kdeconnect-service
+Exec=kdeconnect-service
