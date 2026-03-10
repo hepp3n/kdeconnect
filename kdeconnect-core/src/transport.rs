@@ -98,84 +98,110 @@ impl TcpTransport {
                     info!(peer = ?peer, "[tcp] new connection");
                     apply_keepalive(&stream);
 
-                    // Read phone's identity (sent pre-TLS, plaintext)
+                    // Step 1: read phone's pre-TLS identity
+                    debug!(peer = ?peer, "[tcp] step 1: reading pre-TLS identity");
                     let mut buffer = String::new();
                     {
                         let mut reader = BufReader::new(&mut stream);
-                        reader
-                            .read_line(&mut buffer)
-                            .await
-                            .expect("Failed to read identity line");
+                        if let Err(e) = reader.read_line(&mut buffer).await {
+                            warn!(peer = ?peer, "[tcp] failed to read identity line: {}", e);
+                            continue;
+                        }
                     }
+                    debug!(peer = ?peer, "[tcp] step 1: read {} bytes", buffer.len());
 
                     let identity = identity.clone();
 
-                    if let Ok(packet) = serde_json::from_str::<ProtocolPacket>(&buffer)
-                        && let Ok(peer_identity) = serde_json::from_value::<Identity>(packet.body)
-                    {
-                        let name = peer_identity.device_name.clone();
-                        let id = peer_identity.device_id.clone();
-
-                        if identity.device_id == peer_identity.device_id {
-                            warn!(peer = ?peer, device_id = ?id, "skipping the same device");
+                    let packet = match serde_json::from_str::<ProtocolPacket>(&buffer) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!(peer = ?peer, "[tcp] failed to parse identity packet: {}", e);
                             continue;
                         }
-
-                        // Send our identity back (pre-TLS, plaintext) — phone expects this
-                        let our_identity = ProtocolPacket::new(
-                            PacketType::Identity,
-                            serde_json::to_value(&*self.identity).unwrap(),
-                        )
-                        .as_raw()
-                        .expect("Failed to serialize identity packet");
-                        let _ = stream.write_all(our_identity.as_slice()).await;
-                        let _ = stream.flush().await;
-
-                        // Phone connected to us, so we are the TLS server
-                        let mut stream = match TlsAcceptor::from(self.server_config.clone())
-                            .accept(stream)
-                            .await
-                        {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
-                                continue;
-                            }
-                        };
-
-                        // Send our identity again post-TLS for plugin negotiation
-                        let post_tls_identity = ProtocolPacket::new(
-                            PacketType::Identity,
-                            serde_json::to_value(&*self.identity).unwrap(),
-                        )
-                        .as_raw()
-                        .expect("Failed to serialize identity packet");
-                        let _ = stream.write_all(post_tls_identity.as_slice()).await;
-                        let _ = stream.flush().await;
-
-                        let (reader, writer) = split(stream);
-
-                        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-                        let write_rx = Arc::new(Mutex::new(write_rx));
-
-                        // Do NOT .await the spawn — blocks the accept loop until connection closes.
-                        tokio::spawn(handle_connection(
-                            event_tx.clone(),
-                            reader,
-                            writer,
-                            write_rx,
-                            peer,
-                            DeviceId(id.clone()),
-                        ));
-
-                        if let Err(e) = event_tx.send(TransportEvent::NewConnection {
-                            addr: peer,
-                            id: DeviceId(peer_identity.device_id),
-                            name: name.clone(),
-                            write_tx,
-                        }) {
-                            error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
+                    };
+                    let peer_identity = match serde_json::from_value::<Identity>(packet.body) {
+                        Ok(i) => i,
+                        Err(e) => {
+                            warn!(peer = ?peer, "[tcp] failed to parse identity body: {}", e);
+                            continue;
                         }
+                    };
+
+                    let name = peer_identity.device_name.clone();
+                    let id = peer_identity.device_id.clone();
+                    info!(peer = ?peer, device_id = ?id, device_name = name, "[tcp] identified peer");
+
+                    if identity.device_id == peer_identity.device_id {
+                        warn!(peer = ?peer, device_id = ?id, "skipping the same device");
+                        continue;
+                    }
+
+                    // Step 2: send our identity back pre-TLS
+                    debug!(peer = ?peer, "[tcp] step 2: sending our pre-TLS identity");
+                    let our_identity = ProtocolPacket::new(
+                        PacketType::Identity,
+                        serde_json::to_value(&*self.identity).unwrap(),
+                    )
+                    .as_raw()
+                    .expect("Failed to serialize identity packet");
+                    if let Err(e) = stream.write_all(our_identity.as_slice()).await {
+                        warn!(peer = ?peer, "[tcp] failed to send pre-TLS identity: {}", e);
+                        continue;
+                    }
+                    let _ = stream.flush().await;
+                    debug!(peer = ?peer, "[tcp] step 2: pre-TLS identity sent");
+
+                    // Step 3: TLS handshake — we are the server (phone connected to us)
+                    debug!(peer = ?peer, "[tcp] step 3: starting TLS accept (we are server)");
+                    let mut tls_stream = match TlsAcceptor::from(self.server_config.clone())
+                        .accept(stream)
+                        .await
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
+                            continue;
+                        }
+                    };
+                    info!(peer = ?peer, device_id = ?id, "[tcp] step 3: TLS established");
+
+                    // Step 4: send our identity post-TLS for plugin negotiation
+                    debug!(peer = ?peer, "[tcp] step 4: sending post-TLS identity");
+                    let post_tls_identity = ProtocolPacket::new(
+                        PacketType::Identity,
+                        serde_json::to_value(&*self.identity).unwrap(),
+                    )
+                    .as_raw()
+                    .expect("Failed to serialize identity packet");
+                    if let Err(e) = tls_stream.write_all(post_tls_identity.as_slice()).await {
+                        warn!(peer = ?peer, "[tcp] failed to send post-TLS identity: {}", e);
+                        continue;
+                    }
+                    let _ = tls_stream.flush().await;
+                    debug!(peer = ?peer, "[tcp] step 4: post-TLS identity sent");
+
+                    let (reader, writer) = split(tls_stream);
+
+                    let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
+                    let write_rx = Arc::new(Mutex::new(write_rx));
+
+                    // Do NOT .await the spawn — blocks the accept loop until connection closes.
+                    tokio::spawn(handle_connection(
+                        event_tx.clone(),
+                        reader,
+                        writer,
+                        write_rx,
+                        peer,
+                        DeviceId(id.clone()),
+                    ));
+
+                    if let Err(e) = event_tx.send(TransportEvent::NewConnection {
+                        addr: peer,
+                        id: DeviceId(peer_identity.device_id),
+                        name: name.clone(),
+                        write_tx,
+                    }) {
+                        error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
                     }
                 }
                 Err(e) => {
