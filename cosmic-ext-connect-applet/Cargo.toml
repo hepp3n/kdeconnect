@@ -25,6 +25,8 @@ ctrlc = { workspace = true }
 async-stream = { workspace = true }
 anyhow = { workspace = true }
 percent-encoding = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [[bin]]
 name = "cosmic-ext-connect-applet"

@@ -6,6 +6,7 @@ use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::models::Device;
 
@@ -16,14 +17,14 @@ lazy_static::lazy_static! {
 
 /// Initialize the D-Bus client connection
 pub async fn initialize() -> Result<()> {
-    eprintln!("=== Initializing D-Bus Client ===");
+    info!("Initializing D-Bus client");
 
     let client = KdeConnectClient::new().await?;
 
     let mut client_guard = CLIENT.lock().await;
     *client_guard = Some(Arc::new(client));
 
-    eprintln!("✓ D-Bus client connected to kdeconnect-service");
+    info!("D-Bus client connected to kdeconnect-service");
     Ok(())
 }
 
@@ -32,7 +33,7 @@ pub async fn fetch_devices() -> Vec<Device> {
     let client_guard = CLIENT.lock().await;
 
     let Some(client) = client_guard.as_ref() else {
-        eprintln!("⚠️  D-Bus client not initialized");
+        warn!("D-Bus client not initialized");
         return vec![];
     };
 
@@ -74,7 +75,7 @@ pub async fn fetch_devices() -> Vec<Device> {
             devices
         }
         Err(e) => {
-            eprintln!("✗ Failed to fetch devices: {:?}", e);
+            error!("Failed to fetch devices: {:?}", e);
             vec![]
         }
     }
@@ -151,7 +152,7 @@ pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
 
 /// Browse device filesystem (via SFTP)
 pub async fn browse_device_filesystem(_device_id: String) -> Result<()> {
-    eprintln!("⚠️  Browse filesystem not yet implemented via D-Bus");
+    warn!("Browse filesystem not yet implemented via D-Bus");
     Ok(())
 }
 
@@ -232,29 +233,26 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
 
             attempts += 1;
             if attempts > 20 {
-                eprintln!("⚠️  Timeout waiting for D-Bus client initialization");
+                warn!("Timeout waiting for D-Bus client initialization");
                 return;
             }
 
-            eprintln!(
-                "⏳ Waiting for D-Bus client initialization... (attempt {})",
-                attempts
-            );
+            debug!("Waiting for D-Bus client initialization (attempt {})", attempts);
             sleep(Duration::from_millis(100)).await;
         };
 
-        eprintln!("✓ Event stream: D-Bus client ready");
+        info!("Event stream: D-Bus client ready");
 
         let mut stream = client.listen_for_events().await;
 
         while let Some(event) = stream.next().await {
             if tx.send(event).await.is_err() {
-                eprintln!("Event receiver dropped, stopping event listener");
+                warn!("Event receiver dropped, stopping event listener");
                 break;
             }
         }
 
-        eprintln!("Event stream ended");
+        debug!("Event stream ended");
     });
 
     futures::stream::unfold(rx, |mut rx| async move {

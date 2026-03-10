@@ -4,6 +4,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::error;
 use zbus::{Connection, proxy};
 
 /// Device information
@@ -213,7 +214,7 @@ impl KdeConnectClient {
             match signal.args() {
                 Ok(args) => Some(ServiceEvent::DeviceConnected(args.device_id, args.device)),
                 Err(e) => {
-                    eprintln!("Failed to parse DeviceConnected signal: {:?}", e);
+                    error!("Failed to parse DeviceConnected signal: {:?}", e);
                     None
                 }
             }
@@ -223,7 +224,7 @@ impl KdeConnectClient {
             match signal.args() {
                 Ok(args) => Some(ServiceEvent::DevicePaired(args.device_id, args.device)),
                 Err(e) => {
-                    eprintln!("Failed to parse DevicePaired signal: {:?}", e);
+                    error!("Failed to parse DevicePaired signal: {:?}", e);
                     None
                 }
             }
@@ -233,7 +234,7 @@ impl KdeConnectClient {
             match signal.args() {
                 Ok(args) => Some(ServiceEvent::DeviceDisconnected(args.device_id)),
                 Err(e) => {
-                    eprintln!("Failed to parse DeviceDisconnected signal: {:?}", e);
+                    error!("Failed to parse DeviceDisconnected signal: {:?}", e);
                     None
                 }
             }
@@ -243,7 +244,7 @@ impl KdeConnectClient {
             match signal.args() {
                 Ok(args) => Some(ServiceEvent::SmsMessagesReceived(args.messages_json)),
                 Err(e) => {
-                    eprintln!("Failed to parse SmsMessagesReceived signal: {:?}", e);
+                    error!("Failed to parse SmsMessagesReceived signal: {:?}", e);
                     None
                 }
             }
@@ -255,13 +256,13 @@ impl KdeConnectClient {
                     match serde_json::from_str::<HashMap<String, String>>(&args.contacts_json) {
                         Ok(map) => Some(ServiceEvent::ContactsReceived(map)),
                         Err(e) => {
-                            eprintln!("Failed to parse contacts JSON: {:?}", e);
+                            error!("Failed to parse contacts JSON: {:?}", e);
                             None
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse ContactsReceived signal: {:?}", e);
+                    error!("Failed to parse ContactsReceived signal: {:?}", e);
                     None
                 }
             }

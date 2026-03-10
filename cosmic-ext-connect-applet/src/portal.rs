@@ -2,6 +2,7 @@
 
 use ashpd::desktop::file_chooser::SelectedFiles;
 use percent_encoding::percent_decode;
+use tracing::{debug, error};
 
 pub async fn pick_files(
     title: impl Into<String>,
@@ -32,15 +33,15 @@ pub async fn pick_files(
                     .filter(|s| !s.is_empty())
                     .collect();
 
-                eprintln!("Selected {} file(s)", paths.len());
+                debug!("Selected {} file(s)", paths.len());
                 return paths;
             }
             Err(e) => {
-                eprintln!("Failed to get file picker response: {}", e);
+                error!("Failed to get file picker response: {}", e);
             }
         },
         Err(e) => {
-            eprintln!("Failed to open file picker: {}", e);
+            error!("Failed to open file picker: {}", e);
         }
     }
 
@@ -104,11 +105,11 @@ pub async fn pick_folder(title: impl Into<String>) -> Option<String> {
                 }
             }
             Err(e) => {
-                eprintln!("Failed to get folder picker response: {}", e);
+                error!("Failed to get folder picker response: {}", e);
             }
         },
         Err(e) => {
-            eprintln!("Failed to open folder picker: {}", e);
+            error!("Failed to open folder picker: {}", e);
         }
     }
 
