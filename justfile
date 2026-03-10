@@ -29,14 +29,19 @@ install-bins: build
     install -Dm755 target/release/cosmic-ext-connect-settings {{PREFIX}}/bin/cosmic-ext-connect-settings
     install -Dm755 target/release/cosmic-ext-connect-sms      {{PREFIX}}/bin/cosmic-ext-connect-sms
 
-# Install applet desktop entry, icon, metainfo, and D-Bus activation file
+# Install applet desktop entry, icon, and metainfo
 install-applet-desktop:
     install -Dm644 resources/{{APPID}}.desktop       {{PREFIX}}/share/applications/{{APPID}}.desktop
     install -Dm644 resources/{{APPID}}.svg           {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml  {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
-    install -Dm644 resources/{{APPID}}.service       {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
 
-# Install XDG autostart entry — starts kdeconnect-service on login without systemd
+# Write D-Bus activation file with correct full path — %h is not valid in D-Bus service files
+install-dbus-service:
+    mkdir -p {{PREFIX}}/share/dbus-1/services
+    printf '[D-BUS Service]\nName={{APPID}}\nExec={{PREFIX}}/bin/kdeconnect-service\n' \
+        > {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
+
+# Install XDG autostart entry — bare name works here since ~/.local/bin is in PATH at login
 install-autostart:
     install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
 
@@ -51,7 +56,7 @@ enable-service:
     systemctl --user enable --now kdeconnect.service
 
 # Full install — builds and installs everything for a fresh setup
-install: install-bins install-applet-desktop install-autostart
+install: install-bins install-applet-desktop install-dbus-service install-autostart
     @echo ""
     @echo "✓ KDE Connect installed successfully!"
     @echo ""
