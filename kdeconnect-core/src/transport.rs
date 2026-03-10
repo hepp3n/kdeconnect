@@ -99,13 +99,13 @@ impl TcpTransport {
                     apply_keepalive(&stream);
 
                     let mut buffer = String::new();
-                    let (reader, _writer) = stream.split();
-                    let mut reader = BufReader::new(reader);
-
-                    reader
-                        .read_line(&mut buffer)
-                        .await
-                        .expect("Failed to read identity line");
+                    {
+                        let mut reader = BufReader::new(&mut stream);
+                        reader
+                            .read_line(&mut buffer)
+                            .await
+                            .expect("Failed to read identity line");
+                    } // reader borrow released here
 
                     let identity = identity.clone();
 
@@ -119,6 +119,16 @@ impl TcpTransport {
                             warn!(peer = ?peer, device_id = ?id, "skipping the same device");
                             continue;
                         }
+
+                        // Send our identity back before TLS — phone expects this
+                        let our_identity = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+                        let _ = stream.write_all(our_identity.as_slice()).await;
+                        let _ = stream.flush().await;
 
                         let mut stream = match TlsConnector::from(self.client_config.clone())
                             .connect(id.clone().try_into().unwrap(), stream)
