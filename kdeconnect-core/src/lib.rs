@@ -79,6 +79,11 @@ impl KdeConnectCore {
             let _ = tcp_transport.listen().await;
         });
 
+        let udp = Arc::clone(&udp_transport);
+        tokio::spawn(async move {
+            let _ = udp.listen().await;
+        });
+
         let run_command_plugin = plugins::run_command::RunCommandRequest::default();
         plugin_registry.register(Arc::new(run_command_plugin)).await;
         let share_request_plugin = plugins::share::ShareRequest::default();

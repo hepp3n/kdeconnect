@@ -244,7 +244,6 @@ impl UdpTransport {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn listen(&self) -> anyhow::Result<()> {
         let event_tx = self.event_tx.clone();
         let this_identity = self.identity.clone();
