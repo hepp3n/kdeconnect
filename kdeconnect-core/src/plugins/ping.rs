@@ -1,6 +1,7 @@
 use crate::{device::Device, event::CoreEvent, plugin_interface::Plugin, protocol::ProtocolPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tracing::debug;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Ping {
@@ -45,8 +46,7 @@ impl Ping {
                     "clicked" => {
                         reply = true;
                     }
-                    // here "__closed" is a hard coded keyword
-                    "__closed" => println!("the notification was closed"),
+                    "__closed" => debug!("ping notification closed"),
                     _ => (),
                 });
 

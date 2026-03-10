@@ -15,6 +15,7 @@ use cosmic::iced::{Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::{Element, Task, widget};
 use std::collections::HashMap;
+use tracing::{debug, error, info};
 
 pub struct KdeConnectApplet {
     core: Core,
@@ -39,7 +40,7 @@ impl cosmic::Application for KdeConnectApplet {
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
         tokio::spawn(async {
             if let Err(e) = backend::initialize().await {
-                eprintln!("Backend init failed: {:?}", e);
+                error!("Backend init failed: {:?}", e);
             }
         });
 
@@ -116,7 +117,6 @@ impl cosmic::Application for KdeConnectApplet {
                 }
             }
             Message::SendSMS(ref device_id) => {
-                // Look up device name for the window title
                 let device_name = self
                     .devices
                     .get(device_id)
@@ -124,22 +124,16 @@ impl cosmic::Application for KdeConnectApplet {
                     .unwrap_or_else(|| "Unknown Device".to_string());
                 let id = device_id.clone();
 
-                eprintln!(
-                    "[APPLET] Launching SMS window for device={} name={}",
-                    id, device_name
-                );
+                info!("Launching SMS window for device={} name={}", id, device_name);
 
-                // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
                     match std::process::Command::new("cosmic-ext-connect-sms")
                         .arg(&id)
                         .arg(&device_name)
                         .spawn()
                     {
-                        Ok(_) => eprintln!("[APPLET] cosmic-ext-connect-sms launched OK"),
-                        Err(e) => {
-                            eprintln!("[APPLET] Failed to launch cosmic-ext-connect-sms: {:?}", e)
-                        }
+                        Ok(_) => info!("cosmic-ext-connect-sms launched"),
+                        Err(e) => error!("Failed to launch cosmic-ext-connect-sms: {:?}", e),
                     }
                 });
             }
@@ -230,13 +224,13 @@ impl cosmic::Application for KdeConnectApplet {
                 );
             }
             Message::PairingRequestReceived(device_id, device_name, device_type) => {
-                eprintln!(
+                info!(
                     "Pairing request: {} ({}) [{}]",
                     device_name, device_id, device_type
                 );
             }
             Message::MprisReceived(device_id, mpris_data) => {
-                eprintln!("MPRIS from {}: {:?}", device_id, mpris_data);
+                debug!("MPRIS from {}: {:?}", device_id, mpris_data);
             }
             Message::OpenSettings => {
                 std::process::Command::new("cosmic-ext-connect-settings")
@@ -244,22 +238,22 @@ impl cosmic::Application for KdeConnectApplet {
                     .ok();
             }
             Message::RemoteInput(ref device_id) => {
-                eprintln!("Remote input: {}", device_id);
+                debug!("Remote input: {}", device_id);
             }
             Message::LockDevice(ref device_id) => {
-                eprintln!("Lock device: {}", device_id);
+                debug!("Lock device: {}", device_id);
             }
             Message::PresenterMode(ref device_id) => {
-                eprintln!("Presenter mode: {}", device_id);
+                debug!("Presenter mode: {}", device_id);
             }
             Message::UseAsMonitor(ref device_id) => {
-                eprintln!("Use as monitor: {}", device_id);
+                debug!("Use as monitor: {}", device_id);
             }
             Message::ShareText(ref device_id) => {
-                eprintln!("Share text: {}", device_id);
+                debug!("Share text: {}", device_id);
             }
             Message::ShareUrl(ref device_id) => {
-                eprintln!("Share URL: {}", device_id);
+                debug!("Share URL: {}", device_id);
             }
         }
         Task::none()
@@ -299,6 +293,13 @@ impl cosmic::Application for KdeConnectApplet {
 }
 
 fn main() -> cosmic::iced::Result {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .init();
+
     ctrlc::set_handler(move || std::process::exit(0)).ok();
     cosmic::applet::run::<KdeConnectApplet>(())
 }

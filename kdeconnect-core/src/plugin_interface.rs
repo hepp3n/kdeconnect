@@ -72,7 +72,7 @@ impl PluginRegistry {
                 debug!("BatteryRequest received — not implemented, ignoring");
             }
             PacketType::SmsMessages => {
-                eprintln!("!!! Received SmsMessages packet in core !!!");
+                debug!("Received SmsMessages packet");
                 if let Ok(sms_messages) =
                     serde_json::from_value::<plugins::sms::SmsMessages>(body.clone())
                 {
@@ -80,25 +80,20 @@ impl PluginRegistry {
                         "Received SMS messages packet with {} messages",
                         sms_messages.messages.len()
                     );
-                    eprintln!(
-                        "Successfully parsed {} SMS messages",
-                        sms_messages.messages.len()
-                    );
                     sms_messages.received_packet(connection_tx).await;
                 } else {
-                    eprintln!("!!! Failed to parse SMS messages packet !!!");
-                    eprintln!("Body: {:?}", body);
+                    warn!("Failed to parse SMS messages packet: {:?}", body);
                 }
             }
             PacketType::ContactsResponseUidsTimestamps => {
-                eprintln!("[contacts] Received ContactsResponseUidsTimestamps");
+                debug!("Received ContactsResponseUidsTimestamps");
                 if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
                     let uids: Vec<String> = uids_val
                         .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                     if !uids.is_empty() {
-                        eprintln!("[contacts] Requesting vcards for {} UIDs", uids.len());
+                        debug!("Requesting vcards for {} UIDs", uids.len());
                         let packet = ProtocolPacket::new(
                             PacketType::ContactsRequestVcardsByUid,
                             serde_json::json!({ "uids": uids }),
@@ -111,7 +106,7 @@ impl PluginRegistry {
                 }
             }
             PacketType::ContactsResponseVcards => {
-                eprintln!("[contacts] Received ContactsResponseVcards");
+                debug!("Received ContactsResponseVcards");
                 let mut contacts: std::collections::HashMap<String, String> =
                     std::collections::HashMap::new();
                 if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
@@ -128,7 +123,7 @@ impl PluginRegistry {
                         }
                     }
                 }
-                eprintln!("[contacts] Parsed {} phone->name entries", contacts.len());
+                debug!("Parsed {} phone->name contact entries", contacts.len());
                 if !contacts.is_empty() {
                     let _ = connection_tx.send(ConnectionEvent::ContactsReceived(contacts));
                 }
@@ -159,7 +154,7 @@ impl PluginRegistry {
                 if let Ok(keyboard_state) =
                     serde_json::from_value::<plugins::mousepad::KeyboardState>(body)
                 {
-                    println!("{:?}", keyboard_state);
+                    debug!("{:?}", keyboard_state);
                 }
             }
             PacketType::Mpris => {

@@ -1,5 +1,6 @@
 use cosmic_ext_connect_applet::backend;
 use cosmic_ext_connect_applet::models::Device;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct DevicePermissions {
@@ -32,63 +33,56 @@ pub async fn fetch_devices() -> Vec<Device> {
 }
 
 pub async fn pair_device(device_id: String) {
-    eprintln!("=== Requesting Pairing ===");
-    eprintln!("Device: {}", device_id);
+    info!("Requesting pairing for device: {}", device_id);
 
     match backend::pair_device(device_id).await {
-        Ok(_) => eprintln!("✓ Pairing request sent successfully"),
-        Err(e) => eprintln!("✗ Failed to send pairing request: {:?}", e),
+        Ok(_) => info!("Pairing request sent successfully"),
+        Err(e) => error!("Failed to send pairing request: {:?}", e),
     }
 }
 
 pub async fn unpair_device(device_id: String) {
-    eprintln!("=== Unpairing Device ===");
-    eprintln!("Device: {}", device_id);
+    info!("Unpairing device: {}", device_id);
 
     match backend::unpair_device(device_id).await {
-        Ok(_) => eprintln!("✓ Device unpaired successfully"),
-        Err(e) => eprintln!("✗ Failed to unpair device: {:?}", e),
+        Ok(_) => info!("Device unpaired successfully"),
+        Err(e) => error!("Failed to unpair device: {:?}", e),
     }
 }
 
 pub async fn ping_device(device_id: String) {
-    eprintln!("=== Pinging Device ===");
-    eprintln!("Device: {}", device_id);
+    info!("Pinging device: {}", device_id);
 
     match backend::ping_device(device_id).await {
-        Ok(_) => eprintln!("✓ Ping sent successfully"),
-        Err(e) => eprintln!("✗ Failed to send ping: {:?}", e),
+        Ok(_) => info!("Ping sent successfully"),
+        Err(e) => error!("Failed to send ping: {:?}", e),
     }
 }
 
 pub async fn ring_device(device_id: String) {
-    eprintln!("=== Ringing Device (Find My Phone) ===");
-    eprintln!("Device: {}", device_id);
+    info!("Ringing device: {}", device_id);
 
     match backend::ring_device(device_id).await {
-        Ok(_) => eprintln!("✓ Ring command sent successfully"),
-        Err(e) => eprintln!("✗ Failed to ring device: {:?}", e),
+        Ok(_) => info!("Ring command sent successfully"),
+        Err(e) => error!("Failed to ring device: {:?}", e),
     }
 }
 
 pub async fn send_files(device_id: String, files: Vec<String>) {
-    eprintln!("=== Sending Files ===");
-    eprintln!("Device: {}", device_id);
-    eprintln!("Files: {} file(s)", files.len());
+    info!("Sending {} file(s) to device: {}", files.len(), device_id);
 
     match backend::send_files(device_id, files).await {
-        Ok(_) => eprintln!("✓ Files sent successfully"),
-        Err(e) => eprintln!("✗ Failed to send files: {:?}", e),
+        Ok(_) => info!("Files sent successfully"),
+        Err(e) => error!("Failed to send files: {:?}", e),
     }
 }
 
 pub async fn browse_device(device_id: String) {
-    eprintln!("=== Browsing Device Filesystem ===");
-    eprintln!("Device: {}", device_id);
+    info!("Browsing device filesystem: {}", device_id);
 
     match backend::browse_device_filesystem(device_id).await {
-        Ok(_) => eprintln!("✓ Browse command sent successfully"),
-        Err(e) => eprintln!("✗ Failed to browse device: {:?}", e),
+        Ok(_) => info!("Browse command sent successfully"),
+        Err(e) => error!("Failed to browse device: {:?}", e),
     }
 }
 
@@ -97,12 +91,10 @@ pub async fn set_plugin_enabled_internal(
     plugin_name: String,
     enabled: bool,
 ) -> Result<(), String> {
-    eprintln!(
-        "=== {} Plugin ===",
-        if enabled { "Enabling" } else { "Disabling" }
+    warn!(
+        "Plugin configuration not yet implemented: {} enabled={}",
+        plugin_name, enabled
     );
-    eprintln!("Plugin: {}", plugin_name);
-    eprintln!("⚠️  Plugin configuration not yet implemented in backend");
     Ok(())
 }
 
@@ -135,6 +127,5 @@ pub async fn load_device_permissions(_device_id: String) -> DevicePermissions {
 
 // Placeholder main function for settings binary
 fn main() {
-    eprintln!("Settings app not yet implemented");
-    eprintln!("This will be a full COSMIC settings application");
+    warn!("Settings app not yet implemented");
 }
