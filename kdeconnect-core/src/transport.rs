@@ -13,7 +13,7 @@ use tokio::{
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
 };
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -67,7 +67,7 @@ pub struct TcpTransport {
     listen_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     identity: Arc<Identity>,
-    client_config: Arc<rustls::ClientConfig>,
+    server_config: Arc<rustls::ServerConfig>,
 }
 
 impl TcpTransport {
@@ -76,13 +76,13 @@ impl TcpTransport {
         let listen_addr = config.listen_addr;
         let event_tx = event_tx.clone();
         let identity = Arc::new(config.identity.clone());
-        let client_config = config.key_store.client_config.clone();
+        let server_config = config.key_store.server_config.clone();
 
         Self {
             listen_addr,
             event_tx,
             identity,
-            client_config,
+            server_config,
         }
     }
 
@@ -98,6 +98,7 @@ impl TcpTransport {
                     info!(peer = ?peer, "[tcp] new connection");
                     apply_keepalive(&stream);
 
+                    // Read phone's identity (sent pre-TLS, plaintext)
                     let mut buffer = String::new();
                     {
                         let mut reader = BufReader::new(&mut stream);
@@ -105,7 +106,7 @@ impl TcpTransport {
                             .read_line(&mut buffer)
                             .await
                             .expect("Failed to read identity line");
-                    } // reader borrow released here
+                    }
 
                     let identity = identity.clone();
 
@@ -120,7 +121,7 @@ impl TcpTransport {
                             continue;
                         }
 
-                        // Send our identity back before TLS — phone expects this
+                        // Send our identity back (pre-TLS, plaintext) — phone expects this
                         let our_identity = ProtocolPacket::new(
                             PacketType::Identity,
                             serde_json::to_value(&*self.identity).unwrap(),
@@ -130,25 +131,26 @@ impl TcpTransport {
                         let _ = stream.write_all(our_identity.as_slice()).await;
                         let _ = stream.flush().await;
 
-                        let mut stream = match TlsConnector::from(self.client_config.clone())
-                            .connect(id.clone().try_into().unwrap(), stream)
+                        // Phone connected to us, so we are the TLS server
+                        let mut stream = match TlsAcceptor::from(self.server_config.clone())
+                            .accept(stream)
                             .await
                         {
                             Ok(s) => s,
                             Err(e) => {
-                                warn!(peer = ?peer, "[tcp] TLS connect failed: {}", e);
+                                warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
                                 continue;
                             }
                         };
 
-                        let packet = ProtocolPacket::new(
+                        // Send our identity again post-TLS for plugin negotiation
+                        let post_tls_identity = ProtocolPacket::new(
                             PacketType::Identity,
                             serde_json::to_value(&*self.identity).unwrap(),
                         )
                         .as_raw()
                         .expect("Failed to serialize identity packet");
-
-                        let _ = stream.write_all(packet.as_slice()).await;
+                        let _ = stream.write_all(post_tls_identity.as_slice()).await;
                         let _ = stream.flush().await;
 
                         let (reader, writer) = split(stream);
@@ -190,7 +192,6 @@ pub struct UdpTransport {
     #[allow(dead_code)]
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     identity: Arc<Identity>,
-    #[allow(dead_code)]
     server_config: Arc<rustls::ServerConfig>,
 }
 
