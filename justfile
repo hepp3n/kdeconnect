@@ -34,13 +34,14 @@ install-applet-desktop:
     install -Dm644 resources/{{APPID}}.svg            {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml   {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     install -Dm644 resources/{{APPID}}.service        {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
-    install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
-    @echo "✓ Installed applet desktop, dbus service, and autostart files"
+    @echo "✓ Installed applet desktop, icon, metainfo, and D-Bus service file"
 
+# Optional: install systemd user service for developer tooling (logs, restart, status)
 install-systemd: build-service
     install -Dm644 kdeconnect-service/kdeconnect.service {{XDG_CONFIG}}/systemd/user/kdeconnect.service
     -systemctl --user daemon-reload || echo "⚠️  Could not reload systemd (not in graphical session)"
     @echo "✓ Installed systemd service file"
+    @echo "  Run 'just enable-service' to start and enable on login"
 
 enable-service:
     systemctl --user enable --now kdeconnect.service
@@ -58,26 +59,27 @@ stop:
 restart:
     systemctl --user restart kdeconnect.service
 
-install: install-bins install-systemd install-applet-desktop
+# Default install — uses D-Bus activation, no systemd required
+install: install-bins install-applet-desktop
     @echo ""
     @echo "✓ Installation complete!"
     @echo ""
-    @echo "Next steps:"
-    @echo "  1. Log into graphical session (if not already)"
-    @echo "  2. Run: just enable-service"
-    @echo "  3. Open COSMIC Settings → Desktop → Panel"
-    @echo "  4. Click 'Configure Panel Applets'"
-    @echo "  5. Add 'KDE Connect' applet"
+    @echo "The service will start automatically via D-Bus activation on first use."
     @echo ""
-    @echo "Or test manually without systemd:"
-    @echo "  just run-service"
+    @echo "Next steps:"
+    @echo "  1. Open COSMIC Settings → Desktop → Panel"
+    @echo "  2. Click 'Configure Panel Applets'"
+    @echo "  3. Add 'KDE Connect' applet"
+    @echo ""
+    @echo "Optional: for systemd integration and journalctl logging:"
+    @echo "  just install-systemd && just enable-service"
 
 clean:
     cargo clean
 
 uninstall:
-    -systemctl --user stop kdeconnect.service
-    -systemctl --user disable kdeconnect.service
+    -systemctl --user stop kdeconnect.service 2>/dev/null || true
+    -systemctl --user disable kdeconnect.service 2>/dev/null || true
     rm -vf {{PREFIX}}/bin/kdeconnect-service
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-applet
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-settings
@@ -87,5 +89,4 @@ uninstall:
     rm -vf {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     rm -vf {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
     rm -vf {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
-    rm -vf {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
     @echo "✓ Uninstalled"
