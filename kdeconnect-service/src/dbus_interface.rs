@@ -5,10 +5,11 @@ use kdeconnect_core::{
     KdeConnectCore, PacketType, ProtocolPacket,
     device::{DeviceId, PairState},
     event::{AppEvent, ConnectionEvent},
+    plugin_config,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info, warn};
@@ -138,7 +139,7 @@ impl DaemonInterface {
     }
 
     async fn send_ping(&self, device_id: String, message: String) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendPing called for {} with message: {}", device_id, message);
+        info!("D-Bus: SendPing called for {}", device_id);
         let packet = ProtocolPacket::new(PacketType::Ping, json!({ "message": message }));
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
@@ -172,6 +173,34 @@ impl DaemonInterface {
         Ok(())
     }
 
+    async fn set_plugin_enabled(
+        &self,
+        device_id: String,
+        plugin_id: String,
+        enabled: bool,
+    ) -> zbus::fdo::Result<()> {
+        info!(
+            "D-Bus: SetPluginEnabled device={} plugin={} enabled={}",
+            device_id, plugin_id, enabled
+        );
+        self.event_sender
+            .send(AppEvent::SetPluginEnabled {
+                device_id: DeviceId(device_id),
+                plugin_id,
+                enabled,
+            })
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Return the list of disabled plugin IDs for a device.
+    async fn get_disabled_plugins(&self, device_id: String) -> Vec<String> {
+        info!("D-Bus: GetDisabledPlugins called for {}", device_id);
+        let disabled: HashSet<String> =
+            plugin_config::load_disabled_plugins(&device_id).await;
+        disabled.into_iter().collect()
+    }
+
     #[zbus(signal)]
     async fn device_connected(
         signal_emitter: &SignalEmitter<'_>,
@@ -193,7 +222,8 @@ impl DaemonInterface {
     ) -> zbus::Result<()>;
 }
 
-/// SMS-specific D-Bus interface
+// ----------------------------------------------------------------------------
+
 pub struct SmsInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
     sms_cache: Arc<Mutex<Option<String>>>,
@@ -217,14 +247,9 @@ impl SmsInterface {
     async fn request_conversations(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RequestConversations called for {}", device_id);
         let packet = ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
-        debug!("Sending packet type: {:?}", packet.packet_type);
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
-            .map_err(|e| {
-                error!("Failed to send packet: {}", e);
-                zbus::fdo::Error::Failed(e.to_string())
-            })?;
-        debug!("RequestConversations sent to core");
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
@@ -240,11 +265,7 @@ impl SmsInterface {
         );
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
-            .map_err(|e| {
-                error!("Failed to send packet: {}", e);
-                zbus::fdo::Error::Failed(e.to_string())
-            })?;
-        debug!("RequestConversation sent to core");
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
 
@@ -254,22 +275,18 @@ impl SmsInterface {
         phone_number: String,
         message: String,
     ) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendSms called for {} to {}", device_id, phone_number);
+        info!("D-Bus: SendSms called for {}", device_id);
         let packet = ProtocolPacket::new(
             PacketType::SmsRequest,
             json!({
                 "sendSms": true,
-                "addresses": [{ "address": phone_number }],
+                "phoneNumber": phone_number,
                 "messageBody": message,
-                "version": 2
             }),
         );
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
-            .map_err(|e| {
-                error!("Failed to send SMS: {}", e);
-                zbus::fdo::Error::Failed(e.to_string())
-            })?;
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         debug!("SMS send request sent to core");
         Ok(())
     }
@@ -281,7 +298,8 @@ impl SmsInterface {
     ) -> zbus::Result<()>;
 }
 
-/// Contacts D-Bus interface
+// ----------------------------------------------------------------------------
+
 pub struct ContactsInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
 }
@@ -311,7 +329,10 @@ impl ContactsInterface {
     ) -> zbus::Result<()>;
 }
 
-/// Main service coordinator
+// ----------------------------------------------------------------------------
+
+type SmsSyncedSet = Arc<Mutex<std::collections::HashSet<String>>>;
+
 pub struct KdeConnectService {
     #[allow(dead_code)]
     connection: Connection,
@@ -320,8 +341,6 @@ pub struct KdeConnectService {
     #[allow(dead_code)]
     devices: Arc<Mutex<HashMap<String, DbusDevice>>>,
 }
-
-type SmsSyncedSet = Arc<Mutex<std::collections::HashSet<String>>>;
 
 impl KdeConnectService {
     pub async fn new() -> Result<Self> {
@@ -338,7 +357,7 @@ impl KdeConnectService {
         let event_sender = core.take_events();
         info!("kdeconnect-core initialized");
 
-        let devices = Arc::new(Mutex::new(HashMap::new()));
+        let devices: Arc<Mutex<HashMap<String, DbusDevice>>> = Arc::new(Mutex::new(HashMap::new()));
 
         let daemon_interface = DaemonInterface {
             event_sender: event_sender.clone(),
@@ -385,6 +404,7 @@ impl KdeConnectService {
         let sms_synced: SmsSyncedSet = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let sms_cache_clone = sms_cache.clone();
         let current_device_id_clone = current_device_id.clone();
+
         tokio::spawn(async move {
             debug!("Event processor task running");
             loop {
@@ -408,6 +428,7 @@ impl KdeConnectService {
                 }
             }
         });
+
         info!("KDE Connect D-Bus service ready");
 
         Ok(Self {
@@ -512,6 +533,7 @@ impl KdeConnectService {
                     });
                 }
             }
+
             ConnectionEvent::DevicePaired((device_id, device)) => {
                 info!("Device paired: {} ({})", device.name, device_id.0);
 
@@ -561,6 +583,7 @@ impl KdeConnectService {
                     debug!("Auto-requested contacts after pairing");
                 });
             }
+
             ConnectionEvent::Disconnected(device_id) => {
                 info!("Device disconnected: {}", device_id.0);
 
@@ -581,6 +604,7 @@ impl KdeConnectService {
                     .await?;
                 debug!("Device disconnected signal emitted");
             }
+
             ConnectionEvent::SmsMessages(sms_data) => {
                 info!("SMS messages received: {} messages", sms_data.messages.len());
 
@@ -602,6 +626,7 @@ impl KdeConnectService {
                     .await?;
                 debug!("SMS D-Bus signal emitted");
             }
+
             ConnectionEvent::ContactsReceived(contacts) => {
                 info!("Contacts received: {} entries", contacts.len());
 
@@ -620,8 +645,9 @@ impl KdeConnectService {
                     .await?;
                 debug!("Contacts D-Bus signal emitted");
             }
+
             _ => {
-                debug!("Other event received");
+                debug!("Unhandled connection event");
             }
         }
 

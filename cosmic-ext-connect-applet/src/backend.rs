@@ -1,7 +1,6 @@
 //! Backend interface using D-Bus client to communicate with kdeconnect-service
 
 use anyhow::Result;
-use futures::StreamExt;
 use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -98,55 +97,45 @@ pub async fn remove_device(device_id: &str) {
 /// Pair with a device
 pub async fn pair_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.pair_device(&device_id).await
 }
 
 /// Unpair from a device
 pub async fn unpair_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.unpair_device(&device_id).await
 }
 
 /// Send a ping to a device
 pub async fn ping_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_ping(&device_id, "Ping from COSMIC!").await
 }
 
 /// Send files to a device
 pub async fn send_files(device_id: String, files: Vec<String>) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_files(&device_id, files).await
 }
 
 /// Send clipboard content to a device
 pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_clipboard(&device_id, &content).await
 }
 
@@ -169,23 +158,52 @@ pub async fn reject_pairing(device_id: String) -> Result<()> {
 /// Ring a device (findmyphone)
 pub async fn ring_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.ring_device(&device_id).await
+}
+
+/// Enable or disable a plugin for a device.
+#[allow(dead_code)]
+pub async fn set_plugin_enabled(
+    device_id: String,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client
+        .set_plugin_enabled(&device_id, &plugin_id, enabled)
+        .await
+}
+
+/// Get the list of disabled plugin IDs for a device.
+#[allow(dead_code)]
+pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        warn!("D-Bus client not initialized");
+        return vec![];
+    };
+    match client.get_disabled_plugins(&device_id).await {
+        Ok(disabled) => disabled,
+        Err(e) => {
+            error!("Failed to get disabled plugins for {}: {:?}", device_id, e);
+            vec![]
+        }
+    }
 }
 
 /// Request SMS conversations from a device
 #[allow(dead_code)]
 pub async fn request_conversations(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.request_conversations(&device_id).await
 }
 
@@ -193,11 +211,9 @@ pub async fn request_conversations(device_id: String) -> Result<()> {
 #[allow(dead_code)]
 pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.request_conversation(&device_id, thread_id).await
 }
 
@@ -205,17 +221,16 @@ pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<(
 #[allow(dead_code)]
 pub async fn send_sms(device_id: String, phone_number: String, message: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-
     client.send_sms(&device_id, &phone_number, &message).await
 }
 
 /// Create a stream of service events
 #[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
+    use futures::StreamExt;
     use tokio::sync::mpsc;
     use tokio::time::{Duration, sleep};
 
@@ -237,7 +252,10 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
                 return;
             }
 
-            debug!("Waiting for D-Bus client initialization (attempt {})", attempts);
+            debug!(
+                "Waiting for D-Bus client initialization (attempt {})",
+                attempts
+            );
             sleep(Duration::from_millis(100)).await;
         };
 
@@ -247,21 +265,11 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
 
         while let Some(event) = stream.next().await {
             if tx.send(event).await.is_err() {
-                warn!("Event receiver dropped, stopping event listener");
+                warn!("Event stream receiver dropped");
                 break;
             }
         }
-
-        debug!("Event stream ended");
     });
 
-    futures::stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Some(event) => Some((event, rx)),
-            None => loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-            },
-        }
-    })
-    .boxed()
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
