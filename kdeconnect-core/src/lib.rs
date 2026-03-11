@@ -250,26 +250,10 @@ impl KdeConnectCore {
                     .add_or_update_device(id.clone(), device.clone())
                     .await;
 
-                let accepted = {
-                    let mut guard = self.writer_map.lock().await;
-                    match guard.get(&id) {
-                        Some(existing) if !existing.is_closed() => {
-                            info!(
-                                "[core] Duplicate connection from {} — keeping existing live connection",
-                                id
-                            );
-                            false
-                        }
-                        _ => {
-                            guard.insert(id.clone(), write_tx);
-                            true
-                        }
-                    }
-                };
-
-                if !accepted {
-                    return;
-                }
+                // Always replace — the phone reconnecting means the old connection
+                // is being replaced intentionally. Keeping the old write_tx drops the
+                // new one immediately, killing the new connection's writer task.
+                self.writer_map.lock().await.insert(id.clone(), write_tx);
 
                 info!("new connection sent to frontend");
 
@@ -355,6 +339,17 @@ impl KdeConnectCore {
                 }
             }
             TransportEvent::Disconnected { id } => {
+                // Only remove if the entry is already closed — if it's still live,
+                // a new connection has already replaced this one and we must not
+                // wipe it out with this stale disconnect event.
+                let already_replaced = {
+                    let guard = self.writer_map.lock().await;
+                    guard.get(&id).map(|tx| !tx.is_closed()).unwrap_or(false)
+                };
+                if already_replaced {
+                    info!("[core] stale Disconnected for {} — new connection is live, ignoring", id);
+                    return;
+                }
                 self.writer_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
