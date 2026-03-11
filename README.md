@@ -5,6 +5,12 @@
   <img alt="KDE Connect applet on COSMIC desktop environment" src="https://raw.githubusercontent.com/hepp3n/kdeconnect/refs/heads/master/resources/screenshots/applet.png" />
 </div>
 
+# Installing from [COSMIC Flatpak Repository](https://github.com/pop-os/cosmic-flatpak)
+
+Add remote: `flatpak remote-add --if-not-exists --user cosmic https://apt.pop-os.org/cosmic/cosmic.flatpakrepo`
+Install applet: `flatpak install --user io.github.hepp3n.kdeconnet`
+
+
 # Testing on COSMIC Desktop
 
 For testing COSMIC desktop applet, you can build it with help of justfile.
