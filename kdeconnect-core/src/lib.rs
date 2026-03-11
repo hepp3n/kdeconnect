@@ -39,6 +39,10 @@ pub struct KdeConnectCore {
     plugin_registry: Arc<PluginRegistry>,
     transport_rx: mpsc::UnboundedReceiver<TransportEvent>,
     writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
+    /// Tracks the conn_id of the most recently accepted connection per device.
+    /// A `Disconnected` event whose conn_id doesn't match is from a superseded
+    /// connection and is discarded so it cannot wipe a live writer_map entry.
+    conn_id_map: Arc<Mutex<HashMap<DeviceId, u64>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
     udp_transport: Arc<UdpTransport>,
@@ -70,6 +74,7 @@ impl KdeConnectCore {
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
 
         // start tcp transport
         tokio::spawn(async move {
@@ -129,6 +134,7 @@ impl KdeConnectCore {
                 plugin_registry,
                 transport_rx,
                 writer_map,
+                conn_id_map,
                 event_tx,
                 event_rx,
                 udp_transport,
@@ -282,6 +288,7 @@ impl KdeConnectCore {
                 id,
                 name,
                 write_tx,
+                conn_id,
             } => {
                 debug!("[core] new connection from: {}", addr);
 
@@ -294,30 +301,15 @@ impl KdeConnectCore {
                     .add_or_update_device(id.clone(), device.clone())
                     .await;
 
-                // Duplicate guard: keep existing connection if still live.
-                // The phone re-broadcasts UDP identity every ~90s even when connected.
-                // Replacing the live writer entry drops the sender -> CloseNotify ->
-                // phone stops sending plugin data. Only replace when entry is dead.
-                let accepted = {
-                    let mut guard = self.writer_map.lock().await;
-                    match guard.get(&id) {
-                        Some(existing) if !existing.is_closed() => {
-                            info!(
-                                "[core] Duplicate connection from {} — keeping existing live connection",
-                                id
-                            );
-                            false
-                        }
-                        _ => {
-                            guard.insert(id.clone(), write_tx);
-                            true
-                        }
-                    }
-                };
+                // Record this connection's ID before inserting the writer so that
+                // any Disconnected event from a previous connection that arrives
+                // concurrently will see a mismatched conn_id and be dropped.
+                self.conn_id_map.lock().await.insert(id.clone(), conn_id);
 
-                if !accepted {
-                    return;
-                }
+                // Always replace — the phone reconnecting means the old connection
+                // is intentionally superseded. Dropping the old write_tx here causes
+                // the old writer task's recv() to return None, ending that task cleanly.
+                self.writer_map.lock().await.insert(id.clone(), write_tx);
 
                 tracing::info!("new connection sent to frontend");
 
@@ -408,10 +400,32 @@ impl KdeConnectCore {
                     }
                 }
             }
-            TransportEvent::Disconnected { id } => {
-                // Reader loop ended — remove the dead write_tx so the next
-                // NewConnection for this device can insert a fresh one.
+            TransportEvent::Disconnected { id, conn_id } => {
+                // Check whether this disconnect belongs to the connection that is
+                // currently live for this device. If conn_id_map holds a *different*
+                // (higher) ID, a newer connection has already taken over and this
+                // event is stale — dropping it avoids wiping the live writer entry.
+                let is_current = {
+                    let guard = self.conn_id_map.lock().await;
+                    guard
+                        .get(&id)
+                        .map(|&current| current == conn_id)
+                        // No entry means we never registered this connection (e.g. a
+                        // Disconnected that raced ahead of its NewConnection). Treat as
+                        // current so cleanup still runs if the writer entry somehow exists.
+                        .unwrap_or(true)
+                };
+
+                if !is_current {
+                    info!(
+                        "[core] stale Disconnected for {} (conn_id {} != current) — ignoring",
+                        id, conn_id
+                    );
+                    return;
+                }
+
                 self.writer_map.lock().await.remove(&id);
+                self.conn_id_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -552,6 +566,7 @@ impl KdeConnectCore {
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);
                 if guard.remove(&device_id).is_some() {
+                    self.conn_id_map.lock().await.remove(&device_id);
                     let conn_event = ConnectionEvent::Disconnected(device_id);
                     // Send to both channels
                     let _ = self.conn_tx.send(conn_event.clone());
