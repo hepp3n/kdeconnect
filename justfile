@@ -8,6 +8,10 @@ XDG_CONFIG := env_var_or_default("XDG_CONFIG_HOME", env_var("HOME") / ".config")
 build:
     cargo build --release
 
+# Build Offline
+build-rel-offline:
+    cargo build --offline --release
+
 # Build individual crates
 build-service:
     cargo build --release -p kdeconnect-service
@@ -35,13 +39,13 @@ install-applet-desktop:
     install -Dm644 resources/{{APPID}}.svg           {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml  {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
 
-# Write D-Bus activation file with correct full path — %h is not valid in D-Bus service files
+# Write D-Bus activation file with correct full path
 install-dbus-service:
     mkdir -p {{PREFIX}}/share/dbus-1/services
     printf '[D-BUS Service]\nName={{APPID}}\nExec={{PREFIX}}/bin/kdeconnect-service\n' \
         > {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
 
-# Install XDG autostart entry — bare name works here since ~/.local/bin is in PATH at login
+# Install XDG autostart entry 
 install-autostart:
     install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
 
@@ -55,7 +59,7 @@ install-systemd:
 enable-service:
     systemctl --user enable --now kdeconnect.service
 
-# Full install — builds and installs everything for a fresh setup
+# Default install — uses D-Bus activation, no systemd required
 install: install-bins install-applet-desktop install-dbus-service install-autostart
     @echo ""
     @echo "✓ KDE Connect installed successfully!"
