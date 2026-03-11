@@ -38,4 +38,15 @@
   <recommends>
     <internet>always</internet>
   </recommends>
+  <releases>
+    <release version="0.1.0" date="11.03.2026">
+      <url type="details">https://github.com/hepp3n/kdeconnect</url>
+      <description>
+        <p>This is WORK IN PROGRESS release</p>
+        <ul>
+          <li>Please keep in mind, many things working but you might experience bugs. Please report them under Github in issues section.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
 </component>
