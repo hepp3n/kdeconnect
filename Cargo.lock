@@ -1000,6 +1000,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
  "urlencoding",
 ]
 
@@ -2729,6 +2731,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "zbus",
 ]
 
