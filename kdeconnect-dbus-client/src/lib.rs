@@ -48,6 +48,7 @@ trait Daemon {
     async fn send_files(&self, device_id: &str, files: Vec<String>) -> zbus::Result<()>;
     async fn send_clipboard(&self, device_id: &str, content: &str) -> zbus::Result<()>;
     async fn ring_device(&self, device_id: &str) -> zbus::Result<()>;
+    async fn broadcast_identity(&self) -> zbus::Result<()>;
     async fn set_plugin_enabled(
         &self,
         device_id: &str,
@@ -152,6 +153,11 @@ impl KdeConnectClient {
     /// Send clipboard content
     pub async fn send_clipboard(&self, device_id: &str, content: &str) -> Result<()> {
         Ok(self.daemon_proxy.send_clipboard(device_id, content).await?)
+    }
+
+    /// Trigger a UDP identity broadcast so nearby devices can discover us
+    pub async fn broadcast_identity(&self) -> Result<()> {
+        Ok(self.daemon_proxy.broadcast_identity().await?)
     }
 
     /// Ring a device (findmyphone)

@@ -155,6 +155,16 @@ pub async fn reject_pairing(device_id: String) -> Result<()> {
     unpair_device(device_id).await
 }
 
+/// Trigger a UDP identity broadcast from the service so nearby devices can discover us
+#[allow(dead_code)]
+pub async fn broadcast_identity() -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.broadcast_identity().await
+}
+
 /// Ring a device (findmyphone)
 pub async fn ring_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;

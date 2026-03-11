@@ -111,6 +111,7 @@ pub enum Message {
     SelectDevice(String),
     TogglePlugin(String, bool),
     Refresh,
+    BroadcastAndRefresh,
     PairDevice(String),
     UnpairDevice(String),
 }
@@ -240,7 +241,29 @@ impl Application for SettingsApp {
             }
 
             Message::SelectTab(tab) => {
+                let trigger_broadcast = tab == Tab::AvailableDevices;
                 self.active_tab = tab;
+                if trigger_broadcast {
+                    return Task::perform(
+                        async {
+                            let _ = backend::broadcast_identity().await;
+                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            backend::fetch_devices().await
+                        },
+                        |devices| Action::App(Message::DevicesLoaded(devices)),
+                    );
+                }
+            }
+
+            Message::BroadcastAndRefresh => {
+                return Task::perform(
+                    async {
+                        let _ = backend::broadcast_identity().await;
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        backend::fetch_devices().await
+                    },
+                    |devices| Action::App(Message::DevicesLoaded(devices)),
+                );
             }
 
             Message::SelectDevice(id) => {
@@ -370,7 +393,11 @@ impl SettingsApp {
             .push(widget::Space::new().width(Length::Fill))
             .push(
                 widget::button::icon(widget::icon::from_name("view-refresh-symbolic"))
-                    .on_press(Message::Refresh),
+                    .on_press(if self.active_tab == Tab::AvailableDevices {
+                        Message::BroadcastAndRefresh
+                    } else {
+                        Message::Refresh
+                    }),
             )
             .into()
     }

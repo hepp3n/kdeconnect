@@ -173,6 +173,14 @@ impl DaemonInterface {
         Ok(())
     }
 
+    async fn broadcast_identity(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: BroadcastIdentity called");
+        self.event_sender
+            .send(AppEvent::Broadcasting)
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
     async fn set_plugin_enabled(
         &self,
         device_id: String,
