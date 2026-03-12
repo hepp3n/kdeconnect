@@ -8,8 +8,8 @@
 # Installing from [COSMIC Flatpak Repository](https://github.com/pop-os/cosmic-flatpak)
 
 Add remote: `flatpak remote-add --if-not-exists --user cosmic https://apt.pop-os.org/cosmic/cosmic.flatpakrepo`
-Install applet: `flatpak install --user io.github.hepp3n.kdeconnet`
 
+Install applet: `flatpak install --user io.github.hepp3n.kdeconnect`
 
 # Testing on COSMIC Desktop
 
