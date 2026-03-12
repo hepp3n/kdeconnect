@@ -492,7 +492,13 @@ impl KdeConnectCore {
             AppEvent::SendFiles((device_id, files_list)) => {
                 info!("frontend trying to sent files to device: {}", device_id);
 
-                if let Some(sender) = guard.get(&device_id) {
+                // Clone the sender and drop the lock immediately — send_payload
+                // spawns a background task that can take seconds, and holding
+                // the writer_map lock that whole time would stall the event loop.
+                let sender = guard.get(&device_id).cloned();
+                drop(guard);
+
+                if let Some(sender) = sender {
                     debug!("sender available.");
 
                     let pkts = ShareRequest::share_files(files_list)
@@ -508,15 +514,15 @@ impl KdeConnectCore {
                         let file = DeviceFile::open(path).await.expect("opening file");
                         let payload = DevicePayload::from(file);
 
-                        if let Some(_device) = self.device_manager.get_device(&device_id).await {
-                            self.plugin_registry
-                                .send_payload(packet, sender, payload.buf, payload.size)
-                                .await;
-                        };
+                        self.plugin_registry
+                            .send_payload(packet, &sender, payload.buf, payload.size)
+                            .await;
                     }
 
-                    debug!("packet sent....");
+                    debug!("file transfer tasks spawned.");
                 }
+                // guard already dropped above — skip the implicit drop at end of match
+                return;
             }
             AppEvent::MprisAction((device_id, player_name, action)) => {
                 info!(
