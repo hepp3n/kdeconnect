@@ -197,9 +197,15 @@ impl PluginRegistry {
             PacketType::ShareRequest => {
                 if let Ok(share_request) =
                     serde_json::from_value::<plugins::share::ShareRequest>(body)
-                    && let Some(payload_info) = payload_info.as_ref()
+                    && let Some(payload_info) = payload_info
                 {
-                    let _ = share_request.receive_share(&device, payload_info).await;
+                    // Spawn so the event loop is not blocked during the
+                    // notification dialog wait + network payload download.
+                    tokio::spawn(async move {
+                        if let Err(e) = share_request.receive_share(&device, &payload_info).await {
+                            warn!("[share] receive_share failed: {}", e);
+                        }
+                    });
                 }
             }
             _ => {
@@ -211,11 +217,16 @@ impl PluginRegistry {
         }
     }
 
+    /// Send a packet that carries a binary payload (file / album art).
+    ///
+    /// The packet is enqueued immediately so the phone knows which port to
+    /// connect to. The actual TLS accept + byte copy is spawned as a
+    /// background task so the event loop is never blocked.
     pub async fn send_payload(
         &self,
         packet: ProtocolPacket,
         device_writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        mut payload: impl AsyncRead + Sync + Send + Unpin,
+        payload: impl AsyncRead + Sync + Send + Unpin + 'static,
         payload_size: i64,
     ) {
         info!("preparing payload transfer");
@@ -228,71 +239,79 @@ impl PluginRegistry {
             }
         };
 
+        let addr = match free_listener.local_addr() {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("cannot get local addr for payload listener: {}", e);
+                return;
+            }
+        };
+
+        debug!("payload listener bound on {}", addr);
+        let payload_transfer_info = Some(PacketPayloadTransferInfo { port: addr.port() });
         let body = packet.body.clone();
 
-        if let Ok(addr) = free_listener.local_addr() {
-            debug!("trying to match packet for addr: {}", addr);
-            let payload_transfer_info = Some(PacketPayloadTransferInfo { port: addr.port() });
-
-            match packet.packet_type {
-                PacketType::Mpris => {
-                    if let Ok(mpris) = serde_json::from_value::<plugins::mpris::Mpris>(body) {
-                        debug!("got mpris packet, sending info.");
-                        let _ = mpris
-                            .send_art(device_writer, payload_size, payload_transfer_info)
-                            .await;
-                    }
-                }
-                PacketType::ShareRequest => {
-                    if let Ok(share_request) =
-                        serde_json::from_value::<plugins::share::ShareRequest>(body)
-                    {
-                        debug!("got share request packet, sending info.");
-                        let _ = share_request
-                            .send_file(device_writer, payload_size, payload_transfer_info)
-                            .await;
-                    }
-                }
-                _ => {
-                    warn!(
-                        "[payload] No plugin found to handle packet type: {:?}",
-                        packet.packet_type
-                    );
+        // Enqueue the packet with the port info NOW — the phone needs this to
+        // know where to connect. This is non-blocking (channel send).
+        match packet.packet_type {
+            PacketType::Mpris => {
+                if let Ok(mpris) = serde_json::from_value::<plugins::mpris::Mpris>(body) {
+                    debug!("got mpris packet, sending info.");
+                    let _ = mpris
+                        .send_art(device_writer, payload_size, payload_transfer_info)
+                        .await;
                 }
             }
-        };
-
-        let config = GLOBAL_CONFIG.get().unwrap();
-        let server_config = config.key_store.server_config.clone();
-        debug!("server config created.");
-
-        let (incoming, peer_addr) = match free_listener.accept().await {
-            Ok(res) => res,
-            Err(e) => {
-                warn!("accepting connection failed: {}", e);
+            PacketType::ShareRequest => {
+                if let Ok(share_request) =
+                    serde_json::from_value::<plugins::share::ShareRequest>(body)
+                {
+                    debug!("got share request packet, sending info.");
+                    let _ = share_request
+                        .send_file(device_writer, payload_size, payload_transfer_info)
+                        .await;
+                }
+            }
+            _ => {
+                warn!(
+                    "[payload] No plugin found to handle packet type: {:?}",
+                    packet.packet_type
+                );
                 return;
             }
-        };
-        debug!("incoming connection from {}", peer_addr);
+        }
 
-        let mut stream = match tokio_rustls::TlsAcceptor::from(server_config)
-            .accept(incoming)
-            .await
-        {
-            Ok(stream) => stream,
-            Err(e) => {
-                warn!("TLS handshake failed during payload transfer: {}", e);
-                return;
-            }
-        };
+        // Spawn the accept + copy so the event loop stays responsive for the
+        // entire duration of the file transfer.
+        let server_config = GLOBAL_CONFIG.get().unwrap().key_store.server_config.clone();
+        tokio::spawn(async move {
+            let (incoming, peer_addr) = match free_listener.accept().await {
+                Ok(res) => res,
+                Err(e) => {
+                    warn!("[payload] accepting connection failed: {}", e);
+                    return;
+                }
+            };
+            debug!("[payload] incoming connection from {}", peer_addr);
 
-        debug!("accepted");
+            let mut stream = match tokio_rustls::TlsAcceptor::from(server_config)
+                .accept(incoming)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[payload] TLS handshake failed: {}", e);
+                    return;
+                }
+            };
 
-        let _ = tokio::io::copy(&mut payload, &mut stream).await;
-        let _ = stream.flush().await;
-        let _ = stream.shutdown().await;
-
-        info!("successfully sent payload");
+            debug!("[payload] TLS accepted, copying payload");
+            let mut payload = payload;
+            let _ = tokio::io::copy(&mut payload, &mut stream).await;
+            let _ = stream.flush().await;
+            let _ = stream.shutdown().await;
+            info!("[payload] successfully sent payload to {}", peer_addr);
+        });
     }
 
     pub async fn send(
