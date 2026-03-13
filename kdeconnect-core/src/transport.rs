@@ -409,7 +409,9 @@ async fn handle_connection<R, W>(
                         continue;
                     }
 
-                    eprintln!("[reader] raw bytes from {}: {:?}", peer, trimmed);
+                    // we should not print raw packets since they might expose
+                    // sensitive data eg. from sms
+                    // eprintln!("[reader] raw bytes from {}: {:?}", peer, trimmed);
 
                     if let Err(e) = event_tx_reader.send(TransportEvent::IncomingPacket {
                         addr: peer,
