@@ -209,7 +209,7 @@ pub struct ProtocolPacket {
     pub body: Value,
     #[serde(rename = "payloadSize")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload_size: Option<i64>,
+    pub payload_size: Option<u64>,
     #[serde(rename = "payloadTransferInfo")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_transfer_info: Option<PacketPayloadTransferInfo>,
@@ -261,7 +261,7 @@ impl ProtocolPacket {
     pub fn new_with_payload(
         t: PacketType,
         body: Value,
-        payload_size: i64,
+        payload_size: u64,
         payload_transfer_info: Option<PacketPayloadTransferInfo>,
     ) -> Self {
         Self {
@@ -332,12 +332,12 @@ impl Pair {
 
 pub struct DeviceFile<S: AsyncRead + Sync + Send + Unpin> {
     pub buf: S,
-    pub size: i64,
+    pub size: u64,
 }
 
 pub struct DevicePayload<S: AsyncRead + Sync + Send + Unpin> {
     pub buf: S,
-    pub size: i64,
+    pub size: u64,
 }
 
 impl<S: AsyncRead + Sync + Send + Unpin> From<DeviceFile<S>> for DevicePayload<S> {

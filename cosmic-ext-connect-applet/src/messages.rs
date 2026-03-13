@@ -21,6 +21,7 @@ pub enum Message {
     ShareClipboard(String),
     ShareText(String),
     ShareUrl(String),
+    UpdateTransferProgress(u8),
 
     // Advanced features
     RemoteInput(String),

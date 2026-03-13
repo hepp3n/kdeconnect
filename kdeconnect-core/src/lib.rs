@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use crate::{
     device::{Device, DeviceId, DeviceManager},
     event::{AppEvent, ConnectionEvent, CoreEvent},
+    filetransfer::TransferAdapter,
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
     plugins::{ping::Ping, share::ShareRequest},
@@ -22,6 +23,7 @@ pub mod config;
 pub(crate) mod crypto;
 pub mod device;
 pub mod event;
+pub mod filetransfer;
 pub(crate) mod pairing;
 pub(crate) mod plugin_interface;
 pub mod plugins;
@@ -269,9 +271,14 @@ impl KdeConnectCore {
                 payload_size,
             } => {
                 info!("[core] sending packet w/ payload");
+
+                // crate transfer adapter to get file transfer progress
+                let transfer_adapter =
+                    TransferAdapter::new(payload, payload_size, self.conn_tx.clone());
+
                 if let Some(sender) = guard.get(&device) {
                     self.plugin_registry
-                        .send_payload(packet, sender, payload, payload_size)
+                        .send_payload(packet, sender, transfer_adapter, payload_size)
                         .await;
                 }
             }
@@ -513,9 +520,13 @@ impl KdeConnectCore {
 
                         let file = DeviceFile::open(path).await.expect("opening file");
                         let payload = DevicePayload::from(file);
+                        //
+                        // crate transfer adapter to get file transfer progress
+                        let transfer_adapter =
+                            TransferAdapter::new(payload.buf, payload.size, self.conn_tx.clone());
 
                         self.plugin_registry
-                            .send_payload(packet, &sender, payload.buf, payload.size)
+                            .send_payload(packet, &sender, transfer_adapter, payload.size)
                             .await;
                     }
 

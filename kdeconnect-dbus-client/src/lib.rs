@@ -51,6 +51,9 @@ trait Daemon {
     async fn ring_device(&self, device_id: &str) -> zbus::Result<()>;
 
     #[zbus(signal)]
+    async fn update_transfer_progress(&self, progress: u8) -> zbus::Result<()>;
+
+    #[zbus(signal)]
     async fn device_connected(&self, device_id: String, device: Device) -> zbus::Result<()>;
 
     #[zbus(signal)]
@@ -277,5 +280,28 @@ impl KdeConnectClient {
             Box::pin(sms_stream),
             Box::pin(contacts_stream),
         ])
+    }
+
+    pub async fn transfer_progress_stream(&self) -> impl futures::stream::Stream<Item = u8> {
+        let daemon_update_transfer_progress = self
+            .daemon_proxy
+            .receive_update_transfer_progress()
+            .await
+            .unwrap();
+
+        let update_transfer_stream =
+            daemon_update_transfer_progress.filter_map(|signal| async move {
+                match signal.args() {
+                    Ok(args) => Some(args.progress),
+                    Err(e) => {
+                        error!("Failed to parse UpdateTransferProgress signal: {:?}", e);
+                        None
+                    }
+                }
+            });
+
+        let result = Box::pin(update_transfer_stream);
+
+        futures::stream::select_all(vec![result])
     }
 }
