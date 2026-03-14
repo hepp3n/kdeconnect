@@ -658,7 +658,7 @@ impl KdeConnectService {
                 debug!("Contacts D-Bus signal emitted");
             }
             ConnectionEvent::UpdateTransferProgress(progress) => {
-                info!("Current transfer progress: {}&", progress);
+                info!("Current transfer progress: {}%", progress);
 
                 let iface_ref = connection
                     .object_server()
