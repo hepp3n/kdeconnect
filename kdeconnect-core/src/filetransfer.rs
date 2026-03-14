@@ -16,7 +16,7 @@ pub(crate) struct TransferAdapter<R: AsyncRead> {
     transfer_bytes: usize,
     total_size: u64,
     processed_percent: u8,
-    notify_tx: mpsc::UnboundedSender<ConnectionEvent>,
+    pub(crate) notify_tx: mpsc::UnboundedSender<ConnectionEvent>,
 }
 
 impl<R: AsyncRead> TransferAdapter<R> {
@@ -43,12 +43,21 @@ impl<R: AsyncRead> AsyncRead for TransferAdapter<R> {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let this = self.project();
+        let before = buf.filled().len();
         let result = this.inner.poll_read(cx, buf);
-        let filled_len = buf.filled().len();
+        let filled_len = buf.filled().len() - before;
 
         *this.transfer_bytes += filled_len;
         *this.processed_percent =
             calculate_progress(*this.transfer_bytes as f64, *this.total_size as f64);
+
+        // Emit 100% immediately on EOF (zero-byte read) so small/fast
+        // transfers always surface a completion update regardless of the
+        // 100 ms ticker cadence.
+        if matches!(result, std::task::Poll::Ready(Ok(()))) && filled_len == 0 {
+            send_progress(100, this.notify_tx.clone());
+            return result;
+        }
 
         match this.transfer_interval.poll_tick(cx) {
             std::task::Poll::Pending => {}
@@ -62,8 +71,8 @@ impl<R: AsyncRead> AsyncRead for TransferAdapter<R> {
 }
 
 fn calculate_progress(transferred: f64, total: f64) -> u8 {
-    if transferred > 0.0 {
-        return (transferred.div(total) * 100.0).round() as u8;
+    if total > 0.0 && transferred > 0.0 {
+        (transferred.div(total) * 100.0).round().min(100.0) as u8
     } else {
         0
     }
