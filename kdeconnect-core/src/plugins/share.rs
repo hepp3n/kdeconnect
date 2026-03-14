@@ -83,7 +83,11 @@ impl ShareRequest {
             ShareRequest::Url { url } => {
                 let url = url.clone();
                 tokio::task::spawn_blocking(move || {
-                    if std::process::Command::new("xdg-open").arg(&url).spawn().is_err() {
+                    if std::process::Command::new("xdg-open")
+                        .arg(&url)
+                        .spawn()
+                        .is_err()
+                    {
                         let _ = notify_rust::Notification::new()
                             .appname("KDE Connect")
                             .summary("URL received from phone")
@@ -193,7 +197,7 @@ impl ShareRequest {
     pub async fn send_file(
         &self,
         writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        payload_size: i64,
+        payload_size: u64,
         payload_transfer_info: Option<PacketPayloadTransferInfo>,
     ) {
         let packet = ProtocolPacket::new_with_payload(

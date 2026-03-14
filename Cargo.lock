@@ -2708,6 +2708,7 @@ dependencies = [
  "mpris",
  "notify-rust",
  "once_cell",
+ "pin-project",
  "rcgen",
  "ron",
  "rustls",

@@ -11,6 +11,7 @@ dirs = { workspace = true }
 hostname = { workspace = true }
 notify-rust = { workspace = true }
 once_cell = { workspace = true }
+pin-project = { workspace = true }
 rcgen = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }

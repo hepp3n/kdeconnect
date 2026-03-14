@@ -189,7 +189,7 @@ impl Mpris {
     pub async fn send_art(
         &self,
         writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        payload_size: i64,
+        payload_size: u64,
         payload_transfer_info: Option<PacketPayloadTransferInfo>,
     ) {
         let packet = ProtocolPacket::new_with_payload(

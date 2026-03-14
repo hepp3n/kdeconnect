@@ -13,6 +13,7 @@ pub struct Device {
     pub has_battery: bool,
     pub has_ping: bool,
     pub has_share: bool,
+    pub share_progress: Option<u8>,
     pub has_findmyphone: bool,
     pub has_sms: bool,
     pub has_clipboard: bool,

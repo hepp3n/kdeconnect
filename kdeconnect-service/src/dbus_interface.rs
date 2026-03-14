@@ -55,7 +55,11 @@ async fn save_contacts_cache(device_id: &str, contacts: &HashMap<String, String>
             if let Err(e) = tokio::fs::write(&path, json).await {
                 error!("Failed to save contacts cache: {}", e);
             } else {
-                debug!("Contacts cache saved ({} entries) for {}", contacts.len(), device_id);
+                debug!(
+                    "Contacts cache saved ({} entries) for {}",
+                    contacts.len(),
+                    device_id
+                );
             }
         }
         Err(e) => error!("Failed to serialize contacts for cache: {}", e),
@@ -68,7 +72,11 @@ async fn load_contacts_cache(device_id: &str) -> Option<HashMap<String, String>>
         Ok(json) => match serde_json::from_str(&json) {
             Ok(map) => {
                 let map: HashMap<String, String> = map;
-                debug!("Loaded contacts cache ({} entries) for {}", map.len(), device_id);
+                debug!(
+                    "Loaded contacts cache ({} entries) for {}",
+                    map.len(),
+                    device_id
+                );
                 Some(map)
             }
             Err(e) => {
@@ -88,7 +96,11 @@ async fn save_sms_cache(device_id: &str, messages_json: &str) {
     if let Err(e) = tokio::fs::write(&path, messages_json).await {
         error!("Failed to save SMS cache: {}", e);
     } else {
-        debug!("SMS cache saved ({} bytes) for {}", messages_json.len(), device_id);
+        debug!(
+            "SMS cache saved ({} bytes) for {}",
+            messages_json.len(),
+            device_id
+        );
     }
 }
 
@@ -138,7 +150,10 @@ impl DaemonInterface {
     }
 
     async fn send_ping(&self, device_id: String, message: String) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendPing called for {} with message: {}", device_id, message);
+        info!(
+            "D-Bus: SendPing called for {} with message: {}",
+            device_id, message
+        );
         let packet = ProtocolPacket::new(PacketType::Ping, json!({ "message": message }));
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
@@ -147,7 +162,11 @@ impl DaemonInterface {
     }
 
     async fn send_files(&self, device_id: String, files: Vec<String>) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendFiles called for {} ({} files)", device_id, files.len());
+        info!(
+            "D-Bus: SendFiles called for {} ({} files)",
+            device_id,
+            files.len()
+        );
         self.event_sender
             .send(AppEvent::SendFiles((DeviceId(device_id), files)))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
@@ -171,6 +190,12 @@ impl DaemonInterface {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
+
+    #[zbus(signal)]
+    async fn update_transfer_progress(
+        signal_emitter: &SignalEmitter<'_>,
+        progress: u8,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn device_connected(
@@ -233,7 +258,10 @@ impl SmsInterface {
         device_id: String,
         thread_id: i64,
     ) -> zbus::fdo::Result<()> {
-        info!("D-Bus: RequestConversation called for {} thread {}", device_id, thread_id);
+        info!(
+            "D-Bus: RequestConversation called for {} thread {}",
+            device_id, thread_id
+        );
         let packet = ProtocolPacket::new(
             PacketType::SmsRequestConversation,
             json!({ "threadID": thread_id }),
@@ -254,7 +282,10 @@ impl SmsInterface {
         phone_number: String,
         message: String,
     ) -> zbus::fdo::Result<()> {
-        info!("D-Bus: SendSms called for {} to {}", device_id, phone_number);
+        info!(
+            "D-Bus: SendSms called for {} to {}",
+            device_id, phone_number
+        );
         let packet = ProtocolPacket::new(
             PacketType::SmsRequest,
             json!({
@@ -479,7 +510,10 @@ impl KdeConnectService {
                                 contacts_json,
                             )
                             .await?;
-                            debug!("Emitted cached contacts on connect ({} entries)", cached.len());
+                            debug!(
+                                "Emitted cached contacts on connect ({} entries)",
+                                cached.len()
+                            );
                         }
                     }
 
@@ -582,7 +616,10 @@ impl KdeConnectService {
                 debug!("Device disconnected signal emitted");
             }
             ConnectionEvent::SmsMessages(sms_data) => {
-                info!("SMS messages received: {} messages", sms_data.messages.len());
+                info!(
+                    "SMS messages received: {} messages",
+                    sms_data.messages.len()
+                );
 
                 let messages_json = serde_json::to_string(&sms_data)?;
                 debug!("SMS JSON size: {} bytes", messages_json.len());
@@ -619,6 +656,19 @@ impl KdeConnectService {
                 ContactsInterface::contacts_received(iface_ref.signal_emitter(), contacts_json)
                     .await?;
                 debug!("Contacts D-Bus signal emitted");
+            }
+            ConnectionEvent::UpdateTransferProgress(progress) => {
+                info!("Current transfer progress: {}%", progress);
+
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+
+                DaemonInterface::update_transfer_progress(iface_ref.signal_emitter(), progress)
+                    .await?;
+
+                debug!("UpdateTransferProgress D-Bus signal emitted");
             }
             _ => {
                 debug!("Other event received");

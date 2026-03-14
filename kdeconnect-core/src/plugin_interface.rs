@@ -9,6 +9,7 @@ use crate::{
     GLOBAL_CONFIG,
     device::Device,
     event::{ConnectionEvent, CoreEvent},
+    filetransfer::{send_progress, TransferAdapter},
     plugins::{
         self,
         battery::Battery,
@@ -226,8 +227,8 @@ impl PluginRegistry {
         &self,
         packet: ProtocolPacket,
         device_writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        payload: impl AsyncRead + Sync + Send + Unpin + 'static,
-        payload_size: i64,
+        mut payload: TransferAdapter<impl AsyncRead + Sync + Send + Unpin + 'static>,
+        payload_size: u64,
     ) {
         info!("preparing payload transfer");
 
@@ -306,10 +307,12 @@ impl PluginRegistry {
             };
 
             debug!("[payload] TLS accepted, copying payload");
-            let mut payload = payload;
             let _ = tokio::io::copy(&mut payload, &mut stream).await;
             let _ = stream.flush().await;
             let _ = stream.shutdown().await;
+            // Guarantee a final 100% progress event so the UI always clears
+            // regardless of file size or interval timing.
+            send_progress(100, payload.notify_tx.clone());
             info!("[payload] successfully sent payload to {}", peer_addr);
         });
     }

@@ -209,6 +209,11 @@ fn create_device_card<'a>(
                         .width(Length::Fill)
                         .class(cosmic::theme::Button::Text),
                 );
+                menu_items = menu_items.push_maybe(if let Some(progress) = device.share_progress {
+                    Some(widget::progress_bar(0.0..=100.0, progress as f32))
+                } else {
+                    None
+                });
             }
 
             if device.has_sftp {
