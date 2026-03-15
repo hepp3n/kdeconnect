@@ -547,18 +547,91 @@ impl KdeConnectCore {
                 if enabled {
                     disabled.remove(&plugin_id);
                 } else {
-                    disabled.insert(plugin_id);
+                    disabled.insert(plugin_id.clone());
                 }
                 plugin_config::save_disabled_plugins(&device_id.0, &disabled).await;
                 self.plugin_registry
-                    .set_device_disabled(&device_id.0, disabled)
+                    .set_device_disabled(&device_id.0, disabled.clone())
                     .await;
+
+                // Resend our identity to the phone with capabilities filtered to
+                // reflect the updated disabled set. The phone uses this to decide
+                // which packet types to send us — this is the correct KDE Connect
+                // protocol mechanism for disabling plugins on the phone side.
+                if let Some(sender) = guard.get(&device_id) {
+                    let filtered = build_filtered_identity(&disabled);
+                    let identity_pkt = ProtocolPacket::new(
+                        PacketType::Identity,
+                        serde_json::to_value(&filtered).expect("serialize identity"),
+                    );
+                    let _ = sender.send(identity_pkt);
+                    info!("[plugin] resent identity to {} with {} disabled plugins", device_id, disabled.len());
+                }
             }
         };
     }
 
     pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {
         self.out_tx.clone()
+    }
+}
+
+/// Maps plugin IDs to the capability strings they contribute.
+/// Incoming caps = what the phone sends us; outgoing caps = what we send the phone.
+/// Disabling a plugin removes these from the identity we advertise, telling the
+/// phone to stop sending those packet types.
+fn plugin_capability_map() -> &'static [(&'static str, &'static [&'static str], &'static [&'static str])] {
+    &[
+        // (plugin_id, incoming_caps_to_remove, outgoing_caps_to_remove)
+        ("battery",             &["kdeconnect.battery"],                                                      &["kdeconnect.battery.request"]),
+        ("clipboard",           &["kdeconnect.clipboard", "kdeconnect.clipboard.connect"],                    &["kdeconnect.clipboard"]),
+        ("connectivity_report", &["kdeconnect.connectivity_report"],                                          &[]),
+        ("contacts",            &["kdeconnect.contacts.response_uids_timestamps",
+                                   "kdeconnect.contacts.response_vcards"],                                    &["kdeconnect.contacts.request_all_uids_timestamps",
+                                                                                                               "kdeconnect.contacts.request_vcards_by_uid"]),
+        ("findmyphone",         &[],                                                                          &["kdeconnect.findmyphone.request"]),
+        ("mpris",               &["kdeconnect.mpris"],                                                        &["kdeconnect.mpris.request"]),
+        ("notification",        &["kdeconnect.notification"],                                                  &["kdeconnect.notification.request"]),
+        ("ping",                &["kdeconnect.ping"],                                                          &["kdeconnect.ping"]),
+        ("runcommand",          &[],                                                                          &["kdeconnect.runcommand.request"]),
+        ("share",               &["kdeconnect.share.request"],                                                &["kdeconnect.share.request", "kdeconnect.share.request.update"]),
+        ("sms",                 &["kdeconnect.sms.messages", "kdeconnect.sms.attachment_file"],               &["kdeconnect.sms.request",
+                                                                                                               "kdeconnect.sms.request_conversations",
+                                                                                                               "kdeconnect.sms.request_conversation",
+                                                                                                               "kdeconnect.sms.request_attachment"]),
+    ]
+}
+
+/// Build a filtered copy of our base identity with capabilities for all
+/// disabled plugins removed. Sent post-TLS to the phone whenever plugin
+/// state changes so the phone adjusts what it sends us accordingly.
+fn build_filtered_identity(disabled: &std::collections::HashSet<String>) -> crate::protocol::Identity {
+    let base = &GLOBAL_CONFIG.get().unwrap().identity;
+
+    let mut remove_incoming: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut remove_outgoing: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for (plugin_id, inc, out) in plugin_capability_map() {
+        if disabled.contains(*plugin_id) {
+            remove_incoming.extend(inc.iter().copied());
+            remove_outgoing.extend(out.iter().copied());
+        }
+    }
+
+    crate::protocol::Identity {
+        device_id: base.device_id.clone(),
+        device_name: base.device_name.clone(),
+        device_type: base.device_type,
+        protocol_version: base.protocol_version,
+        tcp_port: base.tcp_port,
+        incoming_capabilities: base.incoming_capabilities.iter()
+            .filter(|c| !remove_incoming.contains(c.as_str()))
+            .cloned()
+            .collect(),
+        outgoing_capabilities: base.outgoing_capabilities.iter()
+            .filter(|c| !remove_outgoing.contains(c.as_str()))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -589,3 +662,4 @@ async fn cleanup_device_data(device_id: &str) {
 
     tracing::info!("[cleanup] removed persisted data for device {}", device_id);
 }
+
