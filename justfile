@@ -110,7 +110,7 @@ uninstall:
     rm -vf {{XDG_CONFIG}}/kdeconnect/*
     rm -vf {{XDG_CONFIG}}/systemd/user/kdeconnect.service
     rm -vf {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
-    rm -vf {{PREFIX}}/share/kdeconnect/*
+    rm -rvf {{PREFIX}}/share/kdeconnect/*
     rm -vf {{PREFIX}}/share/applications/{{APPID}}.desktop
     rm -vf {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     rm -vf {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
