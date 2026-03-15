@@ -41,6 +41,11 @@ pub enum AppEvent {
     MprisAction((DeviceId, String, MprisAction)),
     SendMprisRequest((DeviceId, MprisRequest)),
     SendPacket(DeviceId, ProtocolPacket),
+    SetPluginEnabled {
+        device_id: DeviceId,
+        plugin_id: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

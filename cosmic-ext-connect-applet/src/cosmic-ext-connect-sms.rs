@@ -30,13 +30,16 @@ fn main() -> cosmic::iced::Result {
 
 fn setup_signal_handlers() {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tracing::{debug, error};
 
     static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
     ctrlc::set_handler(move || {
         if SHUTDOWN_REQUESTED.swap(true, Ordering::SeqCst) {
+            error!("Force shutdown");
             std::process::exit(1);
         }
+        debug!("Graceful shutdown requested");
         std::process::exit(0);
     })
     .ok();

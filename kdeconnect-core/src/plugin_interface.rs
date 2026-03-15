@@ -1,9 +1,12 @@
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::{
     io::{AsyncRead, AsyncWriteExt},
     sync::{RwLock, mpsc},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
@@ -25,15 +28,65 @@ pub trait Plugin: Sync + Send {
     fn id(&self) -> &'static str;
 }
 
+/// Maps a PacketType to the logical plugin ID used in settings.
+/// Returns None for core packets (Identity, Pair) that are never gated.
+fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
+    match pt {
+        PacketType::Battery | PacketType::BatteryRequest => Some("battery"),
+        PacketType::Clipboard | PacketType::ClipboardConnect => Some("clipboard"),
+        PacketType::ConnectivityReport | PacketType::ConnectivityReportRequest => {
+            Some("connectivity_report")
+        }
+        PacketType::ContactsResponseUidsTimestamps
+        | PacketType::ContactsResponseVcards
+        | PacketType::ContactsRequestAllUidsTimestamps
+        | PacketType::ContactsRequestVcardsByUid => Some("contacts"),
+        PacketType::FindMyPhoneRequest => Some("findmyphone"),
+        PacketType::Mpris | PacketType::MprisRequest => Some("mpris"),
+        PacketType::Notification
+        | PacketType::NotificationAction
+        | PacketType::NotificationReply
+        | PacketType::NotificationRequest => Some("notification"),
+        PacketType::Ping => Some("ping"),
+        PacketType::RunCommand | PacketType::RunCommandRequest => Some("runcommand"),
+        PacketType::ShareRequest | PacketType::ShareRequestUpdate => Some("share"),
+        PacketType::SmsMessages
+        | PacketType::SmsRequest
+        | PacketType::SmsRequestConversations
+        | PacketType::SmsRequestConversation
+        | PacketType::SmsAttachmentFile
+        | PacketType::SmsRequestAttachment => Some("sms"),
+        // Core / unmanaged packets are never gated
+        PacketType::Identity
+        | PacketType::Pair
+        | PacketType::Lock
+        | PacketType::LockRequest
+        | PacketType::MousePadEcho
+        | PacketType::MousePadKeyboardState
+        | PacketType::MousePadRequest
+        | PacketType::Presenter
+        | PacketType::Sftp
+        | PacketType::SftpRequest
+        | PacketType::SystemVolume
+        | PacketType::SystemVolumeRequest
+        | PacketType::Telephony
+        | PacketType::TelephonyRequestMute
+        | PacketType::Unknown(_) => None,
+    }
+}
+
 #[derive(Clone)]
 pub struct PluginRegistry {
     plugins: Arc<RwLock<Vec<Arc<dyn Plugin>>>>,
+    /// device_id.0 → set of disabled plugin IDs
+    disabled: Arc<RwLock<HashMap<String, HashSet<String>>>>,
 }
 
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             plugins: Arc::new(RwLock::new(Vec::new())),
+            disabled: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -41,6 +94,23 @@ impl PluginRegistry {
         let mut plugins = self.plugins.write().await;
         info!("Registering plugin: {}", plugin.id());
         plugins.push(plugin);
+    }
+
+    /// Replace the disabled set for a device (called on connect and on toggle).
+    pub async fn set_device_disabled(&self, device_id: &str, disabled: HashSet<String>) {
+        self.disabled
+            .write()
+            .await
+            .insert(device_id.to_string(), disabled);
+    }
+
+    /// Returns true if the plugin is currently enabled for this device.
+    pub async fn is_plugin_enabled(&self, device_id: &str, plugin_id: &str) -> bool {
+        let guard = self.disabled.read().await;
+        guard
+            .get(device_id)
+            .map(|set| !set.contains(plugin_id))
+            .unwrap_or(true)
     }
 
     pub async fn dispatch(
@@ -51,6 +121,20 @@ impl PluginRegistry {
         tx: mpsc::UnboundedSender<ConnectionEvent>,
         mpris_tx: mpsc::UnboundedSender<ConnectionEvent>,
     ) {
+        // Gate on plugin enabled state before doing any work.
+        if let Some(plugin_id) = packet_plugin_id(&packet.packet_type) {
+            if !self
+                .is_plugin_enabled(&device.device_id.0, plugin_id)
+                .await
+            {
+                debug!(
+                    "[plugin_registry] packet {:?} skipped — plugin '{}' disabled for {}",
+                    packet.packet_type, plugin_id, device.device_id
+                );
+                return;
+            }
+        }
+
         let body = packet.body.clone();
         let core_tx = core_tx.clone();
         let connection_tx = tx.clone();
@@ -79,6 +163,10 @@ impl PluginRegistry {
                 {
                     info!(
                         "Received SMS messages packet with {} messages",
+                        sms_messages.messages.len()
+                    );
+                    debug!(
+                        "Successfully parsed {} SMS messages",
                         sms_messages.messages.len()
                     );
                     sms_messages.received_packet(connection_tx).await;
