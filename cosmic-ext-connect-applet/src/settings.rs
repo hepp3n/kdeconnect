@@ -5,6 +5,7 @@ use cosmic::{
     widget,
 };
 use cosmic_ext_connect_applet::{backend, models::Device};
+use futures::StreamExt as _;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +115,8 @@ pub enum Message {
     BroadcastAndRefresh,
     PairDevice(String),
     UnpairDevice(String),
+    /// Fired by the D-Bus event subscription whenever a device connects or pairs.
+    ServiceEvent(kdeconnect_dbus_client::ServiceEvent),
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +204,16 @@ impl Application for SettingsApp {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        Subscription::none()
+        // Subscribe to D-Bus service events so the UI updates immediately when
+        // a device connects, pairs, or disconnects — no polling needed.
+        Subscription::run(|| {
+            async_stream::stream! {
+                let mut stream = backend::event_stream().await;
+                while let Some(event) = stream.next().await {
+                    yield Message::ServiceEvent(event);
+                }
+            }
+        })
     }
 
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
@@ -330,6 +342,15 @@ impl Application for SettingsApp {
                         backend::unpair_device(id).await.ok();
                         backend::fetch_devices().await
                     },
+                    |devices| Action::App(Message::DevicesLoaded(devices)),
+                );
+            }
+
+            // A D-Bus service event arrived — refresh device list immediately
+            // so paired/connected state changes appear without waiting for polling.
+            Message::ServiceEvent(_event) => {
+                return Task::perform(
+                    async { backend::fetch_devices().await },
                     |devices| Action::App(Message::DevicesLoaded(devices)),
                 );
             }

@@ -300,34 +300,21 @@ impl KdeConnectCore {
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 if !pair_body.pair {
-                                    if self.pending_pair.lock().await.contains(&id) {
-                                        info!(
-                                            "[core] pair:false from {} — already sent pair:true, ignoring duplicate",
-                                            id
-                                        );
-                                    } else {
-                                        info!(
-                                            "[core] Phone sent pair:false — auto-initiating pair request to {}",
-                                            id
-                                        );
-                                        let guard = self.writer_map.lock().await;
-                                        if let Some(sender) = guard.get(&id) {
-                                            let pair = Pair::new(true);
-                                            let value = serde_json::to_value(pair)
-                                                .expect("fail serializing pair");
-                                            let pair_pkt =
-                                                ProtocolPacket::new(PacketType::Pair, value);
-                                            let _ = sender.send(pair_pkt);
-                                            self.pending_pair.lock().await.insert(id.clone());
-                                        }
-                                        drop(guard);
-                                        self.device_manager
-                                            .update_pair_state(
-                                                &id,
-                                                crate::device::PairState::Requesting,
-                                            )
-                                            .await;
-                                    }
+                                    // Phone unpaired from us — update state and clean up.
+                                    // Do NOT auto-send pair:true back; let the user
+                                    // re-initiate pairing explicitly from the settings app.
+                                    info!("[core] Phone sent pair:false — marking {} as unpaired", id);
+                                    self.pending_pair.lock().await.remove(&id);
+                                    self.device_manager
+                                        .update_pair_state(&id, crate::device::PairState::NotPaired)
+                                        .await;
+                                    cleanup_device_data(&id.0).await;
+                                    let conn_event = ConnectionEvent::PairStateChanged((
+                                        id.clone(),
+                                        crate::device::PairState::NotPaired,
+                                    ));
+                                    let _ = self.conn_tx.send(conn_event.clone());
+                                    let _ = self.mpris_conn_tx.send(conn_event);
                                 } else {
                                     let _ = self
                                         .pairing
@@ -506,7 +493,27 @@ impl KdeConnectCore {
             }
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent unpair event to device: {}", device_id);
-                let _ = self.pairing.cancel_pairing(device_id).await;
+
+                // Send pair:false to the phone so it knows we've unpaired.
+                if let Some(sender) = guard.get(&device_id) {
+                    let pair = Pair::new(false);
+                    let value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                    let _ = sender.send(pkt);
+                    info!("[core] sent pair:false to {} on unpair", device_id);
+                }
+                drop(guard);
+
+                let _ = self.pairing.cancel_pairing(device_id.clone()).await;
+                cleanup_device_data(&device_id.0).await;
+
+                let conn_event = ConnectionEvent::PairStateChanged((
+                    device_id,
+                    crate::device::PairState::NotPaired,
+                ));
+                let _ = self.conn_tx.send(conn_event.clone());
+                let _ = self.mpris_conn_tx.send(conn_event);
+                return;
             }
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);
@@ -547,4 +554,32 @@ impl KdeConnectCore {
     pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {
         self.out_tx.clone()
     }
+}
+
+/// Remove all persisted data for a device on unpair.
+/// Cleans plugin config (~/.config/kdeconnect/) and cache (~/.local/share/kdeconnect/).
+async fn cleanup_device_data(device_id: &str) {
+    // Plugin enabled/disabled config
+    if let Some(config_dir) = dirs::config_dir() {
+        let plugin_file = config_dir
+            .join("kdeconnect")
+            .join(format!("{}_plugins.json", device_id));
+        if let Err(e) = tokio::fs::remove_file(&plugin_file).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("[cleanup] failed to remove plugin config for {}: {}", device_id, e);
+            }
+        }
+    }
+
+    // SMS and contacts cache directory
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let cache_dir = data_dir.join("kdeconnect").join(device_id);
+        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("[cleanup] failed to remove cache dir for {}: {}", device_id, e);
+            }
+        }
+    }
+
+    tracing::info!("[cleanup] removed persisted data for device {}", device_id);
 }
