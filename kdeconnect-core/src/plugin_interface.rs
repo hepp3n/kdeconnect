@@ -1,10 +1,12 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::{
     io::{AsyncRead, AsyncWriteExt},
     sync::{RwLock, mpsc},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
@@ -25,7 +27,7 @@ pub trait Plugin: Sync + Send {
     fn id(&self) -> &'static str;
 }
 
-/// Maps a packet type to the plugin ID that gates it.
+/// Maps a PacketType to the logical plugin ID used in settings.
 /// Returns None for core packets (Identity, Pair) that are never gated.
 fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
     match pt {
@@ -162,6 +164,10 @@ impl PluginRegistry {
                         "Received SMS messages packet with {} messages",
                         sms_messages.messages.len()
                     );
+                    debug!(
+                        "Successfully parsed {} SMS messages",
+                        sms_messages.messages.len()
+                    );
                     sms_messages.received_packet(connection_tx).await;
                 } else {
                     warn!("Failed to parse SMS messages packet: {:?}", body);
@@ -189,7 +195,8 @@ impl PluginRegistry {
             }
             PacketType::ContactsResponseVcards => {
                 debug!("Received ContactsResponseVcards");
-                let mut contacts: HashMap<String, String> = HashMap::new();
+                let mut contacts: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
                 if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
                     for uid_val in uids_val {
                         if let Some(uid) = uid_val.as_str() {

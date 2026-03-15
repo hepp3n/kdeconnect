@@ -117,6 +117,7 @@ impl cosmic::Application for KdeConnectApplet {
                 }
             }
             Message::SendSMS(ref device_id) => {
+                // Look up device name for the window title
                 let device_name = self
                     .devices
                     .get(device_id)
@@ -126,6 +127,7 @@ impl cosmic::Application for KdeConnectApplet {
 
                 info!("Launching SMS window for device={} name={}", id, device_name);
 
+                // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
                     match std::process::Command::new("cosmic-ext-connect-sms")
                         .arg(&id)

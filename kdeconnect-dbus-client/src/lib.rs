@@ -4,6 +4,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::error;
 use zbus::{Connection, proxy};
 
 /// Device information
@@ -48,14 +49,12 @@ trait Daemon {
     async fn send_files(&self, device_id: &str, files: Vec<String>) -> zbus::Result<()>;
     async fn send_clipboard(&self, device_id: &str, content: &str) -> zbus::Result<()>;
     async fn ring_device(&self, device_id: &str) -> zbus::Result<()>;
-    async fn broadcast_identity(&self) -> zbus::Result<()>;
     async fn set_plugin_enabled(
         &self,
         device_id: &str,
         plugin_id: &str,
         enabled: bool,
     ) -> zbus::Result<()>;
-    async fn get_disabled_plugins(&self, device_id: &str) -> zbus::Result<Vec<String>>;
 
     #[zbus(signal)]
     async fn device_connected(&self, device_id: String, device: Device) -> zbus::Result<()>;
@@ -155,11 +154,6 @@ impl KdeConnectClient {
         Ok(self.daemon_proxy.send_clipboard(device_id, content).await?)
     }
 
-    /// Trigger a UDP identity broadcast so nearby devices can discover us
-    pub async fn broadcast_identity(&self) -> Result<()> {
-        Ok(self.daemon_proxy.broadcast_identity().await?)
-    }
-
     /// Ring a device (findmyphone)
     pub async fn ring_device(&self, device_id: &str) -> Result<()> {
         Ok(self.daemon_proxy.ring_device(device_id).await?)
@@ -178,17 +172,12 @@ impl KdeConnectClient {
             .await?)
     }
 
-    /// Get the list of disabled plugin IDs for a device
-    pub async fn get_disabled_plugins(&self, device_id: &str) -> Result<Vec<String>> {
-        Ok(self.daemon_proxy.get_disabled_plugins(device_id).await?)
-    }
-
     /// Request SMS conversations
     pub async fn request_conversations(&self, device_id: &str) -> Result<()> {
         Ok(self.sms_proxy.request_conversations(device_id).await?)
     }
 
-    /// Request a specific SMS conversation thread
+    /// Request specific conversation
     pub async fn request_conversation(&self, device_id: &str, thread_id: i64) -> Result<()> {
         Ok(self
             .sms_proxy
@@ -209,25 +198,25 @@ impl KdeConnectClient {
             .await?)
     }
 
-    /// Get cached SMS JSON
+    /// Fetch cached SMS — in-memory in service, disk fallback, empty string if neither
     pub async fn get_cached_sms(&self, device_id: &str) -> Result<String> {
         Ok(self.sms_proxy.get_cached_sms(device_id).await?)
     }
 
-    /// Request contacts sync from device
+    /// Manually request contacts sync for a device
     pub async fn request_contacts(&self, device_id: &str) -> Result<()> {
         Ok(self.contacts_proxy.request_contacts(device_id).await?)
     }
 
-    /// Get cached contacts as a phone → name map.
-    /// The service stores contacts as a JSON string; this deserializes it.
-    pub async fn get_cached_contacts(&self, device_id: &str) -> Result<HashMap<String, String>> {
-        let json = self.contacts_proxy.get_cached_contacts(device_id).await?;
-        Ok(serde_json::from_str(&json).unwrap_or_default())
+    /// Get cached contacts as a raw JSON string (phone → name map)
+    pub async fn get_cached_contacts(&self, device_id: &str) -> Result<String> {
+        Ok(self.contacts_proxy.get_cached_contacts(device_id).await?)
     }
 
-    /// Listen for service events (signals)
-    pub async fn listen_for_events(&self) -> futures::stream::BoxStream<'static, ServiceEvent> {
+    /// Create a stream of service events
+    pub async fn listen_for_events(
+        &self,
+    ) -> futures::stream::BoxStream<'static, ServiceEvent> {
         use futures::stream::select_all;
 
         let connected = self
@@ -277,8 +266,9 @@ impl KdeConnectClient {
             .unwrap()
             .map(|s| {
                 let args = s.args().unwrap();
+                let contacts_json = args.contacts_json.clone();
                 let map: HashMap<String, String> =
-                    serde_json::from_str(&args.contacts_json).unwrap_or_default();
+                    serde_json::from_str(&contacts_json).unwrap_or_default();
                 ServiceEvent::ContactsReceived(map)
             });
 

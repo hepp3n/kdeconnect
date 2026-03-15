@@ -79,15 +79,19 @@ pub async fn fetch_contacts(device_id: &str) {
     }
 }
 
+#[allow(dead_code)]
 pub async fn get_cached_contacts(device_id: &str) -> std::collections::HashMap<String, String> {
     debug!("get_cached_contacts device={}", device_id);
     let Some(client) = get_client().await else {
         return std::collections::HashMap::new();
     };
+    // The D-Bus interface returns a JSON string; deserialize it here.
     match client.get_cached_contacts(device_id).await {
-        Ok(contacts) => {
-            debug!("got {} cached contacts", contacts.len());
-            contacts
+        Ok(contacts_json) => {
+            let map: std::collections::HashMap<String, String> =
+                serde_json::from_str(&contacts_json).unwrap_or_default();
+            debug!("got {} cached contacts", map.len());
+            map
         }
         Err(e) => {
             error!("get_cached_contacts failed: {:?}", e);
@@ -96,6 +100,7 @@ pub async fn get_cached_contacts(device_id: &str) -> std::collections::HashMap<S
     }
 }
 
+#[allow(dead_code)]
 pub async fn get_cached_sms(device_id: &str) -> Option<String> {
     debug!("get_cached_sms device={}", device_id);
     let Some(client) = get_client().await else {

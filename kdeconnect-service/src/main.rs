@@ -17,6 +17,8 @@ async fn main() -> Result<()> {
     info!("KDE Connect service starting");
 
     let service = dbus_interface::KdeConnectService::new().await?;
+    info!("D-Bus service started on io.github.hepp3n.kdeconnect");
+
     service.run().await?;
 
     Ok(())

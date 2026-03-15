@@ -135,6 +135,9 @@ impl Application for SmsWindow {
                     debug!("SMS subscribing to events");
                     let mut event_stream = client.listen_for_events().await;
 
+                    // Subscribe FIRST, then request — contacts response is a
+                    // fire-and-forget D-Bus signal; if we request before subscribing
+                    // the signal arrives while nobody is listening and is lost.
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     dbus::fetch_conversations(&device_id).await;
                     dbus::fetch_contacts(&device_id).await;
@@ -300,6 +303,7 @@ impl SmsWindow {
             ProtocolEvent::ConversationsReceived(conversations) => {
                 debug!("ConversationsReceived: {} conversations", conversations.len());
 
+                // Capture selected new_* phone BEFORE we mutate merged
                 let pending_new_phone: Option<String> = self
                     .selected_thread
                     .as_ref()
@@ -343,6 +347,7 @@ impl SmsWindow {
                 self.conversations = merged;
                 self.update_conversation_names();
 
+                // If we had a new_* selected, find its real thread by phone number now
                 if let Some(phone) = pending_new_phone {
                     if let Some(real) = self.conversations.iter().find(|c| {
                         !c.thread_id.starts_with("new_")

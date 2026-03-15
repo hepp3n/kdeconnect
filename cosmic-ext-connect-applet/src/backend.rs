@@ -1,6 +1,7 @@
 //! Backend interface using D-Bus client to communicate with kdeconnect-service
 
 use anyhow::Result;
+use futures::StreamExt;
 use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::models::Device;
+
 
 lazy_static::lazy_static! {
     static ref CLIENT: Arc<Mutex<Option<Arc<KdeConnectClient>>>> = Arc::new(Mutex::new(None));
@@ -155,16 +157,6 @@ pub async fn reject_pairing(device_id: String) -> Result<()> {
     unpair_device(device_id).await
 }
 
-/// Trigger a UDP identity broadcast from the service so nearby devices can discover us
-#[allow(dead_code)]
-pub async fn broadcast_identity() -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.broadcast_identity().await
-}
-
 /// Ring a device (findmyphone)
 pub async fn ring_device(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
@@ -175,6 +167,8 @@ pub async fn ring_device(device_id: String) -> Result<()> {
 }
 
 /// Enable or disable a plugin for a device.
+/// The change is forwarded to kdeconnect-service, which persists it and
+/// gates all subsequent incoming packets for that plugin.
 #[allow(dead_code)]
 pub async fn set_plugin_enabled(
     device_id: String,
@@ -188,23 +182,6 @@ pub async fn set_plugin_enabled(
     client
         .set_plugin_enabled(&device_id, &plugin_id, enabled)
         .await
-}
-
-/// Get the list of disabled plugin IDs for a device.
-#[allow(dead_code)]
-pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        warn!("D-Bus client not initialized");
-        return vec![];
-    };
-    match client.get_disabled_plugins(&device_id).await {
-        Ok(disabled) => disabled,
-        Err(e) => {
-            error!("Failed to get disabled plugins for {}: {:?}", device_id, e);
-            vec![]
-        }
-    }
 }
 
 /// Request SMS conversations from a device
@@ -240,7 +217,6 @@ pub async fn send_sms(device_id: String, phone_number: String, message: String) 
 /// Create a stream of service events
 #[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
-    use futures::StreamExt;
     use tokio::sync::mpsc;
     use tokio::time::{Duration, sleep};
 
@@ -262,10 +238,7 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
                 return;
             }
 
-            debug!(
-                "Waiting for D-Bus client initialization (attempt {})",
-                attempts
-            );
+            debug!("Waiting for D-Bus client initialization (attempt {})", attempts);
             sleep(Duration::from_millis(100)).await;
         };
 
@@ -275,11 +248,21 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
 
         while let Some(event) = stream.next().await {
             if tx.send(event).await.is_err() {
-                warn!("Event stream receiver dropped");
+                warn!("Event receiver dropped, stopping event listener");
                 break;
             }
         }
+
+        debug!("Event stream ended");
     });
 
-    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+    futures::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Some(event) => Some((event, rx)),
+            None => loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            },
+        }
+    })
+    .boxed()
 }
