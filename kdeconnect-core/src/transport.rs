@@ -136,57 +136,20 @@ impl TcpTransport {
                         Ok(i) => i,
                         Err(e) => {
                             warn!(peer = ?peer, "[tcp] failed to parse identity body: {}", e);
-                            continue;
-
-                        // Phone connected to us, so we are the TLS server
-                        let mut stream = match TlsAcceptor::from(self.server_config.clone())
-                            .accept(stream)
-                            .await
-                        {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
-                                continue;
+                            // Complete the TLS handshake gracefully so the phone doesn't see
+                            // an abrupt TCP drop and retry aggressively causing connection churn.
+                            match TlsAcceptor::from(self.server_config.clone())
+                                .accept(stream)
+                                .await
+                            {
+                                Ok(mut tls_stream) => {
+                                    let _ = tls_stream.shutdown().await;
+                                }
+                                Err(tls_e) => {
+                                    warn!(peer = ?peer, "[tcp] TLS cleanup after identity error failed: {}", tls_e);
+                                }
                             }
-                        };
-
-                        // Send our identity again post-TLS for plugin negotiation
-                        let post_tls_identity = ProtocolPacket::new(
-                            PacketType::Identity,
-                            serde_json::to_value(&*self.identity).unwrap(),
-                        )
-                        .as_raw()
-                        .expect("Failed to serialize identity packet");
-
-                        let _ = stream.write_all(post_tls_identity.as_slice()).await;
-                        let _ = stream.flush().await;
-
-                        let (reader, writer) = split(stream);
-
-                        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-                        let write_rx = Arc::new(Mutex::new(write_rx));
-
-                        let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-                        // Do NOT .await the spawn — blocks the accept loop until connection closes.
-                        tokio::spawn(handle_connection(
-                            event_tx.clone(),
-                            reader,
-                            writer,
-                            write_rx,
-                            peer,
-                            DeviceId(id.clone()),
-                            conn_id,
-                        ));
-
-                        if let Err(e) = event_tx.send(TransportEvent::NewConnection {
-                            addr: peer,
-                            id: DeviceId(peer_identity.device_id),
-                            name: name.clone(),
-                            write_tx,
-                            conn_id,
-                        }) {
-                            error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
+                            continue;
                         }
                     };
 
@@ -248,6 +211,8 @@ impl TcpTransport {
                     let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                     let write_rx = Arc::new(Mutex::new(write_rx));
 
+                    let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
+
                     // Do NOT .await the spawn — blocks the accept loop until connection closes.
                     tokio::spawn(handle_connection(
                         event_tx.clone(),
@@ -256,6 +221,7 @@ impl TcpTransport {
                         write_rx,
                         peer,
                         DeviceId(id.clone()),
+                        conn_id,
                     ));
 
                     if let Err(e) = event_tx.send(TransportEvent::NewConnection {
@@ -263,6 +229,7 @@ impl TcpTransport {
                         id: DeviceId(peer_identity.device_id),
                         name: name.clone(),
                         write_tx,
+                        conn_id,
                     }) {
                         error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
                     }

@@ -55,6 +55,8 @@ trait Daemon {
         plugin_id: &str,
         enabled: bool,
     ) -> zbus::Result<()>;
+    async fn get_disabled_plugins(&self, device_id: &str) -> zbus::Result<Vec<String>>;
+    async fn broadcast_identity(&self) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn update_transfer_progress(&self, progress: u8) -> zbus::Result<()>;
@@ -173,6 +175,16 @@ impl KdeConnectClient {
             .daemon_proxy
             .set_plugin_enabled(device_id, plugin_id, enabled)
             .await?)
+    }
+
+    /// Get the list of disabled plugin IDs for a device
+    pub async fn get_disabled_plugins(&self, device_id: &str) -> Result<Vec<String>> {
+        Ok(self.daemon_proxy.get_disabled_plugins(device_id).await?)
+    }
+
+    /// Broadcast our identity over UDP to trigger device discovery
+    pub async fn broadcast_identity(&self) -> Result<()> {
+        Ok(self.daemon_proxy.broadcast_identity().await?)
     }
 
     /// Request SMS conversations

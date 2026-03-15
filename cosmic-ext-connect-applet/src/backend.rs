@@ -171,7 +171,6 @@ pub async fn ring_device(device_id: String) -> Result<()> {
 /// Enable or disable a plugin for a device.
 /// The change is forwarded to kdeconnect-service, which persists it and
 /// gates all subsequent incoming packets for that plugin.
-#[allow(dead_code)]
 pub async fn set_plugin_enabled(
     device_id: String,
     plugin_id: String,
@@ -184,6 +183,33 @@ pub async fn set_plugin_enabled(
     client
         .set_plugin_enabled(&device_id, &plugin_id, enabled)
         .await
+}
+
+/// Return the list of disabled plugin IDs for a device.
+/// Used by the settings UI to restore persisted toggle states on load.
+pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        warn!("D-Bus client not initialized");
+        return vec![];
+    };
+    match client.get_disabled_plugins(&device_id).await {
+        Ok(disabled) => disabled,
+        Err(e) => {
+            warn!("Failed to get disabled plugins for {}: {:?}", device_id, e);
+            vec![]
+        }
+    }
+}
+
+/// Broadcast our identity packet over UDP to trigger device discovery.
+/// Called when the user opens the Available Devices tab or hits Scan Again.
+pub async fn broadcast_identity() -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.broadcast_identity().await
 }
 
 /// Request SMS conversations from a device

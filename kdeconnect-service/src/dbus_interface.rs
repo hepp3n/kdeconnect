@@ -11,7 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use zbus::object_server::SignalEmitter;
 use zbus::{Connection, interface};
 
@@ -216,6 +216,27 @@ impl DaemonInterface {
                 plugin_id,
                 enabled,
             })
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Return the list of disabled plugin IDs for a device.
+    async fn get_disabled_plugins(&self, device_id: String) -> Vec<String> {
+        let path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("kdeconnect")
+            .join(format!("{}_plugins.json", device_id));
+        match tokio::fs::read_to_string(&path).await {
+            Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// Trigger a UDP identity broadcast to discover nearby devices.
+    async fn broadcast_identity(&self) -> zbus::fdo::Result<()> {
+        info!("D-Bus: BroadcastIdentity called");
+        self.event_sender
+            .send(AppEvent::Broadcasting)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }

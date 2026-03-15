@@ -6,7 +6,7 @@ use tokio::{
     io::{AsyncRead, AsyncWriteExt},
     sync::{RwLock, mpsc},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
