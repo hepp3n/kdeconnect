@@ -1,9 +1,8 @@
 use std::{path::PathBuf, str::FromStr};
 
-use ashpd::desktop::file_chooser::SelectedFiles;
-use notify_rust::Timeout;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 use crate::{
     device::Device,
@@ -67,111 +66,119 @@ impl ShareRequest {
         info: &PacketPayloadTransferInfo,
     ) -> anyhow::Result<()> {
         match self {
-            ShareRequest::File(share_request_file) => self
-                .handle_file_request(share_request_file, device, info)
+            ShareRequest::File(f) => self.handle_file_request(f, device, info).await,
+            ShareRequest::Text { text } => {
+                let text = text.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = notify_rust::Notification::new()
+                        .appname("KDE Connect")
+                        .summary("Text received from phone")
+                        .body(&text)
+                        .show();
+                })
                 .await
-                .expect("handling file share request"),
-            ShareRequest::Text { text: _ } => todo!(),
-            ShareRequest::Url { url: _ } => todo!(),
+                .ok();
+                Ok(())
+            }
+            ShareRequest::Url { url } => {
+                let url = url.clone();
+                tokio::task::spawn_blocking(move || {
+                    if std::process::Command::new("xdg-open")
+                        .arg(&url)
+                        .spawn()
+                        .is_err()
+                    {
+                        let _ = notify_rust::Notification::new()
+                            .appname("KDE Connect")
+                            .summary("URL received from phone")
+                            .body(&url)
+                            .show();
+                    }
+                })
+                .await
+                .ok();
+                Ok(())
+            }
         }
-
-        Ok(())
     }
 
-    pub async fn handle_file_request(
+    async fn handle_file_request(
         &self,
         request: &ShareRequestFile,
         device: &Device,
         info: &PacketPayloadTransferInfo,
     ) -> anyhow::Result<()> {
+        let download_dir = dirs::download_dir().unwrap_or_else(|| {
+            warn!("[share] cannot find Downloads dir, falling back to /tmp");
+            PathBuf::from("/tmp")
+        });
+
+        // Avoid overwriting existing files by appending a counter if needed.
+        let dest = unique_path(&download_dir, &request.filename);
+
+        let mut remote_addr = device.address;
+        remote_addr.set_port(info.port);
+        let domain = device.device_id.clone();
+
+        info!(
+            "[share] receiving '{}' from {} ({}:{})",
+            request.filename,
+            device.name,
+            remote_addr.ip(),
+            info.port
+        );
+
+        if let Err(e) = receive_payload(&domain, &remote_addr, &dest).await {
+            warn!(
+                "[share] receive_payload failed for '{}': {}",
+                request.filename, e
+            );
+            return Err(e);
+        }
+
+        info!("[share] saved '{}' to {:?}", request.filename, dest);
+
+        let dest_display = dest.display().to_string();
         let filename = request.filename.clone();
-        let _open = request.open.unwrap_or(false);
-
-        let file_accepted = tokio::task::spawn_blocking(move || {
-            let mut file_accepted = false;
-
-            let mut notify = notify_rust::Notification::new();
-            notify.appname("KDE Connect");
-            notify.summary("A remote device requested file share");
-            notify.body(&format!(
-                "A remote device wants to share file, {}, do you want to accept it?",
-                &filename
-            ));
-
-            notify
-                .action("default", "accepted")
-                .hint(notify_rust::Hint::Resident(true))
-                .timeout(Timeout::Never)
-                .show()
-                .unwrap()
-                .wait_for_action(|action| match action {
-                    "default" => {
-                        file_accepted = true;
-                    }
-                    "__closed" => {
-                        file_accepted = false;
-                    }
-                    _ => {
-                        file_accepted = false;
-                    }
-                });
-
-            file_accepted
+        tokio::task::spawn_blocking(move || {
+            let _ = notify_rust::Notification::new()
+                .appname("KDE Connect")
+                .summary(&format!("File received: {}", filename))
+                .body(&dest_display)
+                .show();
         })
-        .await?;
-
-        if file_accepted {
-            let current_name = request.filename.as_str();
-            let temp_dir = PathBuf::from_str("/tmp")?;
-            let temp_file = temp_dir.join(&request.filename);
-            let mut remote_server = device.address;
-            remote_server.set_port(info.port);
-            let domain = device.device_id.clone();
-
-            let _ = receive_payload(&domain, &remote_server, &temp_file).await;
-
-            if let Some(home_dir) = dirs::download_dir() {
-                let file = SelectedFiles::save_file()
-                    .title("Save file")
-                    .accept_label("Save")
-                    .modal(true)
-                    .current_folder(home_dir)?
-                    .current_name(current_name)
-                    .current_file(&temp_file)?
-                    .send()
-                    .await?
-                    .response()?;
-
-                let first_path: Option<String> = file
-                    .uris()
-                    .first()
-                    .and_then(|p| Some(p.as_str().to_string()));
-
-                let Some(file_path) = first_path else {
-                    return Ok(());
-                };
-
-                let path = file_path.clone();
-
-                if tokio::fs::rename(temp_file, &path).await.is_ok() {
-                    tokio::task::spawn_blocking(move || {
-                        let mut notify = notify_rust::Notification::new();
-                        notify.appname("KDE Connect");
-                        notify.summary(&format!("File saved to: {:?}", path));
-
-                        notify
-                            .hint(notify_rust::Hint::Resident(true))
-                            .show()
-                            .unwrap();
-                    })
-                    .await
-                    .unwrap();
-                }
-            }
-        };
+        .await
+        .ok();
 
         Ok(())
     }
+}
+
+/// Returns a path that doesn't already exist by appending ` (N)` before the
+/// extension — e.g. `photo (1).jpg`, `photo (2).jpg`.
+fn unique_path(dir: &PathBuf, filename: &str) -> PathBuf {
+    let candidate = dir.join(filename);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = PathBuf::from(filename)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| filename.to_string());
+    let ext = PathBuf::from(filename)
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+
+    for i in 1u32.. {
+        let candidate = dir.join(format!("{} ({}){}", stem, i, ext));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    dir.join(filename)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -190,7 +197,7 @@ impl ShareRequest {
     pub async fn send_file(
         &self,
         writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        payload_size: i64,
+        payload_size: u64,
         payload_transfer_info: Option<PacketPayloadTransferInfo>,
     ) {
         let packet = ProtocolPacket::new_with_payload(

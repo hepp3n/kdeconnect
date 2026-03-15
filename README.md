@@ -1,4 +1,15 @@
-# WORK IN PROGRESS
+<!--suppress HtmlDeprecatedAttribute -->
+<div align="center">
+  <h1>WORK IN PROGRESS</h1>
+  <br>
+  <img alt="KDE Connect applet on COSMIC desktop environment" src="https://raw.githubusercontent.com/hepp3n/kdeconnect/refs/heads/master/resources/screenshots/applet.png" />
+</div>
+
+# Installing from [COSMIC Flatpak Repository](https://github.com/pop-os/cosmic-flatpak)
+
+Add remote: `flatpak remote-add --if-not-exists --user cosmic https://apt.pop-os.org/cosmic/cosmic.flatpakrepo`
+
+Install applet: `flatpak install --user io.github.hepp3n.kdeconnect`
 
 # Testing on COSMIC Desktop
 
@@ -38,4 +49,4 @@ You might need also `libxkbcommon-dev` dependency. If it won't build, please cre
 
 You can also build this applet as flatpak package. You need to install `flatpak-builder` and then run this command:
 
-`flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo --install builddir dev.heppen.CosmicExtConnect.json`
+`flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo --install builddir io.github.hepp3n.kdeconnect.json`

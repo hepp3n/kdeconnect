@@ -125,7 +125,10 @@ impl cosmic::Application for KdeConnectApplet {
                     .unwrap_or_else(|| "Unknown Device".to_string());
                 let id = device_id.clone();
 
-                info!("Launching SMS window for device={} name={}", id, device_name);
+                info!(
+                    "Launching SMS window for device={} name={}",
+                    id, device_name
+                );
 
                 // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
@@ -195,6 +198,13 @@ impl cosmic::Application for KdeConnectApplet {
                     },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
+            }
+            Message::UpdateTransferProgress(progress) => {
+                if let Some(ref current_device) = self.expanded_device {
+                    if let Some(device) = self.devices.get_mut(current_device) {
+                        device.share_progress = if progress < 100 { Some(progress) } else { None };
+                    }
+                }
             }
             Message::ShareClipboard(ref device_id) => {
                 let id = device_id.clone();
@@ -289,8 +299,11 @@ impl cosmic::Application for KdeConnectApplet {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        cosmic::iced::time::every(std::time::Duration::from_secs(10))
-            .map(|_| Message::RefreshDevices)
+        Subscription::batch(vec![
+            cosmic::iced::time::every(std::time::Duration::from_secs(10))
+                .map(|_| Message::RefreshDevices),
+            backend::filetransfer_subscription(),
+        ])
     }
 }
 

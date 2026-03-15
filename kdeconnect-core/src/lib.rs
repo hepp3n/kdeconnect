@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use crate::{
     device::{Device, DeviceId, DeviceManager},
     event::{AppEvent, ConnectionEvent, CoreEvent},
+    filetransfer::TransferAdapter,
     pairing::PairingManager,
     plugin_interface::PluginRegistry,
     plugins::{ping::Ping, share::ShareRequest},
@@ -23,6 +24,7 @@ pub mod plugin_config;
 pub(crate) mod crypto;
 pub mod device;
 pub mod event;
+pub mod filetransfer;
 pub(crate) mod pairing;
 pub(crate) mod plugin_interface;
 pub mod plugins;
@@ -40,6 +42,10 @@ pub struct KdeConnectCore {
     plugin_registry: Arc<PluginRegistry>,
     transport_rx: mpsc::UnboundedReceiver<TransportEvent>,
     writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
+    /// Tracks the conn_id of the most recently accepted connection per device.
+    /// A `Disconnected` event whose conn_id doesn't match is from a superseded
+    /// connection and is discarded so it cannot wipe a live writer_map entry.
+    conn_id_map: Arc<Mutex<HashMap<DeviceId, u64>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
     udp_transport: Arc<UdpTransport>,
@@ -68,6 +74,7 @@ impl KdeConnectCore {
         let (transport_tx, transport_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
 
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
@@ -105,6 +112,7 @@ impl KdeConnectCore {
                 plugin_registry,
                 transport_rx,
                 writer_map,
+                conn_id_map,
                 event_tx,
                 event_rx,
                 udp_transport,
@@ -220,9 +228,14 @@ impl KdeConnectCore {
                 payload_size,
             } => {
                 info!("[core] sending packet w/ payload");
+
+                // crate transfer adapter to get file transfer progress
+                let transfer_adapter =
+                    TransferAdapter::new(payload, payload_size, self.conn_tx.clone());
+
                 if let Some(sender) = guard.get(&device) {
                     self.plugin_registry
-                        .send_payload(packet, sender, payload, payload_size)
+                        .send_payload(packet, sender, transfer_adapter, payload_size)
                         .await;
                 }
             }
@@ -239,6 +252,7 @@ impl KdeConnectCore {
                 id,
                 name,
                 write_tx,
+                conn_id,
             } => {
                 debug!("[core] new connection from: {}", addr);
 
@@ -250,12 +264,15 @@ impl KdeConnectCore {
                     .add_or_update_device(id.clone(), device.clone())
                     .await;
 
-                // Always replace — the phone reconnecting means the old connection
-                // is being replaced intentionally. Keeping the old write_tx drops the
-                // new one immediately, killing the new connection's writer task.
-                self.writer_map.lock().await.insert(id.clone(), write_tx);
+                // Record this connection's ID before inserting the writer so that
+                // any Disconnected event from a previous connection that arrives
+                // concurrently will see a mismatched conn_id and be dropped.
+                self.conn_id_map.lock().await.insert(id.clone(), conn_id);
 
-                info!("new connection sent to frontend");
+                // Always replace — the phone reconnecting means the old connection
+                // is intentionally superseded. Dropping the old write_tx here causes
+                // the old writer task's recv() to return None, ending that task cleanly.
+                self.writer_map.lock().await.insert(id.clone(), write_tx);
 
                 self.pending_pair.lock().await.remove(&id);
 
@@ -338,19 +355,32 @@ impl KdeConnectCore {
                     }
                 }
             }
-            TransportEvent::Disconnected { id } => {
-                // Only remove if the entry is already closed — if it's still live,
-                // a new connection has already replaced this one and we must not
-                // wipe it out with this stale disconnect event.
-                let already_replaced = {
-                    let guard = self.writer_map.lock().await;
-                    guard.get(&id).map(|tx| !tx.is_closed()).unwrap_or(false)
+            TransportEvent::Disconnected { id, conn_id } => {
+                // Check whether this disconnect belongs to the connection that is
+                // currently live for this device. If conn_id_map holds a *different*
+                // (higher) ID, a newer connection has already taken over and this
+                // event is stale — dropping it avoids wiping the live writer entry.
+                let is_current = {
+                    let guard = self.conn_id_map.lock().await;
+                    guard
+                        .get(&id)
+                        .map(|&current| current == conn_id)
+                        // No entry means we never registered this connection (e.g. a
+                        // Disconnected that raced ahead of its NewConnection). Treat as
+                        // current so cleanup still runs if the writer entry somehow exists.
+                        .unwrap_or(true)
                 };
-                if already_replaced {
-                    info!("[core] stale Disconnected for {} — new connection is live, ignoring", id);
+
+                if !is_current {
+                    info!(
+                        "[core] stale Disconnected for {} (conn_id {} != current) — ignoring",
+                        id, conn_id
+                    );
                     return;
                 }
+
                 self.writer_map.lock().await.remove(&id);
+                self.conn_id_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -403,8 +433,15 @@ impl KdeConnectCore {
                 }
             }
             AppEvent::SendFiles((device_id, files_list)) => {
-                info!("frontend trying to send files to device: {}", device_id);
-                if let Some(sender) = guard.get(&device_id) {
+                info!("frontend trying to sent files to device: {}", device_id);
+
+                // Clone the sender and drop the lock immediately — send_payload
+                // spawns a background task that can take seconds, and holding
+                // the writer_map lock that whole time would stall the event loop.
+                let sender = guard.get(&device_id).cloned();
+                drop(guard);
+
+                if let Some(sender) = sender {
                     debug!("sender available.");
                     let pkts = ShareRequest::share_files(files_list)
                         .await
@@ -416,14 +453,20 @@ impl KdeConnectCore {
                         );
                         let file = DeviceFile::open(path).await.expect("opening file");
                         let payload = DevicePayload::from(file);
-                        if let Some(_device) = self.device_manager.get_device(&device_id).await {
-                            self.plugin_registry
-                                .send_payload(packet, sender, payload.buf, payload.size)
-                                .await;
-                        };
+                        //
+                        // crate transfer adapter to get file transfer progress
+                        let transfer_adapter =
+                            TransferAdapter::new(payload.buf, payload.size, self.conn_tx.clone());
+
+                        self.plugin_registry
+                            .send_payload(packet, &sender, transfer_adapter, payload.size)
+                            .await;
                     }
-                    debug!("packet sent.");
+
+                    debug!("file transfer tasks spawned.");
                 }
+                // guard already dropped above — skip the implicit drop at end of match
+                return;
             }
             AppEvent::MprisAction((device_id, player_name, action)) => {
                 info!(
@@ -468,6 +511,7 @@ impl KdeConnectCore {
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);
                 if guard.remove(&device_id).is_some() {
+                    self.conn_id_map.lock().await.remove(&device_id);
                     let conn_event = ConnectionEvent::Disconnected(device_id);
                     let _ = self.conn_tx.send(conn_event.clone());
                     let _ = self.mpris_conn_tx.send(conn_event);

@@ -1,7 +1,10 @@
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -32,6 +35,12 @@ pub const DEFAULT_LISTEN_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
 pub const BROADCAST_ADDR: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, DEFAULT_LISTEN_PORT));
 
+/// Monotonically increasing counter — each accepted/initiated connection gets
+/// a unique ID so that `Disconnected` events can be matched to the exact
+/// connection that generated them, preventing stale disconnects from
+/// incorrectly wiping a newer live connection out of `writer_map`.
+static CONN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug)]
 pub enum TransportEvent {
     IncomingPacket {
@@ -44,10 +53,14 @@ pub enum TransportEvent {
         id: DeviceId,
         name: String,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
+        /// Unique ID for this connection instance.
+        conn_id: u64,
     },
     /// Emitted when the reader loop ends (peer closed / broken pipe).
-    /// Core removes the dead write_tx so the next NewConnection can replace it.
-    Disconnected { id: DeviceId },
+    /// `conn_id` must match the stored value for this device before core
+    /// removes the writer_map entry; a mismatch means a newer connection
+    /// has already replaced this one.
+    Disconnected { id: DeviceId, conn_id: u64 },
 }
 
 /// Enable TCP keepalive so the OS detects a dead connection within ~60s
@@ -124,6 +137,56 @@ impl TcpTransport {
                         Err(e) => {
                             warn!(peer = ?peer, "[tcp] failed to parse identity body: {}", e);
                             continue;
+
+                        // Phone connected to us, so we are the TLS server
+                        let mut stream = match TlsAcceptor::from(self.server_config.clone())
+                            .accept(stream)
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
+                                continue;
+                            }
+                        };
+
+                        // Send our identity again post-TLS for plugin negotiation
+                        let post_tls_identity = ProtocolPacket::new(
+                            PacketType::Identity,
+                            serde_json::to_value(&*self.identity).unwrap(),
+                        )
+                        .as_raw()
+                        .expect("Failed to serialize identity packet");
+
+                        let _ = stream.write_all(post_tls_identity.as_slice()).await;
+                        let _ = stream.flush().await;
+
+                        let (reader, writer) = split(stream);
+
+                        let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
+                        let write_rx = Arc::new(Mutex::new(write_rx));
+
+                        let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+                        // Do NOT .await the spawn — blocks the accept loop until connection closes.
+                        tokio::spawn(handle_connection(
+                            event_tx.clone(),
+                            reader,
+                            writer,
+                            write_rx,
+                            peer,
+                            DeviceId(id.clone()),
+                            conn_id,
+                        ));
+
+                        if let Err(e) = event_tx.send(TransportEvent::NewConnection {
+                            addr: peer,
+                            id: DeviceId(peer_identity.device_id),
+                            name: name.clone(),
+                            write_tx,
+                            conn_id,
+                        }) {
+                            error!(peer = ?peer, "[tcp] transport event channel closed: {}", e);
                         }
                     };
 
@@ -364,6 +427,8 @@ impl UdpTransport {
                         let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
                         let write_rx = Arc::new(Mutex::new(write_rx));
 
+                        let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
+
                         // Do NOT .await the spawn — blocks the UDP listen loop.
                         tokio::spawn(handle_connection(
                             event_tx.clone(),
@@ -372,6 +437,7 @@ impl UdpTransport {
                             write_rx,
                             peer,
                             id.clone(),
+                            conn_id,
                         ));
 
                         if let Err(e) = event_tx.send(TransportEvent::NewConnection {
@@ -379,6 +445,7 @@ impl UdpTransport {
                             id: DeviceId(peer_identity.device_id),
                             name: name.clone(),
                             write_tx,
+                            conn_id,
                         }) {
                             error!(peer = ?peer, device_id = ?id, "[udp] transport event channel closed: {}", e);
                         }
@@ -399,6 +466,7 @@ async fn handle_connection<R, W>(
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     peer: SocketAddr,
     id: DeviceId,
+    conn_id: u64,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -423,7 +491,9 @@ async fn handle_connection<R, W>(
                         continue;
                     }
 
-                    eprintln!("[reader] raw bytes from {}: {:?}", peer, trimmed);
+                    // we should not print raw packets since they might expose
+                    // sensitive data eg. from sms
+                    // eprintln!("[reader] raw bytes from {}: {:?}", peer, trimmed);
 
                     if let Err(e) = event_tx_reader.send(TransportEvent::IncomingPacket {
                         addr: peer,
@@ -442,8 +512,12 @@ async fn handle_connection<R, W>(
             buffer.clear();
         }
         warn!(peer = ?peer, "reader loop ended");
-        // Notify core the connection is dead so the writer_map entry can be cleared.
-        let _ = event_tx_reader.send(TransportEvent::Disconnected { id: id_reader });
+        // Notify core the connection is dead. conn_id lets core distinguish this
+        // disconnect from a stale event belonging to a previous connection.
+        let _ = event_tx_reader.send(TransportEvent::Disconnected {
+            id: id_reader,
+            conn_id,
+        });
     });
 
     // Writer task — drains the write channel and sends packets to the peer.

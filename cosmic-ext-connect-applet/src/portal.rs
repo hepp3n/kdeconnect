@@ -4,6 +4,19 @@ use ashpd::desktop::file_chooser::SelectedFiles;
 use percent_encoding::percent_decode;
 use tracing::{debug, error};
 
+/// Convert a `file://` URI to a plain filesystem path.
+/// `file:///home/user/photo.jpg` → `/home/user/photo.jpg`
+fn uri_to_path(uri: &str) -> String {
+    let decoded = percent_decode(uri.as_bytes())
+        .decode_utf8()
+        .unwrap_or_default()
+        .to_string();
+    decoded
+        .strip_prefix("file://")
+        .unwrap_or(&decoded)
+        .to_string()
+}
+
 pub async fn pick_files(
     title: impl Into<String>,
     multiple: bool,
@@ -24,16 +37,11 @@ pub async fn pick_files(
                 let paths: Vec<String> = files
                     .uris()
                     .iter()
-                    .map(|u| {
-                        percent_decode(u.as_str().as_bytes())
-                            .decode_utf8()
-                            .unwrap_or_default()
-                            .to_string()
-                    })
+                    .map(|u| uri_to_path(u.as_str()))
                     .filter(|s| !s.is_empty())
                     .collect();
 
-                debug!("Selected {} file(s)", paths.len());
+                debug!("Selected {} file(s): {:?}", paths.len(), paths);
                 return paths;
             }
             Err(e) => {
@@ -94,11 +102,7 @@ pub async fn pick_folder(title: impl Into<String>) -> Option<String> {
         Ok(request) => match request.response() {
             Ok(files) => {
                 if let Some(uri) = files.uris().first() {
-                    let path = percent_decode(uri.as_str().as_bytes())
-                        .decode_utf8()
-                        .unwrap_or_default()
-                        .to_string();
-
+                    let path = uri_to_path(uri.as_str());
                     if !path.is_empty() {
                         return Some(path);
                     }

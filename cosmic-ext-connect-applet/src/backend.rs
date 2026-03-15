@@ -1,10 +1,11 @@
 //! Backend interface using D-Bus client to communicate with kdeconnect-service
 
 use anyhow::Result;
+use cosmic::iced::Subscription;
 use futures::StreamExt;
 use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::{any::TypeId, collections::HashMap};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -62,6 +63,7 @@ pub async fn fetch_devices() -> Vec<Device> {
                         has_clipboard: true,
                         has_findmyphone: true,
                         has_share: true,
+                        share_progress: None,
                         has_sftp: false,
                         has_mpris: false,
                         has_remote_keyboard: false,
@@ -238,7 +240,10 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
                 return;
             }
 
-            debug!("Waiting for D-Bus client initialization (attempt {})", attempts);
+            debug!(
+                "Waiting for D-Bus client initialization (attempt {})",
+                attempts
+            );
             sleep(Duration::from_millis(100)).await;
         };
 
@@ -265,4 +270,27 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
         }
     })
     .boxed()
+}
+
+/// Create a file transfer subscription for updating progress state
+#[allow(dead_code)]
+pub fn filetransfer_subscription() -> Subscription<crate::messages::Message> {
+    struct Worker;
+
+    Subscription::run_with(TypeId::of::<Worker>(), |_| {
+        async_stream::stream! {
+            let Ok(client) = KdeConnectClient::new().await else {
+                return;
+            };
+
+            let mut progress_stream = client.transfer_progress_stream().await;
+
+            while let Some(progress) = progress_stream.next().await {
+                yield crate::messages::Message::UpdateTransferProgress(progress);
+            };
+
+
+            futures::pending!()
+        }
+    })
 }

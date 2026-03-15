@@ -25,7 +25,7 @@ pub enum CoreEvent {
         device: DeviceId,
         packet: ProtocolPacket,
         payload: Box<dyn AsyncRead + Sync + Send + Unpin>,
-        payload_size: i64,
+        payload_size: u64,
     },
     Error(String),
 }
@@ -59,4 +59,5 @@ pub enum ConnectionEvent {
     Mpris((DeviceId, Mpris)),
     SmsMessages(SmsMessages),
     ContactsReceived(HashMap<String, String>),
+    UpdateTransferProgress(u8),
 }
