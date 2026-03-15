@@ -300,21 +300,27 @@ impl KdeConnectCore {
                                 && let Some(device) = self.device_manager.get_device(&id).await
                             {
                                 if !pair_body.pair {
-                                    // Phone unpaired from us — update state and clean up.
-                                    // Do NOT auto-send pair:true back; let the user
-                                    // re-initiate pairing explicitly from the settings app.
-                                    info!("[core] Phone sent pair:false — marking {} as unpaired", id);
+                                    // Phone sent pair:false — either it's unpairing from us, or
+                                    // it's a fresh device announcing it doesn't know us yet.
+                                    // Only clean up and notify if we considered it paired; fresh
+                                    // discovery announcements should be ignored silently so the
+                                    // user can still initiate pairing normally from the settings app.
                                     self.pending_pair.lock().await.remove(&id);
-                                    self.device_manager
-                                        .update_pair_state(&id, crate::device::PairState::NotPaired)
-                                        .await;
-                                    cleanup_device_data(&id.0).await;
-                                    let conn_event = ConnectionEvent::PairStateChanged((
-                                        id.clone(),
-                                        crate::device::PairState::NotPaired,
-                                    ));
-                                    let _ = self.conn_tx.send(conn_event.clone());
-                                    let _ = self.mpris_conn_tx.send(conn_event);
+                                    if device.pair_state == crate::device::PairState::Paired {
+                                        info!("[core] Phone unpairing from us — cleaning up {}", id);
+                                        self.device_manager
+                                            .update_pair_state(&id, crate::device::PairState::NotPaired)
+                                            .await;
+                                        cleanup_device_data(&id.0).await;
+                                        let conn_event = ConnectionEvent::PairStateChanged((
+                                            id.clone(),
+                                            crate::device::PairState::NotPaired,
+                                        ));
+                                        let _ = self.conn_tx.send(conn_event.clone());
+                                        let _ = self.mpris_conn_tx.send(conn_event);
+                                    } else {
+                                        info!("[core] pair:false from {} — device not paired, ignoring", id);
+                                    }
                                 } else {
                                     let _ = self
                                         .pairing
