@@ -11,7 +11,7 @@ use std::{
 use rustls::pki_types::ServerName;
 use socket2::TcpKeepalive;
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader, split},
+    io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt, BufReader, split},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
@@ -112,16 +112,35 @@ impl TcpTransport {
                     info!(peer = ?peer, "[tcp] new connection");
                     apply_keepalive(&stream);
 
-                    // Step 1: read phone's pre-TLS identity
+                    // Step 1: read phone's pre-TLS identity.
+                    // Read byte-by-byte to avoid BufReader consuming TLS ClientHello
+                    // bytes into its internal buffer, which would cause "tls handshake eof".
                     debug!(peer = ?peer, "[tcp] step 1: reading pre-TLS identity");
-                    let mut buffer = String::new();
-                    {
-                        let mut reader = BufReader::new(&mut stream);
-                        if let Err(e) = reader.read_line(&mut buffer).await {
-                            warn!(peer = ?peer, "[tcp] failed to read identity line: {}", e);
-                            continue;
+                    let mut buffer = {
+                        let mut raw = Vec::new();
+                        let mut byte = [0u8; 1];
+                        loop {
+                            match stream.read(&mut byte).await {
+                                Ok(0) => {
+                                    warn!(peer = ?peer, "[tcp] EOF reading identity");
+                                    break;
+                                }
+                                Ok(_) => {
+                                    raw.push(byte[0]);
+                                    if byte[0] == b'\n' { break; }
+                                    if raw.len() > 65536 {
+                                        warn!(peer = ?peer, "[tcp] identity line too long");
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(peer = ?peer, "[tcp] failed to read identity line: {}", e);
+                                    break;
+                                }
+                            }
                         }
-                    }
+                        String::from_utf8_lossy(&raw).into_owned()
+                    };
                     debug!(peer = ?peer, "[tcp] step 1: read {} bytes", buffer.len());
 
                     let identity = identity.clone();
