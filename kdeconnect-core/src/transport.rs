@@ -22,6 +22,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     GLOBAL_CONFIG,
     device::DeviceId,
+    plugin_config,
     protocol::{Identity, PacketType, ProtocolPacket},
 };
 
@@ -191,11 +192,14 @@ impl TcpTransport {
                     };
                     info!(peer = ?peer, device_id = ?id, "[tcp] step 3: TLS established");
 
-                    // Step 4: send our identity post-TLS for plugin negotiation
+                    // Step 4: send our identity post-TLS for plugin negotiation.
+                    // Filter capabilities based on per-device disabled plugins so
+                    // the phone immediately knows which packet types to stop sending.
                     debug!(peer = ?peer, "[tcp] step 4: sending post-TLS identity");
+                    let filtered = filtered_identity_for_device(&id).await;
                     let post_tls_identity = ProtocolPacket::new(
                         PacketType::Identity,
-                        serde_json::to_value(&*self.identity).unwrap(),
+                        serde_json::to_value(&filtered).unwrap(),
                     )
                     .as_raw()
                     .expect("Failed to serialize identity packet");
@@ -379,9 +383,12 @@ impl UdpTransport {
                         info!(peer = ?peer, device_id = ?id, device_name = name, "[udp] Established TLS connection");
 
                         // Send identity post-TLS — phone uses this for plugin negotiation.
+                        // Filter capabilities based on per-device disabled plugins so
+                        // the phone immediately knows which packet types to stop sending.
+                        let filtered = filtered_identity_for_device(&id.0).await;
                         let post_tls_identity = ProtocolPacket::new(
                             PacketType::Identity,
-                            serde_json::to_value(&*self.identity).unwrap(),
+                            serde_json::to_value(&filtered).unwrap(),
                         )
                         .as_raw()
                         .expect("Failed to serialize identity packet");
@@ -504,6 +511,64 @@ async fn handle_connection<R, W>(
         let _ = writer.shutdown().await;
         info!(peer = ?peer, "writer task ended");
     });
+}
+
+/// Build a filtered identity for a specific device, removing capabilities
+/// for plugins that have been disabled for that device. Called at handshake
+/// time so the phone receives accurate capabilities on every connection.
+async fn filtered_identity_for_device(device_id: &str) -> Identity {
+    let base = &GLOBAL_CONFIG.get().unwrap().identity;
+    let disabled = plugin_config::load_disabled_plugins(device_id).await;
+
+    if disabled.is_empty() {
+        return base.clone();
+    }
+
+    // Map plugin IDs to the capability strings they own.
+    // (incoming_caps, outgoing_caps)
+    let cap_map: &[(&str, &[&str], &[&str])] = &[
+        ("battery",             &["kdeconnect.battery"],                                                     &["kdeconnect.battery.request"]),
+        ("clipboard",           &["kdeconnect.clipboard", "kdeconnect.clipboard.connect"],                   &["kdeconnect.clipboard"]),
+        ("connectivity_report", &["kdeconnect.connectivity_report"],                                         &[]),
+        ("contacts",            &["kdeconnect.contacts.response_uids_timestamps",
+                                   "kdeconnect.contacts.response_vcards"],                                   &["kdeconnect.contacts.request_all_uids_timestamps",
+                                                                                                              "kdeconnect.contacts.request_vcards_by_uid"]),
+        ("findmyphone",         &[],                                                                         &["kdeconnect.findmyphone.request"]),
+        ("mpris",               &["kdeconnect.mpris"],                                                       &["kdeconnect.mpris.request"]),
+        ("notification",        &["kdeconnect.notification"],                                                 &["kdeconnect.notification.request"]),
+        ("ping",                &["kdeconnect.ping"],                                                         &["kdeconnect.ping"]),
+        ("runcommand",          &[],                                                                         &["kdeconnect.runcommand.request"]),
+        ("share",               &["kdeconnect.share.request"],                                               &["kdeconnect.share.request", "kdeconnect.share.request.update"]),
+        ("sms",                 &["kdeconnect.sms.messages", "kdeconnect.sms.attachment_file"],              &["kdeconnect.sms.request",
+                                                                                                              "kdeconnect.sms.request_conversations",
+                                                                                                              "kdeconnect.sms.request_conversation",
+                                                                                                              "kdeconnect.sms.request_attachment"]),
+    ];
+
+    let mut remove_inc: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut remove_out: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (plugin_id, inc, out) in cap_map {
+        if disabled.contains(*plugin_id) {
+            remove_inc.extend(inc.iter().copied());
+            remove_out.extend(out.iter().copied());
+        }
+    }
+
+    Identity {
+        device_id: base.device_id.clone(),
+        device_name: base.device_name.clone(),
+        device_type: base.device_type,
+        protocol_version: base.protocol_version,
+        tcp_port: base.tcp_port,
+        incoming_capabilities: base.incoming_capabilities.iter()
+            .filter(|c| !remove_inc.contains(c.as_str()))
+            .cloned()
+            .collect(),
+        outgoing_capabilities: base.outgoing_capabilities.iter()
+            .filter(|c| !remove_out.contains(c.as_str()))
+            .cloned()
+            .collect(),
+    }
 }
 
 pub(crate) async fn prepare_listener_for_payload() -> Result<TcpListener, String> {
