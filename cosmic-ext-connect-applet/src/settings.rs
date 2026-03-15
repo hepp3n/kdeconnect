@@ -348,7 +348,27 @@ impl Application for SettingsApp {
 
             // A D-Bus service event arrived — refresh device list immediately
             // so paired/connected state changes appear without waiting for polling.
-            Message::ServiceEvent(_event) => {
+            Message::ServiceEvent(event) => {
+                // For pair-state changes, clear the selection immediately if the
+                // currently selected device is the one that was unpaired — this
+                // prevents the right panel from showing stale plugin state while
+                // the async fetch is in flight.
+                match &event {
+                    kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
+                        if self.selected_device.as_deref() == Some(id.as_str()) {
+                            // Keep selection — device is just offline, not unpaired.
+                        }
+                    }
+                    kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, device) => {
+                        if !device.is_paired
+                            && self.selected_device.as_deref() == Some(id.as_str())
+                        {
+                            self.selected_device = None;
+                            self.plugin_states.remove(id);
+                        }
+                    }
+                    _ => {}
+                }
                 return Task::perform(
                     async { backend::fetch_devices().await },
                     |devices| Action::App(Message::DevicesLoaded(devices)),

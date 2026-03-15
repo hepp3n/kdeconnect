@@ -149,14 +149,22 @@ pub async fn browse_device_filesystem(_device_id: String) -> Result<()> {
     Ok(())
 }
 
-/// Accept a pairing request
+/// Accept an incoming pairing request from a device.
 pub async fn accept_pairing(device_id: String) -> Result<()> {
-    pair_device(device_id).await
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.accept_pairing(&device_id).await
 }
 
-/// Reject a pairing request
+/// Reject an incoming pairing request from a device.
 pub async fn reject_pairing(device_id: String) -> Result<()> {
-    unpair_device(device_id).await
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.reject_pairing(&device_id).await
 }
 
 /// Ring a device (findmyphone)

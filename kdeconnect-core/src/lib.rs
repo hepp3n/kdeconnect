@@ -322,7 +322,9 @@ impl KdeConnectCore {
                                         info!("[core] pair:false from {} — device not paired, ignoring", id);
                                     }
                                 } else {
-                                    let _ = self
+                                    let device_name = device.name.clone();
+                                    let device_id_clone = id.clone();
+                                    let is_new_request = self
                                         .pairing
                                         .handle_pair_request(
                                             device.device_id,
@@ -330,7 +332,16 @@ impl KdeConnectCore {
                                             device.address,
                                             pkt,
                                         )
-                                        .await;
+                                        .await
+                                        .unwrap_or(false);
+                                    if is_new_request {
+                                        let ev = ConnectionEvent::PairingRequested((
+                                            device_id_clone,
+                                            device_name,
+                                        ));
+                                        let _ = self.conn_tx.send(ev.clone());
+                                        let _ = self.mpris_conn_tx.send(ev);
+                                    }
                                 }
                             }
                         } else {
@@ -520,6 +531,16 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
                 return;
+            }
+            AppEvent::AcceptPairing(device_id) => {
+                info!("User accepted pairing from {}", device_id);
+                self.device_manager.set_paired(&device_id, true).await;
+            }
+            AppEvent::RejectPairing(device_id) => {
+                info!("User rejected pairing from {}", device_id);
+                self.device_manager
+                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                    .await;
             }
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);

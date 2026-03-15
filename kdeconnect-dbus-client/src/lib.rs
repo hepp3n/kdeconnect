@@ -33,6 +33,7 @@ pub enum ServiceEvent {
     DeviceDisconnected(String),
     SmsMessagesReceived(String),               // JSON string
     ContactsReceived(HashMap<String, String>), // phone -> name
+    PairingRequested(String, String),          // device_id, device_name
 }
 
 /// D-Bus proxy for daemon interface
@@ -57,6 +58,11 @@ trait Daemon {
     ) -> zbus::Result<()>;
     async fn get_disabled_plugins(&self, device_id: &str) -> zbus::Result<Vec<String>>;
     async fn broadcast_identity(&self) -> zbus::Result<()>;
+    async fn accept_pairing(&self, device_id: &str) -> zbus::Result<()>;
+    async fn reject_pairing(&self, device_id: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn pairing_requested(&self, device_id: String, device_name: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn update_transfer_progress(&self, progress: u8) -> zbus::Result<()>;
@@ -177,7 +183,14 @@ impl KdeConnectClient {
             .await?)
     }
 
-    /// Get the list of disabled plugin IDs for a device
+    pub async fn accept_pairing(&self, device_id: &str) -> Result<()> {
+        Ok(self.daemon_proxy.accept_pairing(device_id).await?)
+    }
+
+    pub async fn reject_pairing(&self, device_id: &str) -> Result<()> {
+        Ok(self.daemon_proxy.reject_pairing(device_id).await?)
+    }
+
     pub async fn get_disabled_plugins(&self, device_id: &str) -> Result<Vec<String>> {
         Ok(self.daemon_proxy.get_disabled_plugins(device_id).await?)
     }
@@ -287,12 +300,26 @@ impl KdeConnectClient {
                 ServiceEvent::ContactsReceived(map)
             });
 
+        let pairing_req = self
+            .daemon_proxy
+            .receive_pairing_requested()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::PairingRequested(
+                    args.device_id.clone(),
+                    args.device_name.clone(),
+                )
+            });
+
         Box::pin(select_all(vec![
             Box::pin(connected) as futures::stream::BoxStream<'static, ServiceEvent>,
             Box::pin(paired),
             Box::pin(disconnected),
             Box::pin(sms),
             Box::pin(contacts),
+            Box::pin(pairing_req),
         ]))
     }
 

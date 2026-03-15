@@ -22,6 +22,8 @@ pub struct KdeConnectApplet {
     popup: Option<SurfaceId>,
     devices: HashMap<String, Device>,
     expanded_device: Option<String>,
+    /// Pending pairing requests: device_id → device_name
+    pairing_requests: HashMap<String, String>,
 }
 
 impl cosmic::Application for KdeConnectApplet {
@@ -49,6 +51,7 @@ impl cosmic::Application for KdeConnectApplet {
             popup: None,
             devices: HashMap::new(),
             expanded_device: None,
+            pairing_requests: HashMap::new(),
         };
 
         (app, Task::none())
@@ -218,6 +221,7 @@ impl cosmic::Application for KdeConnectApplet {
                 );
             }
             Message::AcceptPairing(ref device_id) => {
+                self.pairing_requests.remove(device_id);
                 let id = device_id.clone();
                 return Task::perform(
                     async move {
@@ -227,6 +231,7 @@ impl cosmic::Application for KdeConnectApplet {
                 );
             }
             Message::RejectPairing(ref device_id) => {
+                self.pairing_requests.remove(device_id);
                 let id = device_id.clone();
                 return Task::perform(
                     async move {
@@ -235,11 +240,27 @@ impl cosmic::Application for KdeConnectApplet {
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
-            Message::PairingRequestReceived(device_id, device_name, device_type) => {
-                info!(
-                    "Pairing request: {} ({}) [{}]",
-                    device_name, device_id, device_type
-                );
+            Message::PairingRequestReceived(device_id, device_name, _device_type) => {
+                info!("Pairing request received from {} ({})", device_name, device_id);
+                self.pairing_requests.insert(device_id, device_name);
+                // Ensure popup is open so the user sees Accept/Decline immediately.
+                if self.popup.is_none() {
+                    let new_id = SurfaceId::unique();
+                    self.popup.replace(new_id);
+                    let mut popup_settings = self.core.applet.get_popup_settings(
+                        self.core.main_window_id().unwrap(),
+                        new_id,
+                        None,
+                        None,
+                        None,
+                    );
+                    popup_settings.positioner.size_limits = Limits::NONE
+                        .max_width(400.0)
+                        .min_width(300.0)
+                        .min_height(200.0)
+                        .max_height(600.0);
+                    return get_popup(popup_settings);
+                }
             }
             Message::MprisReceived(device_id, mpris_data) => {
                 debug!("MPRIS from {}: {:?}", device_id, mpris_data);
@@ -290,7 +311,7 @@ impl cosmic::Application for KdeConnectApplet {
             &self.core,
             &self.devices,
             self.expanded_device.as_ref(),
-            None,
+            Some(&self.pairing_requests),
         )
     }
 
@@ -299,10 +320,32 @@ impl cosmic::Application for KdeConnectApplet {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
+        use futures::StreamExt as _;
         Subscription::batch(vec![
             cosmic::iced::time::every(std::time::Duration::from_secs(10))
                 .map(|_| Message::RefreshDevices),
             backend::filetransfer_subscription(),
+            // D-Bus event stream — delivers pairing requests and device state
+            // changes in real time without waiting for the 10s poll.
+            Subscription::run(|| {
+                async_stream::stream! {
+                    let mut stream = backend::event_stream().await;
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            kdeconnect_dbus_client::ServiceEvent::PairingRequested(id, name) => {
+                                yield Message::PairingRequestReceived(id, name, "phone".to_string());
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::DeviceConnected(id, _)
+                            | kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, _)
+                            | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
+                                let _ = id;
+                                yield Message::RefreshDevices;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }),
         ])
     }
 }

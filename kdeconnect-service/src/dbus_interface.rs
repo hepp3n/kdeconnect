@@ -241,6 +241,32 @@ impl DaemonInterface {
         Ok(())
     }
 
+    /// Accept an incoming pairing request from a device.
+    async fn accept_pairing(&self, device_id: String) -> zbus::fdo::Result<()> {
+        info!("D-Bus: AcceptPairing called for {}", device_id);
+        self.event_sender
+            .send(AppEvent::AcceptPairing(kdeconnect_core::device::DeviceId(device_id)))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Reject an incoming pairing request from a device.
+    async fn reject_pairing(&self, device_id: String) -> zbus::fdo::Result<()> {
+        info!("D-Bus: RejectPairing called for {}", device_id);
+        self.event_sender
+            .send(AppEvent::RejectPairing(kdeconnect_core::device::DeviceId(device_id)))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Signal: A device is requesting to pair. Applet shows Accept/Decline UI.
+    #[zbus(signal)]
+    async fn pairing_requested(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        device_name: String,
+    ) -> zbus::Result<()>;
+
     /// Signal: Device connected
     #[zbus(signal)]
     async fn update_transfer_progress(
@@ -753,6 +779,24 @@ impl KdeConnectService {
                     .await?;
 
                 debug!("UpdateTransferProgress D-Bus signal emitted");
+            }
+            ConnectionEvent::PairingRequested((device_id, device_name)) => {
+                info!("Pairing requested by {} ({})", device_name, device_id.0);
+
+                // Emit D-Bus signal so the applet can show Accept/Decline UI.
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+                DaemonInterface::pairing_requested(
+                    iface_ref.signal_emitter(),
+                    device_id.0.clone(),
+                    device_name.clone(),
+                )
+                .await?;
+
+                // The D-Bus signal is the primary mechanism — the applet
+                // subscription delivers it immediately and opens the popup.
             }
             _ => {
                 debug!("Unhandled event type received");
