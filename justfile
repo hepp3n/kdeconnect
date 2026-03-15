@@ -50,14 +50,27 @@ install-autostart:
     install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
 
 # Install systemd user service (optional — enables journalctl logging and systemctl control)
-install-systemd:
+install-systemd-service:
     install -Dm644 kdeconnect-service/kdeconnect.service {{XDG_CONFIG}}/systemd/user/kdeconnect.service
     systemctl --user daemon-reload
-    @echo "Run 'just enable-service' to start and enable on login"
+
+# Install with systemd service instead of dbus service
+install-systemd: install-bins install-applet-desktop install-systemd-service
+    @echo ""
+    @echo "✓ KDE Connect installed successfully!"
+    @echo ""
+    @echo "To enable and start systemd service:"
+    @echo " just enable-service"
+
 
 # Enable and start the systemd service
 enable-service:
     systemctl --user enable --now kdeconnect.service
+    @echo "Systemd service now enabled and started"
+    @echo ""
+    @echo "To add the applet:"
+    @echo "  COSMIC Settings → Desktop → Panel → Configure Panel Applets → Add KDE Connect"
+
 
 # Default install — uses D-Bus activation, no systemd required
 install: install-bins install-applet-desktop install-dbus-service install-autostart
@@ -69,9 +82,6 @@ install: install-bins install-applet-desktop install-dbus-service install-autost
     @echo ""
     @echo "To add the applet:"
     @echo "  COSMIC Settings → Desktop → Panel → Configure Panel Applets → Add KDE Connect"
-    @echo ""
-    @echo "Optional — systemd integration:"
-    @echo "  just install-systemd && just enable-service"
 
 # Systemd helpers
 status:
@@ -89,6 +99,7 @@ restart:
 clean:
     cargo clean
 
+# Uninstall
 uninstall:
     -systemctl --user stop kdeconnect.service 2>/dev/null || true
     -systemctl --user disable kdeconnect.service 2>/dev/null || true
@@ -96,8 +107,10 @@ uninstall:
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-applet
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-settings
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-sms
+    rm -vf {{XDG_CONFIG}}/kdeconnect/*
     rm -vf {{XDG_CONFIG}}/systemd/user/kdeconnect.service
     rm -vf {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
+    rm -vf {{PREFIX}}/share/kdeconnect/*
     rm -vf {{PREFIX}}/share/applications/{{APPID}}.desktop
     rm -vf {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     rm -vf {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
