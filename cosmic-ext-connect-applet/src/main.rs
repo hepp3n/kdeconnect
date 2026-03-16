@@ -242,7 +242,24 @@ impl cosmic::Application for KdeConnectApplet {
             }
             Message::PairingRequestReceived(device_id, device_name, _device_type) => {
                 info!("Pairing request received from {} ({})", device_name, device_id);
-                self.pairing_requests.insert(device_id, device_name);
+                self.pairing_requests.insert(device_id, device_name.clone());
+
+                // Show a system notification so the user is alerted even if they
+                // are not looking at the panel. COSMIC's daemon doesn't support
+                // action buttons so we just point them to the applet.
+                let notif_body = format!(
+                    "'{}' wants to pair with this device. Click the KDE Connect applet to accept or decline.",
+                    device_name
+                );
+                tokio::task::spawn_blocking(move || {
+                    let _ = notify_rust::Notification::new()
+                        .appname("KDE Connect")
+                        .summary("Pairing Request")
+                        .body(&notif_body)
+                        .icon("network-wireless-symbolic")
+                        .show();
+                });
+
                 // Ensure popup is open so the user sees Accept/Decline immediately.
                 if self.popup.is_none() {
                     let new_id = SurfaceId::unique();

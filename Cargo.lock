@@ -996,6 +996,7 @@ dependencies = [
  "kdeconnect-dbus-client",
  "lazy_static",
  "libcosmic",
+ "notify-rust",
  "percent-encoding",
  "serde_json",
  "tokio",
