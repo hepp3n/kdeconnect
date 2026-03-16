@@ -6,6 +6,7 @@ use cosmic::{
     iced_futures::futures::StreamExt,
     widget,
 };
+use cosmic::iced::widget::scrollable;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
@@ -236,10 +237,27 @@ impl Application for SmsWindow {
                 self.messages.sort_by_key(|m| m.date);
                 self.message_input.clear();
 
-                return cosmic::task::future(async move {
-                    dbus::send_sms(&device_id, &phone, &text).await;
-                    Action::App(SmsMessage::RefreshThread)
-                });
+                // Update the conversation preview and timestamp so it sorts to
+                // the top of the list immediately without waiting for a server refresh.
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+                    conv.last_message = text.clone();
+                    conv.timestamp = now;
+                }
+                self.conversations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+                // Scroll the conversation list to the top so the moved item is visible.
+                let scroll_task = scrollable::scroll_to(
+                    views::CONVERSATIONS_SCROLLABLE_ID.clone(),
+                    scrollable::AbsoluteOffset { x: Some(0.0), y: Some(0.0) },
+                );
+
+                return Task::batch(vec![
+                    scroll_task.map(|_: cosmic::widget::Id| Action::App(SmsMessage::RefreshThread)),
+                    cosmic::task::future(async move {
+                        dbus::send_sms(&device_id, &phone, &text).await;
+                        Action::App(SmsMessage::RefreshThread)
+                    }),
+                ]);
             }
             SmsMessage::RefreshThread => {}
             SmsMessage::ProtocolEventReceived(event) => {

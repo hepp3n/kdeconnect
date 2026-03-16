@@ -8,6 +8,10 @@ use super::app::{SmsMessage, SmsWindow};
 use super::models::Conversation;
 use super::utils::{format_timestamp, normalize_phone_number, phone_numbers_match};
 
+/// Stable ID for the conversations list scrollable, used to scroll it programmatically.
+pub static CONVERSATIONS_SCROLLABLE_ID: std::sync::LazyLock<cosmic::widget::Id> =
+    std::sync::LazyLock::new(cosmic::widget::Id::unique);
+
 /// Main view - conversations list + thread view
 pub fn view_main(app: &SmsWindow) -> Element<'_, SmsMessage> {
     let spacing = cosmic::theme::active().cosmic().spacing;
