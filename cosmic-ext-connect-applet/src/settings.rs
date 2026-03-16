@@ -112,7 +112,6 @@ pub enum Message {
     SelectDevice(String),
     TogglePlugin(String, bool),
     Refresh,
-    BroadcastAndRefresh,
     PairDevice(String),
     UnpairDevice(String),
     /// Fired by the D-Bus event subscription whenever a device connects or pairs.
@@ -219,8 +218,11 @@ impl Application for SettingsApp {
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
         match message {
             Message::DevicesLoaded(devices) => {
-                if let Some(ref sel) = self.selected_device {
-                    if !devices.iter().any(|d| &d.id == sel) {
+                if let Some(sel) = self.selected_device.clone() {
+                    // Clear selection if the device is gone or no longer paired.
+                    let still_paired = devices.iter().any(|d| d.id == sel && d.is_paired);
+                    if !still_paired {
+                        self.plugin_states.remove(&sel);
                         self.selected_device = None;
                     }
                 }
@@ -257,25 +259,10 @@ impl Application for SettingsApp {
                 self.active_tab = tab;
                 if trigger_broadcast {
                     return Task::perform(
-                        async {
-                            let _ = backend::broadcast_identity().await;
-                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                            backend::fetch_devices().await
-                        },
+                        async { backend::fetch_devices().await },
                         |devices| Action::App(Message::DevicesLoaded(devices)),
                     );
                 }
-            }
-
-            Message::BroadcastAndRefresh => {
-                return Task::perform(
-                    async {
-                        let _ = backend::broadcast_identity().await;
-                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                        backend::fetch_devices().await
-                    },
-                    |devices| Action::App(Message::DevicesLoaded(devices)),
-                );
             }
 
             Message::SelectDevice(id) => {
@@ -432,14 +419,6 @@ impl SettingsApp {
             .push(paired_btn)
             .push(available_btn)
             .push(widget::Space::new().width(Length::Fill))
-            .push(
-                widget::button::icon(widget::icon::from_name("view-refresh-symbolic"))
-                    .on_press(if self.active_tab == Tab::AvailableDevices {
-                        Message::BroadcastAndRefresh
-                    } else {
-                        Message::Refresh
-                    }),
-            )
             .into()
     }
 
