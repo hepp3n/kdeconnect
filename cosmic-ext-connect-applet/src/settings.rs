@@ -41,7 +41,7 @@ const IMPLEMENTED_PLUGINS: &[PluginInfo] = &[
     PluginInfo {
         id: "contacts",
         name: "Contacts",
-        description: "Sync phone contacts so SMS messages show names instead of numbers.",
+        description: "Sync phone contacts so SMS messages show names instead of numbers. Note: Cached Contacts not effected if disabled.",
         icon: "x-office-address-book-symbolic",
     },
     PluginInfo {
@@ -478,19 +478,20 @@ impl SettingsApp {
                     )
                     .push(widget::icon::from_name(status_icon).size(14));
 
-                let btn = if is_selected {
-                    widget::button::custom(item)
-                        .class(cosmic::theme::Button::Suggested)
-                        .on_press(Message::SelectDevice(device_id))
-                        .width(Length::Fill)
-                } else {
-                    widget::button::custom(item)
-                        .class(cosmic::theme::Button::Text)
-                        .on_press(Message::SelectDevice(device_id))
-                        .width(Length::Fill)
-                };
+                let btn = widget::button::custom(item)
+                    .class(cosmic::theme::Button::Text)
+                    .on_press(Message::SelectDevice(device_id))
+                    .width(Length::Fill);
 
-                col = col.push(btn);
+                if is_selected {
+                    col = col.push(
+                        widget::container(btn)
+                            .class(cosmic::theme::Container::Primary)
+                            .width(Length::Fill),
+                    );
+                } else {
+                    col = col.push(btn);
+                }
             }
         }
 
