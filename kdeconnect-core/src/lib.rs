@@ -534,10 +534,26 @@ impl KdeConnectCore {
             }
             AppEvent::AcceptPairing(device_id) => {
                 info!("User accepted pairing from {}", device_id);
+                // Send pair:true to the phone — it is waiting for our response.
+                if let Some(sender) = guard.get(&device_id) {
+                    let pair = Pair::new(true);
+                    let value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                    let _ = sender.send(pkt);
+                    info!("[core] sent pair:true to {} on accept", device_id);
+                }
                 self.device_manager.set_paired(&device_id, true).await;
             }
             AppEvent::RejectPairing(device_id) => {
                 info!("User rejected pairing from {}", device_id);
+                // Send pair:false to the phone so it knows we declined.
+                if let Some(sender) = guard.get(&device_id) {
+                    let pair = Pair::new(false);
+                    let value = serde_json::to_value(pair).expect("fail serializing pair");
+                    let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                    let _ = sender.send(pkt);
+                    info!("[core] sent pair:false to {} on reject", device_id);
+                }
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::NotPaired)
                     .await;
