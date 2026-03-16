@@ -116,7 +116,7 @@ impl TcpTransport {
                     // Read byte-by-byte to avoid BufReader consuming TLS ClientHello
                     // bytes into its internal buffer, which would cause "tls handshake eof".
                     debug!(peer = ?peer, "[tcp] step 1: reading pre-TLS identity");
-                    let mut buffer = {
+                    let buffer = {
                         let mut raw = Vec::new();
                         let mut byte = [0u8; 1];
                         loop {
