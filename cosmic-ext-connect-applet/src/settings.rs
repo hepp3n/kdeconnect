@@ -1,3 +1,4 @@
+use cosmic::widget::button::Catalog;
 use cosmic::{
     Action, Application, ApplicationExt, Element, Task,
     app::Core,
@@ -41,7 +42,7 @@ const IMPLEMENTED_PLUGINS: &[PluginInfo] = &[
     PluginInfo {
         id: "contacts",
         name: "Contacts",
-        description: "Sync phone contacts so SMS messages show names instead of numbers. Note: Cached Contacts not effected if disabled.",
+        description: "Sync phone contacts so SMS messages show names instead of numbers.",
         icon: "x-office-address-book-symbolic",
     },
     PluginInfo {
@@ -479,7 +480,28 @@ impl SettingsApp {
                     .push(widget::icon::from_name(status_icon).size(14));
 
                 let btn = widget::button::custom(item)
-                    .class(cosmic::theme::Button::Text)
+                    .class(cosmic::theme::Button::Custom {
+                        active: Box::new(|focused, theme| {
+                            let mut s = theme.active(focused, false, &cosmic::theme::Button::Text);
+                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s
+                        }),
+                        hovered: Box::new(|focused, theme| {
+                            let mut s = theme.hovered(focused, false, &cosmic::theme::Button::Text);
+                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s
+                        }),
+                        disabled: Box::new(|theme| {
+                            let mut s = theme.disabled(&cosmic::theme::Button::Text);
+                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s
+                        }),
+                        pressed: Box::new(|focused, theme| {
+                            let mut s = theme.pressed(focused, false, &cosmic::theme::Button::Text);
+                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s
+                        }),
+                    })
                     .on_press(Message::SelectDevice(device_id))
                     .width(Length::Fill);
 
