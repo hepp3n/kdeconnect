@@ -439,21 +439,49 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Run until SIGTERM or SIGINT is received (e.g. session logout or manual stop).
+    /// Run until session shutdown, SIGTERM, or SIGINT
     pub async fn run(&self) -> Result<()> {
         use tokio::signal::unix::{signal, SignalKind};
+        use zbus::Connection;
 
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
+        // Watch logind for session logout — works regardless of how we were launched
+        let shutdown_fut = async {
+            if let Ok(system_bus) = Connection::system().await {
+                if let Ok(mut stream) = system_bus
+                    .subscribe_signal(
+                        "org.freedesktop.login1",
+                        "/org/freedesktop/login1",
+                        "org.freedesktop.login1.Manager",
+                        "PrepareForShutdown",
+                    )
+                    .await
+                {
+                    use futures_util::StreamExt;
+                    while let Some(msg) = stream.next().await {
+                        // Signal body is a single bool: true = shutting down
+                        if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
+                            info!("PrepareForShutdown received — shutting down");
+                            return;
+                        }
+                    }
+                }
+            }
+            std::future::pending::<()>().await
+        };
+
         tokio::select! {
-            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
-            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
+            _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()   => info!("SIGINT received — shutting down"),
+            _ = shutdown_fut    => {},
         }
 
         Ok(())
     }
 }
+
 /// Tracks devices that have already received an initial SMS sync this session.
 type SmsSyncedSet = Arc<Mutex<std::collections::HashSet<String>>>;
 
