@@ -439,10 +439,18 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Block until the process is killed. All work runs in spawned tasks started
-    /// by `new()`; this just keeps the service process alive.
+    /// Run until SIGTERM or SIGINT is received (e.g. session logout or manual stop).
     pub async fn run(&self) -> Result<()> {
-        std::future::pending::<()>().await;
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint  = signal(SignalKind::interrupt())?;
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
+        }
+
         Ok(())
     }
 }
