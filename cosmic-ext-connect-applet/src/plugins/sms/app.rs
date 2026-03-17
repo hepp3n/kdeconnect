@@ -6,6 +6,7 @@ use cosmic::{
     iced_futures::futures::StreamExt,
     widget,
 };
+use cosmic::iced::widget::scrollable;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
@@ -135,6 +136,9 @@ impl Application for SmsWindow {
                     debug!("SMS subscribing to events");
                     let mut event_stream = client.listen_for_events().await;
 
+                    // Subscribe FIRST, then request — contacts response is a
+                    // fire-and-forget D-Bus signal; if we request before subscribing
+                    // the signal arrives while nobody is listening and is lost.
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     dbus::fetch_conversations(&device_id).await;
                     dbus::fetch_contacts(&device_id).await;
@@ -233,10 +237,27 @@ impl Application for SmsWindow {
                 self.messages.sort_by_key(|m| m.date);
                 self.message_input.clear();
 
-                return cosmic::task::future(async move {
-                    dbus::send_sms(&device_id, &phone, &text).await;
-                    Action::App(SmsMessage::RefreshThread)
-                });
+                // Update the conversation preview and timestamp so it sorts to
+                // the top of the list immediately without waiting for a server refresh.
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+                    conv.last_message = text.clone();
+                    conv.timestamp = now;
+                }
+                self.conversations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+                // Scroll the conversation list to the top so the moved item is visible.
+                let scroll_task = scrollable::scroll_to(
+                    views::CONVERSATIONS_SCROLLABLE_ID.clone(),
+                    scrollable::AbsoluteOffset { x: Some(0.0), y: Some(0.0) },
+                );
+
+                return Task::batch(vec![
+                    scroll_task.map(|_: cosmic::widget::Id| Action::App(SmsMessage::RefreshThread)),
+                    cosmic::task::future(async move {
+                        dbus::send_sms(&device_id, &phone, &text).await;
+                        Action::App(SmsMessage::RefreshThread)
+                    }),
+                ]);
             }
             SmsMessage::RefreshThread => {}
             SmsMessage::ProtocolEventReceived(event) => {
@@ -300,6 +321,7 @@ impl SmsWindow {
             ProtocolEvent::ConversationsReceived(conversations) => {
                 debug!("ConversationsReceived: {} conversations", conversations.len());
 
+                // Capture selected new_* phone BEFORE we mutate merged
                 let pending_new_phone: Option<String> = self
                     .selected_thread
                     .as_ref()
@@ -343,6 +365,7 @@ impl SmsWindow {
                 self.conversations = merged;
                 self.update_conversation_names();
 
+                // If we had a new_* selected, find its real thread by phone number now
                 if let Some(phone) = pending_new_phone {
                     if let Some(real) = self.conversations.iter().find(|c| {
                         !c.thread_id.starts_with("new_")

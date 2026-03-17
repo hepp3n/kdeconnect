@@ -1,5 +1,6 @@
 //! UI view implementations for the SMS window.
 
+use cosmic::widget::button::Catalog;
 use cosmic::Element;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget;
@@ -7,6 +8,10 @@ use cosmic::widget;
 use super::app::{SmsMessage, SmsWindow};
 use super::models::Conversation;
 use super::utils::{format_timestamp, normalize_phone_number, phone_numbers_match};
+
+/// Stable ID for the conversations list scrollable, used to scroll it programmatically.
+pub static CONVERSATIONS_SCROLLABLE_ID: std::sync::LazyLock<cosmic::widget::Id> =
+    std::sync::LazyLock::new(cosmic::widget::Id::unique);
 
 /// Main view - conversations list + thread view
 pub fn view_main(app: &SmsWindow) -> Element<'_, SmsMessage> {
@@ -240,6 +245,29 @@ fn view_conversation_item<'a>(
     let display_name =
         get_contact_name(app, &conv.phone_number).unwrap_or_else(|| conv.phone_number.clone());
 
+    let flat_button_class = cosmic::theme::Button::Custom {
+        active: Box::new(|focused, theme| {
+            let mut s = theme.active(focused, false, &cosmic::theme::Button::Text);
+            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s
+        }),
+        hovered: Box::new(|focused, theme| {
+            let mut s = theme.hovered(focused, false, &cosmic::theme::Button::Text);
+            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s
+        }),
+        disabled: Box::new(|theme| {
+            let mut s = theme.disabled(&cosmic::theme::Button::Text);
+            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s
+        }),
+        pressed: Box::new(|focused, theme| {
+            let mut s = theme.pressed(focused, false, &cosmic::theme::Button::Text);
+            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s
+        }),
+    };
+
     let button = widget::button::custom(
         widget::column()
             .push(
@@ -257,6 +285,7 @@ fn view_conversation_item<'a>(
             .spacing(spacing.space_xxs)
             .padding(spacing.space_s),
     )
+    .class(flat_button_class)
     .on_press(SmsMessage::SelectThread(conv.thread_id.clone()))
     .width(Length::Fill);
 
@@ -265,7 +294,7 @@ fn view_conversation_item<'a>(
             .class(cosmic::theme::Container::Primary)
             .into()
     } else {
-        button.class(cosmic::theme::Button::Text).into()
+        button.into()
     }
 }
 

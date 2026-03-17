@@ -35,12 +35,19 @@ pub enum AppEvent {
     Broadcasting,
     Disconnect(DeviceId),
     Pair(DeviceId),
+    AcceptPairing(DeviceId),
+    RejectPairing(DeviceId),
     Ping((DeviceId, String)),
     Unpair(DeviceId),
     SendFiles((DeviceId, Vec<String>)),
     MprisAction((DeviceId, String, MprisAction)),
     SendMprisRequest((DeviceId, MprisRequest)),
     SendPacket(DeviceId, ProtocolPacket),
+    SetPluginEnabled {
+        device_id: DeviceId,
+        plugin_id: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -55,4 +62,7 @@ pub enum ConnectionEvent {
     SmsMessages(SmsMessages),
     ContactsReceived(HashMap<String, String>),
     UpdateTransferProgress(u8),
+    /// Phone sent pair:true and is waiting for user decision.
+    /// Payload is (device_id, device_name).
+    PairingRequested((DeviceId, String)),
 }

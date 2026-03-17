@@ -11,7 +11,7 @@ pub fn create_popup_view<'a>(
     core: &'a Core,
     devices: &'a HashMap<String, Device>,
     expanded_device: Option<&'a String>,
-    _expanded_player_menu: Option<&'a String>,
+    pairing_requests: Option<&'a HashMap<String, String>>,
 ) -> Element<'a, Message> {
     let spacing = cosmic::theme::active().cosmic().spacing;
     let mut content = widget::column()
@@ -33,63 +33,63 @@ pub fn create_popup_view<'a>(
 
     content = content.push(widget::divider::horizontal::default());
 
-    // Pairing requests
-    let mut pairing_requests: Vec<_> = devices
-        .values()
-        .filter(|d| d.pairing_requests > 0 && !d.is_paired)
-        .collect();
-    pairing_requests.sort_by(|a, b| a.name.cmp(&b.name));
+    // Pairing requests — sourced from the applet's live pairing_requests map,
+    // not from Device.pairing_requests which is never populated via D-Bus.
+    if let Some(requests) = pairing_requests {
+        if !requests.is_empty() {
+            content = content.push(
+                widget::text("Pairing Requests")
+                    .size(14)
+                    .font(cosmic::font::bold()),
+            );
 
-    if !pairing_requests.is_empty() {
-        content = content.push(
-            widget::text("Pairing Requests")
-                .size(14)
-                .font(cosmic::font::bold()),
-        );
+            let mut sorted: Vec<(&String, &String)> = requests.iter().collect();
+            sorted.sort_by(|a, b| a.1.cmp(b.1));
 
-        for device in pairing_requests {
-            let device_id_accept = device.id.clone();
-            let device_id_reject = device.id.clone();
+            for (device_id, device_name) in sorted {
+                let device_id_accept = device_id.clone();
+                let device_id_reject = device_id.clone();
 
-            let request_card = widget::container(
-                widget::column()
-                    .push(
-                        widget::row()
-                            .push(widget::icon::from_name(device.device_icon()).size(24))
-                            .push(
-                                widget::column()
-                                    .push(widget::text(&device.name).size(14))
-                                    .push(widget::text(&device.device_type).size(11))
-                                    .spacing(spacing.space_xxxs),
-                            )
-                            .spacing(spacing.space_s)
-                            .align_y(Alignment::Center),
-                    )
-                    .push(widget::Space::new().height(Length::Fixed(spacing.space_xs as f32)))
-                    .push(
-                        widget::row()
-                            .push(
-                                widget::button::suggested("Accept")
-                                    .on_press(Message::AcceptPairing(device_id_accept))
-                                    .width(Length::Fill),
-                            )
-                            .push(
-                                widget::button::destructive("Reject")
-                                    .on_press(Message::RejectPairing(device_id_reject))
-                                    .width(Length::Fill),
-                            )
-                            .spacing(spacing.space_xs),
-                    )
-                    .spacing(spacing.space_xs),
-            )
-            .padding(spacing.space_s)
-            .class(cosmic::theme::Container::Card)
-            .width(Length::Fill);
+                let request_card = widget::container(
+                    widget::column()
+                        .push(
+                            widget::row()
+                                .push(widget::icon::from_name("phone-symbolic").size(24))
+                                .push(
+                                    widget::column()
+                                        .push(widget::text(device_name).size(14))
+                                        .push(widget::text("Wants to pair").size(11))
+                                        .spacing(spacing.space_xxxs),
+                                )
+                                .spacing(spacing.space_s)
+                                .align_y(Alignment::Center),
+                        )
+                        .push(widget::Space::new().height(Length::Fixed(spacing.space_xs as f32)))
+                        .push(
+                            widget::row()
+                                .push(
+                                    widget::button::suggested("Accept")
+                                        .on_press(Message::AcceptPairing(device_id_accept))
+                                        .width(Length::Fill),
+                                )
+                                .push(
+                                    widget::button::destructive("Reject")
+                                        .on_press(Message::RejectPairing(device_id_reject))
+                                        .width(Length::Fill),
+                                )
+                                .spacing(spacing.space_xs),
+                        )
+                        .spacing(spacing.space_xs),
+                )
+                .padding(spacing.space_s)
+                .class(cosmic::theme::Container::Card)
+                .width(Length::Fill);
 
-            content = content.push(request_card);
+                content = content.push(request_card);
+            }
+
+            content = content.push(widget::divider::horizontal::default());
         }
-
-        content = content.push(widget::divider::horizontal::default());
     }
 
     // All paired devices — reachable and unreachable — sorted alphabetically

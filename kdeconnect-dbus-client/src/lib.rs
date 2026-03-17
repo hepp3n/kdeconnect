@@ -33,6 +33,7 @@ pub enum ServiceEvent {
     DeviceDisconnected(String),
     SmsMessagesReceived(String),               // JSON string
     ContactsReceived(HashMap<String, String>), // phone -> name
+    PairingRequested(String, String),          // device_id, device_name
 }
 
 /// D-Bus proxy for daemon interface
@@ -49,6 +50,19 @@ trait Daemon {
     async fn send_files(&self, device_id: &str, files: Vec<String>) -> zbus::Result<()>;
     async fn send_clipboard(&self, device_id: &str, content: &str) -> zbus::Result<()>;
     async fn ring_device(&self, device_id: &str) -> zbus::Result<()>;
+    async fn set_plugin_enabled(
+        &self,
+        device_id: &str,
+        plugin_id: &str,
+        enabled: bool,
+    ) -> zbus::Result<()>;
+    async fn get_disabled_plugins(&self, device_id: &str) -> zbus::Result<Vec<String>>;
+    async fn broadcast_identity(&self) -> zbus::Result<()>;
+    async fn accept_pairing(&self, device_id: &str) -> zbus::Result<()>;
+    async fn reject_pairing(&self, device_id: &str) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn pairing_requested(&self, device_id: String, device_name: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn update_transfer_progress(&self, progress: u8) -> zbus::Result<()>;
@@ -156,6 +170,36 @@ impl KdeConnectClient {
         Ok(self.daemon_proxy.ring_device(device_id).await?)
     }
 
+    /// Enable or disable a plugin for a device
+    pub async fn set_plugin_enabled(
+        &self,
+        device_id: &str,
+        plugin_id: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        Ok(self
+            .daemon_proxy
+            .set_plugin_enabled(device_id, plugin_id, enabled)
+            .await?)
+    }
+
+    pub async fn accept_pairing(&self, device_id: &str) -> Result<()> {
+        Ok(self.daemon_proxy.accept_pairing(device_id).await?)
+    }
+
+    pub async fn reject_pairing(&self, device_id: &str) -> Result<()> {
+        Ok(self.daemon_proxy.reject_pairing(device_id).await?)
+    }
+
+    pub async fn get_disabled_plugins(&self, device_id: &str) -> Result<Vec<String>> {
+        Ok(self.daemon_proxy.get_disabled_plugins(device_id).await?)
+    }
+
+    /// Broadcast our identity over UDP to trigger device discovery
+    pub async fn broadcast_identity(&self) -> Result<()> {
+        Ok(self.daemon_proxy.broadcast_identity().await?)
+    }
+
     /// Request SMS conversations
     pub async fn request_conversations(&self, device_id: &str) -> Result<()> {
         Ok(self.sms_proxy.request_conversations(device_id).await?)
@@ -169,8 +213,13 @@ impl KdeConnectClient {
             .await?)
     }
 
-    /// Send SMS
-    pub async fn send_sms(&self, device_id: &str, phone_number: &str, message: &str) -> Result<()> {
+    /// Send an SMS message
+    pub async fn send_sms(
+        &self,
+        device_id: &str,
+        phone_number: &str,
+        message: &str,
+    ) -> Result<()> {
         Ok(self
             .sms_proxy
             .send_sms(device_id, phone_number, message)
@@ -187,99 +236,91 @@ impl KdeConnectClient {
         Ok(self.contacts_proxy.request_contacts(device_id).await?)
     }
 
-    /// Fetch cached contacts from the service — works with phone asleep
-    pub async fn get_cached_contacts(&self, device_id: &str) -> Result<HashMap<String, String>> {
-        let json = self.contacts_proxy.get_cached_contacts(device_id).await?;
-        Ok(serde_json::from_str(&json).unwrap_or_default())
+    /// Get cached contacts as a raw JSON string (phone → name map)
+    pub async fn get_cached_contacts(&self, device_id: &str) -> Result<String> {
+        Ok(self.contacts_proxy.get_cached_contacts(device_id).await?)
     }
 
-    /// Listen for service events (signals)
-    pub async fn listen_for_events(&self) -> impl futures::Stream<Item = ServiceEvent> + '_ {
-        let daemon_connected = self.daemon_proxy.receive_device_connected().await.unwrap();
-        let daemon_paired = self.daemon_proxy.receive_device_paired().await.unwrap();
-        let daemon_disconnected = self
+    /// Create a stream of service events
+    pub async fn listen_for_events(
+        &self,
+    ) -> futures::stream::BoxStream<'static, ServiceEvent> {
+        use futures::stream::select_all;
+
+        let connected = self
+            .daemon_proxy
+            .receive_device_connected()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::DeviceConnected(args.device_id.clone(), args.device.clone())
+            });
+
+        let paired = self
+            .daemon_proxy
+            .receive_device_paired()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::DevicePaired(args.device_id.clone(), args.device.clone())
+            });
+
+        let disconnected = self
             .daemon_proxy
             .receive_device_disconnected()
             .await
-            .unwrap();
-        let sms_messages = self
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::DeviceDisconnected(args.device_id.clone())
+            });
+
+        let sms = self
             .sms_proxy
             .receive_sms_messages_received()
             .await
-            .unwrap();
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::SmsMessagesReceived(args.messages_json.clone())
+            });
+
         let contacts = self
             .contacts_proxy
             .receive_contacts_received()
             .await
-            .unwrap();
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                let contacts_json = args.contacts_json.clone();
+                let map: HashMap<String, String> =
+                    serde_json::from_str(&contacts_json).unwrap_or_default();
+                ServiceEvent::ContactsReceived(map)
+            });
 
-        let connected_stream = daemon_connected.filter_map(|signal| async move {
-            match signal.args() {
-                Ok(args) => Some(ServiceEvent::DeviceConnected(args.device_id, args.device)),
-                Err(e) => {
-                    error!("Failed to parse DeviceConnected signal: {:?}", e);
-                    None
-                }
-            }
-        });
+        let pairing_req = self
+            .daemon_proxy
+            .receive_pairing_requested()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::PairingRequested(
+                    args.device_id.clone(),
+                    args.device_name.clone(),
+                )
+            });
 
-        let paired_stream = daemon_paired.filter_map(|signal| async move {
-            match signal.args() {
-                Ok(args) => Some(ServiceEvent::DevicePaired(args.device_id, args.device)),
-                Err(e) => {
-                    error!("Failed to parse DevicePaired signal: {:?}", e);
-                    None
-                }
-            }
-        });
-
-        let disconnected_stream = daemon_disconnected.filter_map(|signal| async move {
-            match signal.args() {
-                Ok(args) => Some(ServiceEvent::DeviceDisconnected(args.device_id)),
-                Err(e) => {
-                    error!("Failed to parse DeviceDisconnected signal: {:?}", e);
-                    None
-                }
-            }
-        });
-
-        let sms_stream = sms_messages.filter_map(|signal| async move {
-            match signal.args() {
-                Ok(args) => Some(ServiceEvent::SmsMessagesReceived(args.messages_json)),
-                Err(e) => {
-                    error!("Failed to parse SmsMessagesReceived signal: {:?}", e);
-                    None
-                }
-            }
-        });
-
-        let contacts_stream = contacts.filter_map(|signal| async move {
-            match signal.args() {
-                Ok(args) => {
-                    match serde_json::from_str::<HashMap<String, String>>(&args.contacts_json) {
-                        Ok(map) => Some(ServiceEvent::ContactsReceived(map)),
-                        Err(e) => {
-                            error!("Failed to parse contacts JSON: {:?}", e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to parse ContactsReceived signal: {:?}", e);
-                    None
-                }
-            }
-        });
-
-        use futures::stream::select_all;
-        select_all(vec![
-            Box::pin(connected_stream)
-                as std::pin::Pin<Box<dyn futures::Stream<Item = ServiceEvent> + Send + '_>>,
-            Box::pin(paired_stream),
-            Box::pin(disconnected_stream),
-            Box::pin(sms_stream),
-            Box::pin(contacts_stream),
-        ])
+        Box::pin(select_all(vec![
+            Box::pin(connected) as futures::stream::BoxStream<'static, ServiceEvent>,
+            Box::pin(paired),
+            Box::pin(disconnected),
+            Box::pin(sms),
+            Box::pin(contacts),
+            Box::pin(pairing_req),
+        ]))
     }
 
     pub async fn transfer_progress_stream(&self) -> impl futures::stream::Stream<Item = u8> {
