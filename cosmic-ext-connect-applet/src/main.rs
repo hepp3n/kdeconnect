@@ -352,10 +352,14 @@ impl cosmic::Application for KdeConnectApplet {
                             kdeconnect_dbus_client::ServiceEvent::PairingRequested(id, name) => {
                                 yield Message::PairingRequestReceived(id, name, "phone".to_string());
                             }
-                            kdeconnect_dbus_client::ServiceEvent::DeviceConnected(id, _)
-                            | kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, _)
-                            | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
-                                let _ = id;
+                            // Pairing confirmed — delay so the service has time to
+                            // update its device list before we query it.
+                            kdeconnect_dbus_client::ServiceEvent::DevicePaired(_, _) => {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                yield Message::RefreshDevices;
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::DeviceConnected(_, _)
+                            | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(_) => {
                                 yield Message::RefreshDevices;
                             }
                             _ => {}

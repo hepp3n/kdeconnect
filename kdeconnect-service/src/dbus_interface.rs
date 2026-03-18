@@ -440,33 +440,38 @@ pub struct KdeConnectService {
 
 impl KdeConnectService {
     /// Run until session shutdown, SIGTERM, or SIGINT
+    /// Run until session shutdown, SIGTERM, or SIGINT.
     pub async fn run(&self) -> Result<()> {
-        use tokio::signal::unix::{signal, SignalKind};
-        use zbus::Connection;
+        use tokio::signal::unix::{SignalKind, signal};
+        use zbus::{MatchRule, MessageStream};
+        use futures_util::StreamExt;
 
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        // Watch logind for session logout — works regardless of how we were launched
         let shutdown_fut = async {
-            if let Ok(system_bus) = Connection::system().await {
-                if let Ok(mut stream) = system_bus
-                    .subscribe_signal(
-                        "org.freedesktop.login1",
-                        "/org/freedesktop/login1",
-                        "org.freedesktop.login1.Manager",
-                        "PrepareForShutdown",
-                    )
-                    .await
-                {
-                    use futures_util::StreamExt;
-                    while let Some(msg) = stream.next().await {
-                        // Signal body is a single bool: true = shutting down
-                        if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
-                            info!("PrepareForShutdown received — shutting down");
-                            return;
-                        }
-                    }
+            let Ok(system_bus) = zbus::Connection::system().await else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            let Ok(rule) = (|| -> zbus::Result<MatchRule<'static>> {
+                Ok(MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .interface("org.freedesktop.login1.Manager")?
+                    .member("PrepareForShutdown")?
+                    .build())
+            })() else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, &system_bus, None).await else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
+                    info!("PrepareForShutdown received — shutting down");
+                    return;
                 }
             }
             std::future::pending::<()>().await
