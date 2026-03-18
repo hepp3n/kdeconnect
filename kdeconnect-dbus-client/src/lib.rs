@@ -34,6 +34,9 @@ pub enum ServiceEvent {
     SmsMessagesReceived(String),               // JSON string
     ContactsReceived(HashMap<String, String>), // phone -> name
     PairingRequested(String, String),          // device_id, device_name
+    /// Emitted internally after each (re)subscribe to close any signal gap.
+    /// Handlers should treat this as a prompt to refresh the device list.
+    Resync,
 }
 
 /// D-Bus proxy for daemon interface
@@ -226,7 +229,7 @@ impl KdeConnectClient {
             .await?)
     }
 
-    /// Fetch cached SMS — in-memory in service, disk fallback, empty string if neither
+    /// Fetch cached SMS
     pub async fn get_cached_sms(&self, device_id: &str) -> Result<String> {
         Ok(self.sms_proxy.get_cached_sms(device_id).await?)
     }
@@ -241,7 +244,13 @@ impl KdeConnectClient {
         Ok(self.contacts_proxy.get_cached_contacts(device_id).await?)
     }
 
-    /// Create a stream of service events
+    /// Create a stream of service events.
+    ///
+    /// Subscribes to all D-Bus signals and merges them into a single stream.
+    /// The caller should treat stream exhaustion as a signal to reconnect and
+    /// call this method again. A `ServiceEvent::Resync` is NOT emitted here —
+    /// the reconnect logic in `backend::event_stream()` handles that so the
+    /// applet fetches fresh device state after each (re)subscribe.
     pub async fn listen_for_events(
         &self,
     ) -> futures::stream::BoxStream<'static, ServiceEvent> {
@@ -341,8 +350,6 @@ impl KdeConnectClient {
                 }
             });
 
-        let result = Box::pin(update_transfer_stream);
-
-        futures::stream::select_all(vec![result])
+        futures::stream::select_all(vec![Box::pin(update_transfer_stream)])
     }
 }

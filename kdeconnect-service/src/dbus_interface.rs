@@ -199,7 +199,6 @@ impl DaemonInterface {
     }
 
     /// Enable or disable a plugin for a device.
-    /// Changes take effect immediately and are persisted across restarts.
     async fn set_plugin_enabled(
         &self,
         device_id: String,
@@ -267,7 +266,6 @@ impl DaemonInterface {
         device_name: String,
     ) -> zbus::Result<()>;
 
-    /// Signal: Device connected
     #[zbus(signal)]
     async fn update_transfer_progress(
         signal_emitter: &SignalEmitter<'_>,
@@ -439,60 +437,28 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Run until session shutdown, SIGTERM, or SIGINT
-    /// Run until session shutdown, SIGTERM, or SIGINT.
+    /// Run until the session bus closes (user logout), SIGTERM, or SIGINT.
+    /// Watching the session bus connection directly is reliable regardless of
+    /// how the service was launched (D-Bus activation, autostart, or manual).
     pub async fn run(&self) -> Result<()> {
-        use tokio::signal::unix::{SignalKind, signal};
-        use zbus::{MatchRule, MessageStream};
         use futures_util::StreamExt;
+        use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint  = signal(SignalKind::interrupt())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
 
-        let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
-
-        let logout_fut = async move {
-            let Ok(system_bus) = zbus::Connection::system().await else {
-                std::future::pending::<()>().await;
-                return;
-            };
-            // Watch for both session logout and system shutdown
-            let rules: &[(&str, &str)] = &[
-                ("org.freedesktop.login1.Manager", "SessionRemoved"),
-                ("org.freedesktop.login1.Manager", "PrepareForShutdown"),
-            ];
-            for (iface, member) in rules {
-                let rule = MatchRule::builder()
-                    .msg_type(zbus::message::Type::Signal)
-                    .interface(*iface).unwrap()
-                    .member(*member).unwrap()
-                    .build();
-                if let Ok(mut stream) = MessageStream::for_match_rule(
-                    rule,
-                    &system_bus,
-                    None,
-                ).await {
-                    let session_id = session_id.clone();
-                    tokio::spawn(async move {
-                        while let Some(Ok(msg)) = stream.next().await {
-                            let msg: zbus::Message = msg;
-                            if let Ok((id,)) = msg.body().deserialize::<(String,)>() {
-                                if id == session_id || id == "true" {
-                                    info!("Session ending ({}), shutting down", id);
-                                    std::process::exit(0);
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-            std::future::pending::<()>().await
+        // The session bus daemon exits when the user logs out, which closes
+        // this connection and ends the stream — no need for logind signals.
+        let mut session_stream = zbus::MessageStream::from(self.connection.clone());
+        let session_ended = async move {
+            while session_stream.next().await.is_some() {}
+            info!("Session bus closed — shutting down");
         };
 
         tokio::select! {
-            _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
-            _ = sigint.recv()   => info!("SIGINT received — shutting down"),
-            _ = logout_fut      => {},
+            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
+            _ = session_ended  => {},
         }
 
         Ok(())
@@ -583,7 +549,7 @@ impl KdeConnectService {
         tokio::spawn(async move {
             match core_handle.await {
                 Ok(_) => error!("Core event loop exited unexpectedly - connections will fail"),
-                Err(e) if e.is_panic() => error!("Core event loop PANICKED - connections will fail: {:?}", e),
+                Err(e) if e.is_panic() => error!("Core event loop PANICKED: {:?}", e),
                 Err(e) => error!("Core event loop cancelled: {:?}", e),
             }
         });
@@ -669,9 +635,6 @@ impl KdeConnectService {
                     if !already_synced {
                         sms_synced.lock().await.insert(device_id.0.clone());
                     }
-
-                    // Note: auto-requests for SMS/contacts are now handled in
-                    // kdeconnect-core with plugin-enabled gating.
                 }
             }
             ConnectionEvent::DevicePaired((device_id, device)) => {
@@ -728,8 +691,6 @@ impl KdeConnectService {
 
                 sms_synced.lock().await.remove(&device_id.0);
 
-                // Mark unreachable but keep in map so UI can still show it
-                // and allow pairing attempts after reconnect.
                 {
                     let mut map = devices.lock().await;
                     if let Some(dev) = map.get_mut(&device_id.0) {
@@ -762,8 +723,6 @@ impl KdeConnectService {
                     }
                 }
 
-                // Push updated device info immediately via device_connected signal
-                // so the applet UI reflects the new pair state without waiting for poll.
                 let iface_ref = connection
                     .object_server()
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
@@ -836,7 +795,6 @@ impl KdeConnectService {
             ConnectionEvent::PairingRequested((device_id, device_name)) => {
                 info!("Pairing requested by {} ({})", device_name, device_id.0);
 
-                // Emit D-Bus signal so the applet can show Accept/Decline UI.
                 let iface_ref = connection
                     .object_server()
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
@@ -847,9 +805,6 @@ impl KdeConnectService {
                     device_name.clone(),
                 )
                 .await?;
-
-                // The D-Bus signal is the primary mechanism — the applet
-                // subscription delivers it immediately and opens the popup.
             }
             _ => {
                 debug!("Unhandled event type received");

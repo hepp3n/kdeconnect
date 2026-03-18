@@ -236,6 +236,8 @@ pub async fn send_sms(device_id: String, phone_number: String, message: String) 
 }
 
 /// Stream of service events. Reconnects automatically if the inner stream ends.
+/// Emits `ServiceEvent::Resync` after each (re)subscribe so the applet fetches
+/// fresh device state and doesn't miss events that fired during the gap.
 #[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
     use tokio::sync::mpsc;
@@ -244,7 +246,6 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
     let (tx, rx) = mpsc::channel::<ServiceEvent>(100);
 
     tokio::spawn(async move {
-        // Outer loop: reconnect whenever the event stream drops.
         'reconnect: loop {
             // Wait for the D-Bus client to be ready.
             let client = 'wait: loop {
@@ -254,13 +255,20 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
                 sleep(Duration::from_millis(100)).await;
             };
 
-            info!("Event stream: D-Bus client ready");
+            info!("Event stream: D-Bus client ready, subscribing");
 
             let mut stream = client.listen_for_events().await;
+
+            // Resync immediately after subscribing — any signals that fired
+            // between the previous stream ending and now are recovered by
+            // fetching the current device list in the handler.
+            if tx.send(ServiceEvent::Resync).await.is_err() {
+                return;
+            }
+
             while let Some(event) = stream.next().await {
                 if tx.send(event).await.is_err() {
-                    // Applet has exited — stop.
-                    return;
+                    return; // applet exiting
                 }
             }
 
