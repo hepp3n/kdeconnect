@@ -449,29 +449,41 @@ impl KdeConnectService {
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        let shutdown_fut = async {
+        let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
+
+        let logout_fut = async move {
             let Ok(system_bus) = zbus::Connection::system().await else {
                 std::future::pending::<()>().await;
                 return;
             };
-            let Ok(rule) = (|| -> zbus::Result<MatchRule<'static>> {
-                Ok(MatchRule::builder()
+            // Watch for both session logout and system shutdown
+            let rules: &[(&str, &str)] = &[
+                ("org.freedesktop.login1.Manager", "SessionRemoved"),
+                ("org.freedesktop.login1.Manager", "PrepareForShutdown"),
+            ];
+            for (iface, member) in rules {
+                let rule = MatchRule::builder()
                     .msg_type(zbus::message::Type::Signal)
-                    .interface("org.freedesktop.login1.Manager")?
-                    .member("PrepareForShutdown")?
-                    .build())
-            })() else {
-                std::future::pending::<()>().await;
-                return;
-            };
-            let Ok(mut stream) = MessageStream::for_match_rule(rule, &system_bus, None).await else {
-                std::future::pending::<()>().await;
-                return;
-            };
-            while let Some(Ok(msg)) = stream.next().await {
-                if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
-                    info!("PrepareForShutdown received — shutting down");
-                    return;
+                    .interface(*iface).unwrap()
+                    .member(*member).unwrap()
+                    .build();
+                if let Ok(mut stream) = MessageStream::for_match_rule(
+                    rule,
+                    &system_bus,
+                    None,
+                ).await {
+                    let session_id = session_id.clone();
+                    tokio::spawn(async move {
+                        while let Some(Ok(msg)) = stream.next().await {
+                            let msg: zbus::Message = msg;
+                            if let Ok((id,)) = msg.body().deserialize::<(String,)>() {
+                                if id == session_id || id == "true" {
+                                    info!("Session ending ({}), shutting down", id);
+                                    std::process::exit(0);
+                                }
+                            }
+                        }
+                    });
                 }
             }
             std::future::pending::<()>().await
@@ -480,7 +492,7 @@ impl KdeConnectService {
         tokio::select! {
             _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
             _ = sigint.recv()   => info!("SIGINT received — shutting down"),
-            _ = shutdown_fut    => {},
+            _ = logout_fut      => {},
         }
 
         Ok(())
