@@ -453,8 +453,20 @@ impl KdeConnectService {
 
         let mut session_stream = zbus::MessageStream::from(self.connection.clone());
         let session_ended = async move {
-            while session_stream.next().await.is_some() {}
-            info!("Session bus closed — shutting down");
+            // Debug D-Bus active connect on logout (Should receive (Err) on logout)
+            loop {
+                match session_stream.next().await {
+                    None => {
+                        info!("Session bus stream ended — shutting down");
+                        return;
+                    }
+                    Some(Err(e)) => {
+                        info!("Session bus error ({}) — shutting down", e);
+                        return;
+                    }
+                    Some(Ok(_)) => continue,
+                }
+            }
         };
 
         tokio::select! {
