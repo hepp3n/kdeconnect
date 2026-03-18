@@ -439,32 +439,24 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Run until the session bus closes (user logout), SIGTERM, or SIGINT.
+    /// Run until session logout, SIGTERM, or SIGINT.
     ///
-    /// Watching the session bus connection directly is the most reliable
-    /// cross-desktop logout signal — works regardless of how the process was
-    /// launched and requires no environment variables or logind access.
+    /// Polls for removal of the session bus socket file — reliable regardless
+    /// of how the process was launched or how many connection clones exist.
     pub async fn run(&self) -> Result<()> {
-        use futures_util::StreamExt;
         use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint = signal(SignalKind::interrupt())?;
+        let mut sigint  = signal(SignalKind::interrupt())?;
 
-        let mut session_stream = zbus::MessageStream::from(self.connection.clone());
-        let session_ended = async move {
-            // Debug D-Bus active connect on logout (Should receive (Err) on logout)
+        let socket_ended = async move {
+            let uid = unsafe { libc::getuid() };
+            let socket = std::path::PathBuf::from(format!("/run/user/{}/bus", uid));
             loop {
-                match session_stream.next().await {
-                    None => {
-                        info!("Session bus stream ended — shutting down");
-                        return;
-                    }
-                    Some(Err(e)) => {
-                        info!("Session bus error ({}) — shutting down", e);
-                        return;
-                    }
-                    Some(Ok(_)) => continue,
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                if !socket.exists() {
+                    info!("Session bus socket gone — shutting down");
+                    return;
                 }
             }
         };
@@ -472,7 +464,7 @@ impl KdeConnectService {
         tokio::select! {
             _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
             _ = sigint.recv()  => info!("SIGINT received — shutting down"),
-            _ = session_ended  => {},
+            _ = socket_ended   => {},
         }
 
         Ok(())
