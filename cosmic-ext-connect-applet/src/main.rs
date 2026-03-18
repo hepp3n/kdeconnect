@@ -54,7 +54,13 @@ impl cosmic::Application for KdeConnectApplet {
             pairing_requests: HashMap::new(),
         };
 
-        (app, Task::none())
+        // Fetch devices immediately on startup so the applet is populated
+        // without waiting for the first popup open or 10s poll.
+        let init_task = Task::perform(backend::fetch_devices(), |devices| {
+            cosmic::Action::App(Message::DevicesUpdated(devices))
+        });
+
+        (app, init_task)
     }
 
     fn on_close_requested(&self, id: SurfaceId) -> Option<Message> {
