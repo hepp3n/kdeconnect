@@ -40,12 +40,6 @@ impl cosmic::Application for KdeConnectApplet {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
-        tokio::spawn(async {
-            if let Err(e) = backend::initialize().await {
-                error!("Backend init failed: {:?}", e);
-            }
-        });
-
         let app = KdeConnectApplet {
             core,
             popup: None,
@@ -54,11 +48,17 @@ impl cosmic::Application for KdeConnectApplet {
             pairing_requests: HashMap::new(),
         };
 
-        // Fetch devices immediately on startup so the applet is populated
-        // without waiting for the first popup open or 10s poll.
-        let init_task = Task::perform(backend::fetch_devices(), |devices| {
-            cosmic::Action::App(Message::DevicesUpdated(devices))
-        });
+        // Initialize the D-Bus client then fetch devices — chained so the
+        // fetch only runs after the client is ready, avoiding an empty result.
+        let init_task = Task::perform(
+            async {
+                if let Err(e) = backend::initialize().await {
+                    error!("Backend init failed: {:?}", e);
+                }
+                backend::fetch_devices().await
+            },
+            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
+        );
 
         (app, init_task)
     }
