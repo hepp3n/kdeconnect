@@ -259,13 +259,6 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
 
             let mut stream = client.listen_for_events().await;
 
-            // Resync immediately after subscribing — any signals that fired
-            // between the previous stream ending and now are recovered by
-            // fetching the current device list in the handler.
-            if tx.send(ServiceEvent::Resync).await.is_err() {
-                return;
-            }
-
             while let Some(event) = stream.next().await {
                 if tx.send(event).await.is_err() {
                     return; // applet exiting

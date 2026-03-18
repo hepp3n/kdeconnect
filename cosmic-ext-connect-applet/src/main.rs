@@ -337,11 +337,6 @@ impl cosmic::Application for KdeConnectApplet {
                             | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(_) => {
                                 yield Message::RefreshDevices;
                             }
-                            // Emitted after each (re)subscribe to recover any
-                            // signals missed during the reconnect gap.
-                            kdeconnect_dbus_client::ServiceEvent::Resync => {
-                                yield Message::RefreshDevices;
-                            }
                             _ => {}
                         }
                     }

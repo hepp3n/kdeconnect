@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 anyhow = { workspace = true }
 zbus = { workspace = true }
 serde = { workspace = true }
