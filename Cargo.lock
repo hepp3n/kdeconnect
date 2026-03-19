@@ -1004,6 +1004,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urlencoding",
+ "zbus",
 ]
 
 [[package]]

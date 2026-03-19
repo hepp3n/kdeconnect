@@ -354,6 +354,7 @@ impl cosmic::Application for KdeConnectApplet {
             cosmic::iced::time::every(std::time::Duration::from_secs(10))
                 .map(|_| Message::RefreshDevices),
             backend::filetransfer_subscription(),
+            backend::service_watcher_subscription(),
             Subscription::run(|| {
                 async_stream::stream! {
                     let mut stream = backend::event_stream().await;
