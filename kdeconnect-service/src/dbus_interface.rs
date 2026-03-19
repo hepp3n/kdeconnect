@@ -461,12 +461,11 @@ impl KdeConnectService {
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
+        // Reuse the existing session connection — avoids a race where a freshly
+        // created connection misses the Exit signal if logout happens quickly.
+        let connection = self.connection.clone();
         let cosmic_exit = async move {
-            let Ok(session_bus) = zbus::Connection::session().await else {
-                std::future::pending::<()>().await;
-                return;
-            };
-            let Ok(proxy) = CosmicSessionProxy::new(&session_bus).await else {
+            let Ok(proxy) = CosmicSessionProxy::new(&connection).await else {
                 std::future::pending::<()>().await;
                 return;
             };
