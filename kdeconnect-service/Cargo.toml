@@ -20,4 +20,3 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 kdeconnect-core = { workspace = true }
 dirs = { workspace = true }
-libc = "0.2"

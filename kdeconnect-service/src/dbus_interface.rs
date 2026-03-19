@@ -439,32 +439,77 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Run until session logout, SIGTERM, or SIGINT.
+    /// Run until session logout, system shutdown, SIGTERM, or SIGINT.
     ///
-    /// Polls for removal of the session bus socket file — reliable regardless
-    /// of how the process was launched or how many connection clones exist.
+    /// Watches logind SessionRemoved (logout) and PrepareForShutdown (poweroff/reboot)
+    /// signals on the system bus. XDG_SESSION_ID is inherited from the autostart
+    /// environment and used to filter SessionRemoved to the current session only.
     pub async fn run(&self) -> Result<()> {
+        use futures_util::StreamExt;
         use tokio::signal::unix::{SignalKind, signal};
+        use zbus::{MatchRule, MessageStream};
 
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        let socket_ended = async move {
-            let uid = unsafe { libc::getuid() };
-            let socket = std::path::PathBuf::from(format!("/run/user/{}/bus", uid));
+        let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
+        info!("Watching for logout of session id={}", session_id);
+
+        let logout_fut = async move {
+            let Ok(system_bus) = zbus::Connection::system().await else {
+                info!("Could not connect to system bus — falling back to pending");
+                std::future::pending::<()>().await;
+                return;
+            };
+
+            let removed_rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.login1.Manager").unwrap()
+                .member("SessionRemoved").unwrap()
+                .build();
+
+            let shutdown_rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.login1.Manager").unwrap()
+                .member("PrepareForShutdown").unwrap()
+                .build();
+
+            let removed_stream = MessageStream::for_match_rule(removed_rule, &system_bus, None).await;
+            let shutdown_stream = MessageStream::for_match_rule(shutdown_rule, &system_bus, None).await;
+
+            let (Ok(mut removed), Ok(mut shutdown)) = (removed_stream, shutdown_stream) else {
+                info!("Could not subscribe to logind signals — falling back to pending");
+                std::future::pending::<()>().await;
+                return;
+            };
+
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                if !socket.exists() {
-                    info!("Session bus socket gone — shutting down");
-                    return;
+                tokio::select! {
+                    Some(Ok(msg)) = removed.next() => {
+                        // SessionRemoved body: (session_id: String, object_path: OwnedObjectPath)
+                        if let Ok((id, _path)) = msg.body().deserialize::<(String, zbus::zvariant::OwnedObjectPath)>() {
+                            if id == session_id {
+                                info!("SessionRemoved for session {} — shutting down", id);
+                                return;
+                            }
+                        }
+                    }
+                    Some(Ok(msg)) = shutdown.next() => {
+                        // PrepareForShutdown body: (active: bool)
+                        if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
+                            info!("PrepareForShutdown received — shutting down");
+                            return;
+                        }
+                    }
+                    else => break,
                 }
             }
         };
 
         tokio::select! {
-            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
-            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
-            _ = socket_ended   => {},
+            _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()   => info!("SIGINT received — shutting down"),
+            _ = logout_fut      => {},
         }
 
         Ok(())
