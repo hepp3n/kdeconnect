@@ -13,7 +13,18 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info};
 use zbus::object_server::SignalEmitter;
-use zbus::{Connection, interface};
+use zbus::{Connection, interface, proxy};
+
+/// Proxy for the COSMIC session interface — used to detect user logout.
+#[proxy(
+    interface = "com.system76.CosmicSession",
+    default_service = "com.system76.CosmicSession",
+    default_path = "/com/system76/CosmicSession"
+)]
+trait CosmicSession {
+    #[zbus(signal)]
+    fn exit(&self) -> zbus::Result<()>;
+}
 
 const SERVICE_NAME: &str = "io.github.hepp3n.kdeconnect";
 const DAEMON_PATH: &str = "/io/github/hepp3n/kdeconnect/Daemon";
@@ -439,77 +450,38 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Run until session logout, system shutdown, SIGTERM, or SIGINT.
+    /// Run until COSMIC session exits, SIGTERM, or SIGINT.
     ///
-    /// Watches logind SessionRemoved (logout) and PrepareForShutdown (poweroff/reboot)
-    /// signals on the system bus. XDG_SESSION_ID is inherited from the autostart
-    /// environment and used to filter SessionRemoved to the current session only.
+    /// Uses the com.system76.CosmicSession Exit signal — the canonical logout
+    /// mechanism for the COSMIC desktop. Falls back to pending if unavailable.
     pub async fn run(&self) -> Result<()> {
         use futures_util::StreamExt;
         use tokio::signal::unix::{SignalKind, signal};
-        use zbus::{MatchRule, MessageStream};
 
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
-        info!("Watching for logout of session id={}", session_id);
-
-        let logout_fut = async move {
-            let Ok(system_bus) = zbus::Connection::system().await else {
-                info!("Could not connect to system bus — falling back to pending");
+        let cosmic_exit = async move {
+            let Ok(session_bus) = zbus::Connection::session().await else {
                 std::future::pending::<()>().await;
                 return;
             };
-
-            let removed_rule = MatchRule::builder()
-                .msg_type(zbus::message::Type::Signal)
-                .interface("org.freedesktop.login1.Manager").unwrap()
-                .member("SessionRemoved").unwrap()
-                .build();
-
-            let shutdown_rule = MatchRule::builder()
-                .msg_type(zbus::message::Type::Signal)
-                .interface("org.freedesktop.login1.Manager").unwrap()
-                .member("PrepareForShutdown").unwrap()
-                .build();
-
-            let removed_stream = MessageStream::for_match_rule(removed_rule, &system_bus, None).await;
-            let shutdown_stream = MessageStream::for_match_rule(shutdown_rule, &system_bus, None).await;
-
-            let (Ok(mut removed), Ok(mut shutdown)) = (removed_stream, shutdown_stream) else {
-                info!("Could not subscribe to logind signals — falling back to pending");
+            let Ok(proxy) = CosmicSessionProxy::new(&session_bus).await else {
                 std::future::pending::<()>().await;
                 return;
             };
-
-            loop {
-                tokio::select! {
-                    Some(Ok(msg)) = removed.next() => {
-                        // SessionRemoved body: (session_id: String, object_path: OwnedObjectPath)
-                        if let Ok((id, _path)) = msg.body().deserialize::<(String, zbus::zvariant::OwnedObjectPath)>() {
-                            if id == session_id {
-                                info!("SessionRemoved for session {} — shutting down", id);
-                                return;
-                            }
-                        }
-                    }
-                    Some(Ok(msg)) = shutdown.next() => {
-                        // PrepareForShutdown body: (active: bool)
-                        if let Ok((true,)) = msg.body().deserialize::<(bool,)>() {
-                            info!("PrepareForShutdown received — shutting down");
-                            return;
-                        }
-                    }
-                    else => break,
-                }
-            }
+            let Ok(mut stream) = proxy.receive_exit().await else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            stream.next().await;
+            info!("CosmicSession Exit signal received — shutting down");
         };
 
         tokio::select! {
             _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
             _ = sigint.recv()   => info!("SIGINT received — shutting down"),
-            _ = logout_fut      => {},
+            _ = cosmic_exit     => {},
         }
 
         Ok(())
