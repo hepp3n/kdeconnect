@@ -13,18 +13,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, info};
 use zbus::object_server::SignalEmitter;
-use zbus::{Connection, interface, proxy};
-
-/// Proxy for the COSMIC session interface — used to detect user logout.
-#[proxy(
-    interface = "com.system76.CosmicSession",
-    default_service = "com.system76.CosmicSession",
-    default_path = "/com/system76/CosmicSession"
-)]
-trait CosmicSession {
-    #[zbus(signal)]
-    fn exit(&self) -> zbus::Result<()>;
-}
+use zbus::{Connection, interface};
 
 const SERVICE_NAME: &str = "io.github.hepp3n.kdeconnect";
 const DAEMON_PATH: &str = "/io/github/hepp3n/kdeconnect/Daemon";
@@ -452,44 +441,44 @@ pub struct KdeConnectService {
 impl KdeConnectService {
     /// Run until COSMIC session exits, SIGTERM, or SIGINT.
     ///
-    /// Uses the com.system76.CosmicSession Exit signal — the canonical logout
-    /// mechanism for the COSMIC desktop. Falls back to pending if unavailable.
+    /// Watches for com.system76.CosmicSession disappearing from the bus via
+    /// NameOwnerChanged — COSMIC calls Exit() as a method on the session
+    /// manager which then exits, dropping its bus name.
     pub async fn run(&self) -> Result<()> {
         use futures_util::StreamExt;
         use tokio::signal::unix::{SignalKind, signal};
+        use zbus::{MatchRule, MessageStream};
 
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        info!("run() started — waiting for shutdown signal");
+        info!("run() started — watching for CosmicSession to exit");
 
         let connection = self.connection.clone();
         let cosmic_exit = async move {
-            let proxy = match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                CosmicSessionProxy::new(&connection),
-            ).await {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => {
-                    info!("CosmicSession proxy failed: {} — falling back to pending", e);
-                    std::future::pending::<()>().await;
-                    return;
-                }
-                Err(_) => {
-                    info!("CosmicSession proxy timed out — falling back to pending");
-                    std::future::pending::<()>().await;
-                    return;
-                }
-            };
-            info!("CosmicSession proxy connected — watching for Exit signal");
-            let Ok(mut stream) = proxy.receive_exit().await else {
-                info!("CosmicSession receive_exit failed — falling back to pending");
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus").unwrap()
+                .member("NameOwnerChanged").unwrap()
+                .arg(0, "com.system76.CosmicSession").unwrap()
+                .build();
+
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, &connection, None).await else {
+                info!("NameOwnerChanged subscribe failed — falling back to pending");
                 std::future::pending::<()>().await;
                 return;
             };
-            info!("CosmicSession Exit stream ready");
-            stream.next().await;
-            info!("CosmicSession Exit signal received — shutting down");
+
+            info!("Watching for com.system76.CosmicSession owner change");
+
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Ok((name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+                    if name == "com.system76.CosmicSession" && new_owner.is_empty() {
+                        info!("CosmicSession owner gone — shutting down");
+                        return;
+                    }
+                }
+            }
         };
 
         tokio::select! {
