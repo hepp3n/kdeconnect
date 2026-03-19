@@ -326,7 +326,9 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
 
             while let Some(Ok(msg)) = stream.next().await {
                 let msg: zbus::Message = msg;
+                info!("NameOwnerChanged received");
                 if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+                    info!("NameOwnerChanged: name={} old={} new={}", _name, _old, new_owner);
                     if !new_owner.is_empty() {
                         // Service has a new owner — reinitialize the client.
                         info!("kdeconnect service reappeared on bus — reinitializing client");
