@@ -55,12 +55,39 @@ impl cosmic::Application for KdeConnectApplet {
                 if let Err(e) = backend::initialize().await {
                     error!("Backend init failed: {:?}", e);
                 }
+                // Broadcast identity so paired phones reconnect immediately
+                // rather than waiting for their own discovery cycle.
+                backend::broadcast_identity().await.ok();
                 backend::fetch_devices().await
             },
             |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
         );
 
-        (app, init_task)
+        // Schedule additional fetches at 3s, 6s, and 12s to catch the phone
+        // reconnecting after login without waiting for the 10s poll cycle.
+        let retry_3s = Task::perform(
+            async {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                backend::fetch_devices().await
+            },
+            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
+        );
+        let retry_6s = Task::perform(
+            async {
+                tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
+                backend::fetch_devices().await
+            },
+            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
+        );
+        let retry_12s = Task::perform(
+            async {
+                tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
+                backend::fetch_devices().await
+            },
+            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
+        );
+
+        (app, Task::batch(vec![init_task, retry_3s, retry_6s, retry_12s]))
     }
 
     fn on_close_requested(&self, id: SurfaceId) -> Option<Message> {
@@ -215,8 +242,13 @@ impl cosmic::Application for KdeConnectApplet {
                 self.pairing_requests.remove(device_id);
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::accept_pairing(id).await.ok() },
-                    |_| cosmic::Action::App(Message::RefreshDevices),
+                    async move {
+                        backend::accept_pairing(id).await.ok();
+                    // Give the service time to process pairing before fetching
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                    backend::fetch_devices().await
+                    },
+                    |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
                 );
             }
             Message::RejectPairing(ref device_id) => {
