@@ -577,6 +577,15 @@ impl KdeConnectService {
             }
         });
 
+        // Broadcast identity after a short delay so kdeconnect-core is fully
+        // ready to accept incoming connections from paired phones.
+        let startup_sender = event_sender.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let _ = startup_sender.send(AppEvent::Broadcasting);
+            info!("Startup identity broadcast sent");
+        });
+
         Ok(Self {
             connection,
             event_sender,

@@ -57,6 +57,7 @@ impl cosmic::Application for KdeConnectApplet {
                 }
                 // Broadcast identity so paired phones reconnect immediately
                 // rather than waiting for their own discovery cycle.
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 backend::broadcast_identity().await.ok();
                 backend::fetch_devices().await
             },
