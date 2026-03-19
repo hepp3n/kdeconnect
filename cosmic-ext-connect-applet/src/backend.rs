@@ -235,9 +235,8 @@ pub async fn send_sms(device_id: String, phone_number: String, message: String) 
     client.send_sms(&device_id, &phone_number, &message).await
 }
 
-/// Stream of service events. Reconnects automatically if the inner stream ends.
-/// Emits `ServiceEvent::Resync` after each (re)subscribe so the applet fetches
-/// fresh device state and doesn't miss events that fired during the gap.
+/// Stream of service events. Reconnects automatically when the client is
+/// replaced (e.g. after session logout/login) or the stream ends.
 #[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
     use tokio::sync::mpsc;
@@ -259,15 +258,39 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
 
             let mut stream = client.listen_for_events().await;
 
-            while let Some(event) = stream.next().await {
-                if tx.send(event).await.is_err() {
-                    return; // applet exiting
+            loop {
+                tokio::select! {
+                    event = stream.next() => {
+                        match event {
+                            Some(e) => {
+                                if tx.send(e).await.is_err() {
+                                    return; // applet exiting
+                                }
+                            }
+                            None => {
+                                warn!("Event stream ended, reconnecting in 1s");
+                                sleep(Duration::from_secs(1)).await;
+                                continue 'reconnect;
+                            }
+                        }
+                    }
+                    // Detect if CLIENT was replaced by a new initialize() call
+                    // (happens after session logout/login while applet stays running).
+                    _ = async {
+                        loop {
+                            sleep(Duration::from_millis(500)).await;
+                            if let Some(current) = CLIENT.lock().await.clone() {
+                                if !Arc::ptr_eq(&current, &client) {
+                                    return;
+                                }
+                            }
+                        }
+                    } => {
+                        info!("D-Bus client replaced, reconnecting event stream");
+                        continue 'reconnect;
+                    }
                 }
             }
-
-            warn!("Event stream ended, reconnecting in 1s");
-            sleep(Duration::from_secs(1)).await;
-            continue 'reconnect;
         }
     });
 
