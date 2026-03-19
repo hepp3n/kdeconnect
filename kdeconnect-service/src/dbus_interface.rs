@@ -461,26 +461,41 @@ impl KdeConnectService {
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint  = signal(SignalKind::interrupt())?;
 
-        // Reuse the existing session connection — avoids a race where a freshly
-        // created connection misses the Exit signal if logout happens quickly.
+        info!("run() started — waiting for shutdown signal");
+
         let connection = self.connection.clone();
         let cosmic_exit = async move {
-            let Ok(proxy) = CosmicSessionProxy::new(&connection).await else {
-                std::future::pending::<()>().await;
-                return;
+            let proxy = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                CosmicSessionProxy::new(&connection),
+            ).await {
+                Ok(Ok(p)) => p,
+                Ok(Err(e)) => {
+                    info!("CosmicSession proxy failed: {} — falling back to pending", e);
+                    std::future::pending::<()>().await;
+                    return;
+                }
+                Err(_) => {
+                    info!("CosmicSession proxy timed out — falling back to pending");
+                    std::future::pending::<()>().await;
+                    return;
+                }
             };
+            info!("CosmicSession proxy connected — watching for Exit signal");
             let Ok(mut stream) = proxy.receive_exit().await else {
+                info!("CosmicSession receive_exit failed — falling back to pending");
                 std::future::pending::<()>().await;
                 return;
             };
+            info!("CosmicSession Exit stream ready");
             stream.next().await;
             info!("CosmicSession Exit signal received — shutting down");
         };
 
         tokio::select! {
-            _ = sigterm.recv()  => info!("SIGTERM received — shutting down"),
-            _ = sigint.recv()   => info!("SIGINT received — shutting down"),
-            _ = cosmic_exit     => {},
+            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
+            _ = cosmic_exit    => {},
         }
 
         Ok(())
