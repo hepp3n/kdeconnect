@@ -101,7 +101,17 @@ impl TcpTransport {
     }
 
     pub async fn listen(&self) -> anyhow::Result<()> {
-        let listener = TcpListener::bind(self.listen_addr).await?;
+        use socket2::{Domain, Protocol, Socket, Type};
+
+        // SO_REUSEADDR prevents "address already in use" when the service
+        // restarts before the OS has released the port from the previous instance.
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&self.listen_addr.into())?;
+        socket.listen(128)?;
+        let listener = TcpListener::from_std(std::net::TcpListener::from(socket))?;
+        info!("TCP listener bound to {}", self.listen_addr);
 
         loop {
             let event_tx = self.event_tx.clone();
