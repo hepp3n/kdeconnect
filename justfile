@@ -35,9 +35,12 @@ install-bins: build
 
 # Install applet desktop entry, icon, and metainfo
 install-applet-desktop:
-    install -Dm644 resources/{{APPID}}.desktop       {{PREFIX}}/share/applications/{{APPID}}.desktop
     install -Dm644 resources/{{APPID}}.svg           {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml  {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
+    mkdir -p {{PREFIX}}/share/applications
+    sed 's|Exec=cosmic-ext-connect-applet|Exec={{PREFIX}}/bin/cosmic-ext-connect-applet|' \
+        resources/{{APPID}}.desktop \
+        > {{PREFIX}}/share/applications/{{APPID}}.desktop
 
 # Write D-Bus activation file with correct full path
 install-dbus-service:
@@ -45,9 +48,10 @@ install-dbus-service:
     printf '[D-BUS Service]\nName={{APPID}}\nExec={{PREFIX}}/bin/kdeconnect-service\n' \
         > {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
 
-# Install XDG autostart entry 
+# Install XDG autostart entry
 install-autostart:
-    install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
+    mkdir -p {{XDG_CONFIG}}/autostart
+    sed 's|Exec=kdeconnect-service|Exec={{PREFIX}}/bin/kdeconnect-service|'         resources/{{APPID}}.daemon.desktop         > {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
 
 # Install systemd user service (optional — enables journalctl logging and systemctl control)
 install-systemd-service:
