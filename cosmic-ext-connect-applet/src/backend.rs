@@ -319,7 +319,8 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                 .arg(0, "io.github.hepp3n.kdeconnect").unwrap()
                 .build();
 
-            let Ok(mut stream) = MessageStream::for_match_rule(rule, &connection, None).await else {
+            let Ok(mut stream): Result<zbus::MessageStream, _> =
+                MessageStream::for_match_rule(rule, &connection, None).await else {
                 return;
             };
 
@@ -327,6 +328,7 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                 let msg: zbus::Message = msg;
                 if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
                     if !new_owner.is_empty() {
+                        // Service has a new owner — reinitialize the client.
                         info!("kdeconnect service reappeared on bus — reinitializing client");
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         if let Err(e) = initialize().await {
@@ -335,10 +337,21 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                         }
                         // Broadcast so paired phones reconnect immediately.
                         broadcast_identity().await.ok();
-                        // Fetch at increasing intervals to catch phone reconnecting.
-                        for secs in [5u64, 15, 30, 60] {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(secs)).await;
-                            yield crate::messages::Message::RefreshDevices;
+                        // Poll until devices appear or give up after 90s.
+                        let mut elapsed = 0u64;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                            elapsed += 3;
+                            let devices = fetch_devices().await;
+                            if !devices.is_empty() {
+                                info!("Device found after {}s — yielding refresh", elapsed);
+                                yield crate::messages::Message::RefreshDevices;
+                                break;
+                            }
+                            if elapsed >= 90 {
+                                warn!("Gave up waiting for devices after 90s");
+                                break;
+                            }
                         }
                     }
                 }
