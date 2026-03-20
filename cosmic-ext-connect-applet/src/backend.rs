@@ -319,27 +319,27 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                 .arg(0, "io.github.hepp3n.kdeconnect").unwrap()
                 .build();
 
-            let Ok(mut stream): Result<zbus::MessageStream, _> =
-                MessageStream::for_match_rule(rule, &connection, None).await else {
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, &connection, None).await else {
                 return;
             };
 
             while let Some(Ok(msg)) = stream.next().await {
                 let msg: zbus::Message = msg;
-                info!("NameOwnerChanged received");
                 if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
-                    info!("NameOwnerChanged: name={} old={} new={}", _name, _old, new_owner);
                     if !new_owner.is_empty() {
-                        // Service has a new owner — reinitialize the client.
                         info!("kdeconnect service reappeared on bus — reinitializing client");
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         if let Err(e) = initialize().await {
                             error!("Failed to reinitialize D-Bus client: {:?}", e);
                             continue;
                         }
-                        // Give the service time to settle then fetch devices.
-                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                        yield crate::messages::Message::RefreshDevices;
+                        // Broadcast so paired phones reconnect immediately.
+                        broadcast_identity().await.ok();
+                        // Fetch at increasing intervals to catch phone reconnecting.
+                        for secs in [5u64, 15, 30, 60] {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(secs)).await;
+                            yield crate::messages::Message::RefreshDevices;
+                        }
                     }
                 }
             }

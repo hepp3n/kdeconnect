@@ -60,31 +60,24 @@ impl cosmic::Application for KdeConnectApplet {
             |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
         );
 
-        // Schedule additional fetches at 3s, 6s, and 12s to catch the phone
-        // reconnecting after login without waiting for the 10s poll cycle.
-        let retry_3s = Task::perform(
-            async {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                backend::fetch_devices().await
-            },
-            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
-        );
-        let retry_6s = Task::perform(
-            async {
-                tokio::time::sleep(tokio::time::Duration::from_secs(6)).await;
-                backend::fetch_devices().await
-            },
-            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
-        );
-        let retry_12s = Task::perform(
-            async {
-                tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
+        // Schedule fetches at increasing intervals to catch the phone
+        // reconnecting after login — phone can take up to ~60s to reconnect.
+        let make_retry = |secs: u64| Task::perform(
+            async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(secs)).await;
                 backend::fetch_devices().await
             },
             |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
         );
 
-        (app, Task::batch(vec![init_task, retry_3s, retry_6s, retry_12s]))
+        let retries = Task::batch(vec![
+            make_retry(5),
+            make_retry(15),
+            make_retry(30),
+            make_retry(60),
+        ]);
+
+        (app, Task::batch(vec![init_task, retries]))
     }
 
     fn on_close_requested(&self, id: SurfaceId) -> Option<Message> {
