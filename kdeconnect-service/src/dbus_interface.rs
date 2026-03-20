@@ -439,13 +439,58 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Block until the process is killed. All work runs in spawned tasks started
-    /// by `new()`; this just keeps the service process alive.
+    /// Run until COSMIC session exits, SIGTERM, or SIGINT.
+    ///
+    /// Watches for com.system76.CosmicSession disappearing from the bus via
+    /// NameOwnerChanged — COSMIC calls Exit() as a method on the session
+    /// manager which then exits, dropping its bus name.
     pub async fn run(&self) -> Result<()> {
-        std::future::pending::<()>().await;
+        use futures_util::StreamExt;
+        use tokio::signal::unix::{SignalKind, signal};
+        use zbus::{MatchRule, MessageStream};
+
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint  = signal(SignalKind::interrupt())?;
+
+        info!("run() started — watching for CosmicSession to exit");
+
+        let connection = self.connection.clone();
+        let cosmic_exit = async move {
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus").unwrap()
+                .member("NameOwnerChanged").unwrap()
+                .arg(0, "com.system76.CosmicSession").unwrap()
+                .build();
+
+            let Ok(mut stream) = MessageStream::for_match_rule(rule, &connection, None).await else {
+                info!("NameOwnerChanged subscribe failed — falling back to pending");
+                std::future::pending::<()>().await;
+                return;
+            };
+
+            info!("Watching for com.system76.CosmicSession owner change");
+
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Ok((name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+                    if name == "com.system76.CosmicSession" && new_owner.is_empty() {
+                        info!("CosmicSession owner gone — shutting down");
+                        return;
+                    }
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("SIGTERM received — shutting down"),
+            _ = sigint.recv()  => info!("SIGINT received — shutting down"),
+            _ = cosmic_exit    => {},
+        }
+
         Ok(())
     }
 }
+
 /// Tracks devices that have already received an initial SMS sync this session.
 type SmsSyncedSet = Arc<Mutex<std::collections::HashSet<String>>>;
 
@@ -533,6 +578,15 @@ impl KdeConnectService {
                 Err(e) if e.is_panic() => error!("Core event loop PANICKED - connections will fail: {:?}", e),
                 Err(e) => error!("Core event loop cancelled: {:?}", e),
             }
+        });
+
+        // Broadcast identity after a short delay so kdeconnect-core is fully
+        // ready to accept incoming connections from paired phones.
+        let startup_sender = event_sender.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let _ = startup_sender.send(AppEvent::Broadcasting);
+            info!("Startup identity broadcast sent");
         });
 
         Ok(Self {
@@ -644,13 +698,22 @@ impl KdeConnectService {
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
                     .await?;
 
+                // Emit device_paired for state change notification, then
+                // device_connected as a second delivery path so the applet
+                // updates immediately even if it missed device_paired.
                 DaemonInterface::device_paired(
+                    iface_ref.signal_emitter(),
+                    device_id.0.clone(),
+                    dbus_device.clone(),
+                )
+                .await?;
+                DaemonInterface::device_connected(
                     iface_ref.signal_emitter(),
                     device_id.0.clone(),
                     dbus_device,
                 )
                 .await?;
-                debug!("Device paired signal emitted");
+                debug!("Device paired + connected signals emitted");
 
                 let sender = event_sender.clone();
                 let did = device_id.0.clone();

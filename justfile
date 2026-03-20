@@ -35,9 +35,12 @@ install-bins: build
 
 # Install applet desktop entry, icon, and metainfo
 install-applet-desktop:
-    install -Dm644 resources/{{APPID}}.desktop       {{PREFIX}}/share/applications/{{APPID}}.desktop
     install -Dm644 resources/{{APPID}}.svg           {{PREFIX}}/share/icons/hicolor/scalable/apps/{{APPID}}.svg
     install -Dm644 resources/{{APPID}}.metainfo.xml  {{PREFIX}}/share/metainfo/{{APPID}}.metainfo.xml
+    mkdir -p {{PREFIX}}/share/applications
+    sed 's|Exec=cosmic-ext-connect-applet|Exec={{PREFIX}}/bin/cosmic-ext-connect-applet|' \
+        resources/{{APPID}}.desktop \
+        > {{PREFIX}}/share/applications/{{APPID}}.desktop
 
 # Write D-Bus activation file with correct full path
 install-dbus-service:
@@ -45,9 +48,10 @@ install-dbus-service:
     printf '[D-BUS Service]\nName={{APPID}}\nExec={{PREFIX}}/bin/kdeconnect-service\n' \
         > {{PREFIX}}/share/dbus-1/services/{{APPID}}.service
 
-# Install XDG autostart entry 
+# Install XDG autostart entry
 install-autostart:
-    install -Dm644 resources/{{APPID}}.daemon.desktop {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
+    mkdir -p {{XDG_CONFIG}}/autostart
+    sed 's|Exec=kdeconnect-service|Exec={{PREFIX}}/bin/kdeconnect-service|'         resources/{{APPID}}.daemon.desktop         > {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
 
 # Install systemd user service (optional — enables journalctl logging and systemctl control)
 install-systemd-service:
@@ -71,6 +75,24 @@ enable-service:
     @echo "To add the applet:"
     @echo "  COSMIC Settings → Desktop → Panel → Configure Panel Applets → Add KDE Connect"
 
+
+# Debug install — full logging for both service and panel applet
+# Service logs to /tmp/kdeconnect-service.log
+# Applet logs to /tmp/kdeconnect-applet.log (captured from COSMIC panel instance)
+install-debug: install-bins install-applet-desktop install-dbus-service
+    # Service autostart wrapper with logging
+    printf '[Desktop Entry]\nName=KDE Connect Service (Debug)\nExec=bash -c "RUST_LOG=info {{PREFIX}}/bin/kdeconnect-service >> /tmp/kdeconnect-service.log 2>&1"\nTerminal=false\nType=Application\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n'         > {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
+    # Applet wrapper script — panel reads Exec= from the desktop file so this
+    # captures the actual panel-launched instance, not just a terminal run.
+    printf '#!/bin/bash\nRUST_LOG=info {{PREFIX}}/bin/cosmic-ext-connect-applet >> /tmp/kdeconnect-applet.log 2>&1\n'         > {{PREFIX}}/bin/kdeconnect-applet-debug
+    chmod +x {{PREFIX}}/bin/kdeconnect-applet-debug
+    sed 's|Exec=.*|Exec={{PREFIX}}/bin/kdeconnect-applet-debug|'         {{PREFIX}}/share/applications/{{APPID}}.desktop         > /tmp/{{APPID}}.desktop.debug
+    cp /tmp/{{APPID}}.desktop.debug {{PREFIX}}/share/applications/{{APPID}}.desktop
+    @echo ""
+    @echo "✓ Debug install complete — log out and back in to start capturing"
+    @echo "  Service log: /tmp/kdeconnect-service.log"
+    @echo "  Applet log:  /tmp/kdeconnect-applet.log"
+    @echo "  Restore with: just install"
 
 # Default install — uses D-Bus activation, no systemd required
 install: install-bins install-applet-desktop install-dbus-service install-autostart

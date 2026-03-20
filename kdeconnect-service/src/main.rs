@@ -21,5 +21,7 @@ async fn main() -> Result<()> {
 
     service.run().await?;
 
-    Ok(())
+    // Spawned tasks (event handler, core loop) keep the tokio runtime alive
+    // after run() returns — force exit to ensure clean shutdown.
+    std::process::exit(0);
 }

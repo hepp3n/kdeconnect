@@ -7,10 +7,9 @@ use kdeconnect_dbus_client::{KdeConnectClient, ServiceEvent};
 use std::sync::Arc;
 use std::{any::TypeId, collections::HashMap};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::models::Device;
-
 
 lazy_static::lazy_static! {
     static ref CLIENT: Arc<Mutex<Option<Arc<KdeConnectClient>>>> = Arc::new(Mutex::new(None));
@@ -20,12 +19,8 @@ lazy_static::lazy_static! {
 /// Initialize the D-Bus client connection
 pub async fn initialize() -> Result<()> {
     info!("Initializing D-Bus client");
-
     let client = KdeConnectClient::new().await?;
-
-    let mut client_guard = CLIENT.lock().await;
-    *client_guard = Some(Arc::new(client));
-
+    *CLIENT.lock().await = Some(Arc::new(client));
     info!("D-Bus client connected to kdeconnect-service");
     Ok(())
 }
@@ -33,7 +28,6 @@ pub async fn initialize() -> Result<()> {
 /// Fetch all devices from the service
 pub async fn fetch_devices() -> Vec<Device> {
     let client_guard = CLIENT.lock().await;
-
     let Some(client) = client_guard.as_ref() else {
         warn!("D-Bus client not initialized");
         return vec![];
@@ -87,15 +81,13 @@ pub async fn fetch_devices() -> Vec<Device> {
 /// Update device in cache
 #[allow(dead_code)]
 pub async fn update_device(device_id: String, device: Device) {
-    let mut cache = DEVICE_CACHE.lock().await;
-    cache.insert(device_id, device);
+    DEVICE_CACHE.lock().await.insert(device_id, device);
 }
 
 /// Remove device from cache
 #[allow(dead_code)]
 pub async fn remove_device(device_id: &str) {
-    let mut cache = DEVICE_CACHE.lock().await;
-    cache.remove(device_id);
+    DEVICE_CACHE.lock().await.remove(device_id);
 }
 
 /// Pair with a device
@@ -149,7 +141,7 @@ pub async fn browse_device_filesystem(_device_id: String) -> Result<()> {
     Ok(())
 }
 
-/// Accept an incoming pairing request from a device.
+/// Accept an incoming pairing request from a device
 pub async fn accept_pairing(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
     let Some(client) = client_guard.as_ref() else {
@@ -158,7 +150,7 @@ pub async fn accept_pairing(device_id: String) -> Result<()> {
     client.accept_pairing(&device_id).await
 }
 
-/// Reject an incoming pairing request from a device.
+/// Reject an incoming pairing request from a device
 pub async fn reject_pairing(device_id: String) -> Result<()> {
     let client_guard = CLIENT.lock().await;
     let Some(client) = client_guard.as_ref() else {
@@ -176,26 +168,17 @@ pub async fn ring_device(device_id: String) -> Result<()> {
     client.ring_device(&device_id).await
 }
 
-/// Enable or disable a plugin for a device.
-/// The change is forwarded to kdeconnect-service, which persists it and
-/// gates all subsequent incoming packets for that plugin.
+/// Enable or disable a plugin for a device
 #[allow(dead_code)]
-pub async fn set_plugin_enabled(
-    device_id: String,
-    plugin_id: String,
-    enabled: bool,
-) -> Result<()> {
+pub async fn set_plugin_enabled(device_id: String, plugin_id: String, enabled: bool) -> Result<()> {
     let client_guard = CLIENT.lock().await;
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-    client
-        .set_plugin_enabled(&device_id, &plugin_id, enabled)
-        .await
+    client.set_plugin_enabled(&device_id, &plugin_id, enabled).await
 }
 
-/// Return the list of disabled plugin IDs for a device.
-/// Used by the settings UI to restore persisted toggle states on load.
+/// Return the list of disabled plugin IDs for a device
 #[allow(dead_code)]
 pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
     let client_guard = CLIENT.lock().await;
@@ -212,8 +195,7 @@ pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
     }
 }
 
-/// Broadcast our identity packet over UDP to trigger device discovery.
-/// Called when the user opens the Available Devices tab or hits Scan Again.
+/// Broadcast our identity packet over UDP to trigger device discovery
 #[allow(dead_code)]
 pub async fn broadcast_identity() -> Result<()> {
     let client_guard = CLIENT.lock().await;
@@ -253,7 +235,8 @@ pub async fn send_sms(device_id: String, phone_number: String, message: String) 
     client.send_sms(&device_id, &phone_number, &message).await
 }
 
-/// Create a stream of service events
+/// Stream of service events. Reconnects automatically when the client is
+/// replaced (e.g. after session logout/login) or the stream ends.
 #[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
     use tokio::sync::mpsc;
@@ -262,54 +245,122 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
     let (tx, rx) = mpsc::channel::<ServiceEvent>(100);
 
     tokio::spawn(async move {
-        let mut attempts = 0;
-        let client = loop {
-            let client_guard = CLIENT.lock().await;
-            if let Some(client) = client_guard.clone() {
-                drop(client_guard);
-                break client;
-            }
-            drop(client_guard);
+        'reconnect: loop {
+            // Wait for the D-Bus client to be ready.
+            let client = 'wait: loop {
+                if let Some(client) = CLIENT.lock().await.clone() {
+                    break 'wait client;
+                }
+                sleep(Duration::from_millis(100)).await;
+            };
 
-            attempts += 1;
-            if attempts > 20 {
-                warn!("Timeout waiting for D-Bus client initialization");
-                return;
-            }
+            info!("Event stream: D-Bus client ready, subscribing");
 
-            debug!(
-                "Waiting for D-Bus client initialization (attempt {})",
-                attempts
-            );
-            sleep(Duration::from_millis(100)).await;
-        };
+            let mut stream = client.listen_for_events().await;
 
-        info!("Event stream: D-Bus client ready");
-
-        let mut stream = client.listen_for_events().await;
-
-        while let Some(event) = stream.next().await {
-            if tx.send(event).await.is_err() {
-                warn!("Event receiver dropped, stopping event listener");
-                break;
+            loop {
+                tokio::select! {
+                    event = stream.next() => {
+                        match event {
+                            Some(e) => {
+                                if tx.send(e).await.is_err() {
+                                    return; // applet exiting
+                                }
+                            }
+                            None => {
+                                warn!("Event stream ended, reconnecting in 1s");
+                                sleep(Duration::from_secs(1)).await;
+                                continue 'reconnect;
+                            }
+                        }
+                    }
+                    // Detect if CLIENT was replaced by a new initialize() call
+                    // (happens after session logout/login while applet stays running).
+                    _ = async {
+                        loop {
+                            sleep(Duration::from_millis(500)).await;
+                            if let Some(current) = CLIENT.lock().await.clone() {
+                                if !Arc::ptr_eq(&current, &client) {
+                                    return;
+                                }
+                            }
+                        }
+                    } => {
+                        info!("D-Bus client replaced, reconnecting event stream");
+                        continue 'reconnect;
+                    }
+                }
             }
         }
-
-        debug!("Event stream ended");
     });
 
-    futures::stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Some(event) => Some((event, rx)),
-            None => loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-            },
-        }
-    })
-    .boxed()
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
-/// Create a file transfer subscription for updating progress state
+/// Subscription that watches for the kdeconnect service reappearing on the bus
+/// after a session logout/login. Reinitializes the D-Bus client and yields
+/// a refresh so the applet picks up devices from the new service instance.
+pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> {
+    struct ServiceWatcher;
+
+    Subscription::run_with(TypeId::of::<ServiceWatcher>(), |_| {
+        async_stream::stream! {
+            use zbus::{MatchRule, MessageStream};
+            use futures::StreamExt;
+
+            let Ok(connection) = zbus::Connection::session().await else {
+                return;
+            };
+
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus").unwrap()
+                .member("NameOwnerChanged").unwrap()
+                .arg(0, "io.github.hepp3n.kdeconnect").unwrap()
+                .build();
+
+            let Ok(mut stream): Result<zbus::MessageStream, _> =
+                MessageStream::for_match_rule(rule, &connection, None).await else {
+                return;
+            };
+
+            while let Some(Ok(msg)) = stream.next().await {
+                let msg: zbus::Message = msg;
+                if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+                    if !new_owner.is_empty() {
+                        // Service has a new owner — reinitialize the client.
+                        info!("kdeconnect service reappeared on bus — reinitializing client");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        if let Err(e) = initialize().await {
+                            error!("Failed to reinitialize D-Bus client: {:?}", e);
+                            continue;
+                        }
+                        // Broadcast so paired phones reconnect immediately.
+                        broadcast_identity().await.ok();
+                        // Poll until devices appear or give up after 90s.
+                        let mut elapsed = 0u64;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                            elapsed += 3;
+                            let devices = fetch_devices().await;
+                            if !devices.is_empty() {
+                                info!("Device found after {}s — yielding refresh", elapsed);
+                                yield crate::messages::Message::RefreshDevices;
+                                break;
+                            }
+                            if elapsed >= 90 {
+                                warn!("Gave up waiting for devices after 90s");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Subscription for file transfer progress updates
 #[allow(dead_code)]
 pub fn filetransfer_subscription() -> Subscription<crate::messages::Message> {
     struct Worker;
@@ -321,13 +372,9 @@ pub fn filetransfer_subscription() -> Subscription<crate::messages::Message> {
             };
 
             let mut progress_stream = client.transfer_progress_stream().await;
-
             while let Some(progress) = progress_stream.next().await {
                 yield crate::messages::Message::UpdateTransferProgress(progress);
-            };
-
-
-            futures::pending!()
+            }
         }
     })
 }

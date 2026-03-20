@@ -25,7 +25,8 @@ pub struct Device {
     pub is_reachable: bool,
 }
 
-/// Events from the D-Bus service
+/// Events from the D-Bus service.
+/// Must be Clone for broadcast channel fan-out.
 #[derive(Debug, Clone)]
 pub enum ServiceEvent {
     DeviceConnected(String, Device),
@@ -117,10 +118,15 @@ pub struct KdeConnectClient {
     daemon_proxy: DaemonProxy<'static>,
     sms_proxy: SmsProxy<'static>,
     contacts_proxy: ContactsProxy<'static>,
+    /// Signals are subscribed once in new() and broadcast to all callers of
+    /// listen_for_events() — no subscription gap on reconnect.
+    event_tx: tokio::sync::broadcast::Sender<ServiceEvent>,
 }
 
 impl KdeConnectClient {
-    /// Connect to the KDE Connect service
+    /// Connect to the KDE Connect service and immediately subscribe to all
+    /// signals. Events are fanned out via a broadcast channel so no signals
+    /// are lost between listen_for_events() calls.
     pub async fn new() -> Result<Self> {
         let connection = Connection::session().await?;
 
@@ -128,10 +134,69 @@ impl KdeConnectClient {
         let sms_proxy = SmsProxy::new(&connection).await?;
         let contacts_proxy = ContactsProxy::new(&connection).await?;
 
+        // Subscribe before returning — no events can be missed after this point.
+        let connected_stream    = daemon_proxy.receive_device_connected().await?;
+        let paired_stream       = daemon_proxy.receive_device_paired().await?;
+        let disconnected_stream = daemon_proxy.receive_device_disconnected().await?;
+        let sms_stream          = sms_proxy.receive_sms_messages_received().await?;
+        let contacts_stream     = contacts_proxy.receive_contacts_received().await?;
+        let pairing_req_stream  = daemon_proxy.receive_pairing_requested().await?;
+
+        let (event_tx, _) = tokio::sync::broadcast::channel::<ServiceEvent>(256);
+        let tx = event_tx.clone();
+
+        tokio::spawn(async move {
+            use futures::stream::select_all;
+
+            let connected = Box::pin(connected_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| ServiceEvent::DeviceConnected(
+                    a.device_id.clone(), a.device.clone(),
+                ))
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let paired = Box::pin(paired_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| ServiceEvent::DevicePaired(
+                    a.device_id.clone(), a.device.clone(),
+                ))
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let disconnected = Box::pin(disconnected_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| ServiceEvent::DeviceDisconnected(a.device_id.clone()))
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let sms = Box::pin(sms_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| ServiceEvent::SmsMessagesReceived(a.messages_json.clone()))
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let contacts = Box::pin(contacts_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| {
+                    let map: HashMap<String, String> =
+                        serde_json::from_str(&a.contacts_json).unwrap_or_default();
+                    ServiceEvent::ContactsReceived(map)
+                })
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let pairing_req = Box::pin(pairing_req_stream.filter_map(|s| async move {
+                s.args().ok().map(|a| ServiceEvent::PairingRequested(
+                    a.device_id.clone(), a.device_name.clone(),
+                ))
+            })) as futures::stream::BoxStream<'static, ServiceEvent>;
+
+            let mut merged = select_all(vec![
+                connected, paired, disconnected, sms, contacts, pairing_req,
+            ]);
+
+            while let Some(event) = merged.next().await {
+                // Errors just mean no receivers are active right now — not a problem.
+                let _ = tx.send(event);
+            }
+        });
+
         Ok(Self {
             daemon_proxy,
             sms_proxy,
             contacts_proxy,
+            event_tx,
         })
     }
 
@@ -241,86 +306,12 @@ impl KdeConnectClient {
         Ok(self.contacts_proxy.get_cached_contacts(device_id).await?)
     }
 
-    /// Create a stream of service events
-    pub async fn listen_for_events(
-        &self,
-    ) -> futures::stream::BoxStream<'static, ServiceEvent> {
-        use futures::stream::select_all;
-
-        let connected = self
-            .daemon_proxy
-            .receive_device_connected()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                ServiceEvent::DeviceConnected(args.device_id.clone(), args.device.clone())
-            });
-
-        let paired = self
-            .daemon_proxy
-            .receive_device_paired()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                ServiceEvent::DevicePaired(args.device_id.clone(), args.device.clone())
-            });
-
-        let disconnected = self
-            .daemon_proxy
-            .receive_device_disconnected()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                ServiceEvent::DeviceDisconnected(args.device_id.clone())
-            });
-
-        let sms = self
-            .sms_proxy
-            .receive_sms_messages_received()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                ServiceEvent::SmsMessagesReceived(args.messages_json.clone())
-            });
-
-        let contacts = self
-            .contacts_proxy
-            .receive_contacts_received()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                let contacts_json = args.contacts_json.clone();
-                let map: HashMap<String, String> =
-                    serde_json::from_str(&contacts_json).unwrap_or_default();
-                ServiceEvent::ContactsReceived(map)
-            });
-
-        let pairing_req = self
-            .daemon_proxy
-            .receive_pairing_requested()
-            .await
-            .unwrap()
-            .map(|s| {
-                let args = s.args().unwrap();
-                ServiceEvent::PairingRequested(
-                    args.device_id.clone(),
-                    args.device_name.clone(),
-                )
-            });
-
-        Box::pin(select_all(vec![
-            Box::pin(connected) as futures::stream::BoxStream<'static, ServiceEvent>,
-            Box::pin(paired),
-            Box::pin(disconnected),
-            Box::pin(sms),
-            Box::pin(contacts),
-            Box::pin(pairing_req),
-        ]))
+    /// Subscribe to service events. Backed by a persistent broadcast channel
+    /// set up in new() — no signal gap between calls or on reconnect.
+    pub async fn listen_for_events(&self) -> futures::stream::BoxStream<'static, ServiceEvent> {
+        use tokio_stream::wrappers::BroadcastStream;
+        let rx = self.event_tx.subscribe();
+        Box::pin(BroadcastStream::new(rx).filter_map(|r: Result<ServiceEvent, _>| async move { r.ok() }))
     }
 
     pub async fn transfer_progress_stream(&self) -> impl futures::stream::Stream<Item = u8> {

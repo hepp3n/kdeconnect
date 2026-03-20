@@ -83,7 +83,9 @@ impl KdeConnectCore {
         let udp_transport = Arc::new(UdpTransport::new(&transport_tx).await);
 
         tokio::spawn(async move {
-            let _ = tcp_transport.listen().await;
+            if let Err(e) = tcp_transport.listen().await {
+                tracing::error!("TCP listener failed: {}", e);
+            }
         });
 
         let udp = Arc::clone(&udp_transport);
