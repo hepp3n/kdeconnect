@@ -28,6 +28,10 @@ pub enum Message {
     // Desktop clipboard read result — content forwarded to device
     ClipboardReadForDevice(String, String), // device_id, content
 
+    // Battery and connectivity updates — patch device in place without full refresh
+    BatteryUpdated(String, i32, bool),  // device_id, level, is_charging
+    ConnectivityUpdated(String, i32),   // device_id, signal_strength
+
     // Advanced features
     RemoteInput(String),
     LockDevice(String),

@@ -229,6 +229,22 @@ impl cosmic::Application for KdeConnectApplet {
             Message::ClipboardReceived(content) => {
                 return cosmic::iced::clipboard::write::<cosmic::Action<Message>>(content);
             }
+            Message::BatteryUpdated(device_id, level, charging) => {
+                if let Some(device) = self.devices.get_mut(&device_id) {
+                    device.battery_level = Some(level);
+                    device.is_charging = Some(charging);
+                    // Also patch the backend cache so the next fetch_devices() preserves it
+                    let d = device.clone();
+                    tokio::spawn(async move { backend::update_device(device_id, d).await; });
+                }
+            }
+            Message::ConnectivityUpdated(device_id, strength) => {
+                if let Some(device) = self.devices.get_mut(&device_id) {
+                    device.signal_strength = Some(strength);
+                    let d = device.clone();
+                    tokio::spawn(async move { backend::update_device(device_id, d).await; });
+                }
+            }
             Message::AcceptPairing(ref device_id) => {
                 self.pairing_requests.remove(device_id);
                 let id = device_id.clone();
@@ -364,6 +380,12 @@ impl cosmic::Application for KdeConnectApplet {
                             }
                             kdeconnect_dbus_client::ServiceEvent::ClipboardReceived(content) => {
                                 yield Message::ClipboardReceived(content);
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::BatteryReceived(id, level, charging) => {
+                                yield Message::BatteryUpdated(id, level, charging);
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::ConnectivityReceived(id, strength) => {
+                                yield Message::ConnectivityUpdated(id, strength);
                             }
                             kdeconnect_dbus_client::ServiceEvent::DeviceConnected(id, _)
                             | kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, _)

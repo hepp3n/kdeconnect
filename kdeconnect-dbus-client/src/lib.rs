@@ -35,6 +35,8 @@ pub enum ServiceEvent {
     ContactsReceived(HashMap<String, String>), // phone -> name
     PairingRequested(String, String),          // device_id, device_name
     ClipboardReceived(String),                 // clipboard content from phone
+    BatteryReceived(String, i32, bool),        // device_id, level, is_charging
+    ConnectivityReceived(String, i32),         // device_id, signal_strength
 }
 
 /// D-Bus proxy for daemon interface
@@ -79,6 +81,21 @@ trait Daemon {
 
     #[zbus(signal)]
     async fn clipboard_received(&self, content: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn battery_received(
+        &self,
+        device_id: String,
+        level: i32,
+        is_charging: bool,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn connectivity_received(
+        &self,
+        device_id: String,
+        signal_strength: i32,
+    ) -> zbus::Result<()>;
 }
 
 /// D-Bus proxy for SMS interface
@@ -327,6 +344,30 @@ impl KdeConnectClient {
                 ServiceEvent::ClipboardReceived(args.content.clone())
             });
 
+        let battery = self
+            .daemon_proxy
+            .receive_battery_received()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::BatteryReceived(
+                    args.device_id.clone(),
+                    args.level,
+                    args.is_charging,
+                )
+            });
+
+        let connectivity = self
+            .daemon_proxy
+            .receive_connectivity_received()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::ConnectivityReceived(args.device_id.clone(), args.signal_strength)
+            });
+
         Box::pin(select_all(vec![
             Box::pin(connected) as futures::stream::BoxStream<'static, ServiceEvent>,
             Box::pin(paired),
@@ -335,6 +376,8 @@ impl KdeConnectClient {
             Box::pin(contacts),
             Box::pin(pairing_req),
             Box::pin(clipboard),
+            Box::pin(battery),
+            Box::pin(connectivity),
         ]))
     }
 

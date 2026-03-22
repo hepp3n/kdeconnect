@@ -3,7 +3,7 @@
 use anyhow::Result;
 use kdeconnect_core::{
     KdeConnectCore, PacketType, ProtocolPacket,
-    device::{DeviceId, PairState},
+    device::{DeviceId, DeviceState, PairState},
     event::{AppEvent, ConnectionEvent},
 };
 use serde::{Deserialize, Serialize};
@@ -301,6 +301,23 @@ impl DaemonInterface {
     async fn clipboard_received(
         signal_emitter: &SignalEmitter<'_>,
         content: String,
+    ) -> zbus::Result<()>;
+
+    /// Signal: Battery level/charging state received from a paired device
+    #[zbus(signal)]
+    async fn battery_received(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        level: i32,
+        is_charging: bool,
+    ) -> zbus::Result<()>;
+
+    /// Signal: Cellular signal strength received from a paired device
+    #[zbus(signal)]
+    async fn connectivity_received(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        signal_strength: i32,
     ) -> zbus::Result<()>;
 }
 
@@ -815,6 +832,40 @@ impl KdeConnectService {
                 DaemonInterface::clipboard_received(iface_ref.signal_emitter(), content)
                     .await?;
                 debug!("ClipboardReceived D-Bus signal emitted");
+            }
+            ConnectionEvent::StateUpdated(state) => {
+                let device_id = match current_device_id.lock().await.clone() {
+                    Some(id) => id,
+                    None => {
+                        debug!("StateUpdated but no current device id");
+                        return Ok(());
+                    }
+                };
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+                match state {
+                    DeviceState::Battery { level, charging } => {
+                        DaemonInterface::battery_received(
+                            iface_ref.signal_emitter(),
+                            device_id,
+                            level as i32,
+                            charging,
+                        )
+                        .await?;
+                        debug!("BatteryReceived D-Bus signal emitted");
+                    }
+                    DeviceState::Connectivity((_, signal_strength)) => {
+                        DaemonInterface::connectivity_received(
+                            iface_ref.signal_emitter(),
+                            device_id,
+                            signal_strength,
+                        )
+                        .await?;
+                        debug!("ConnectivityReceived D-Bus signal emitted");
+                    }
+                }
             }
             _ => {
                 debug!("Unhandled event type received");

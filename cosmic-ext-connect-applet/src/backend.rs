@@ -39,16 +39,17 @@ pub async fn fetch_devices() -> Vec<Device> {
             let devices: Vec<Device> = dbus_devices
                 .into_iter()
                 .map(|d| {
+                    let existing = cache.get(&d.id).cloned();
                     let device = Device {
                         id: d.id.clone(),
                         name: d.name.clone(),
                         device_type: "phone".to_string(),
                         is_paired: d.is_paired,
                         is_reachable: d.is_reachable,
-                        battery_level: None,
-                        is_charging: None,
-                        network_type: None,
-                        signal_strength: None,
+                        battery_level: existing.as_ref().and_then(|e| e.battery_level),
+                        is_charging: existing.as_ref().and_then(|e| e.is_charging),
+                        network_type: existing.as_ref().and_then(|e| e.network_type.clone()),
+                        signal_strength: existing.as_ref().and_then(|e| e.signal_strength),
                         pairing_requests: 0,
                         has_battery: false,
                         has_ping: true,
@@ -57,7 +58,7 @@ pub async fn fetch_devices() -> Vec<Device> {
                         has_clipboard: true,
                         has_findmyphone: true,
                         has_share: true,
-                        share_progress: None,
+                        share_progress: existing.as_ref().and_then(|e| e.share_progress),
                         has_sftp: false,
                         has_mpris: false,
                         has_remote_keyboard: false,
@@ -79,7 +80,6 @@ pub async fn fetch_devices() -> Vec<Device> {
 }
 
 /// Update device in cache
-#[allow(dead_code)]
 pub async fn update_device(device_id: String, device: Device) {
     DEVICE_CACHE.lock().await.insert(device_id, device);
 }
