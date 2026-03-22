@@ -231,11 +231,15 @@ impl PluginRegistry {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
                     && let Some(timestamp) = clipboard.timestamp
                 {
-                    if timestamp > 0 {
-                        info!("Clipboard sync requested with timestamp: {}", timestamp);
+                    let local_ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if timestamp > 0 && timestamp >= local_ts {
+                        info!("Clipboard sync on connect accepted (ts={} local={})", timestamp, local_ts);
                         clipboard.received_packet(connection_tx).await;
                     } else {
-                        info!("Clipboard sync requested without timestamp. Ignoring");
+                        info!("Clipboard sync on connect ignored — stale timestamp (ts={} local={})", timestamp, local_ts);
                     }
                 }
             }
