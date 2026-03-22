@@ -23,6 +23,11 @@ pub enum Message {
     ShareUrl(String),
     UpdateTransferProgress(u8),
 
+    // Clipboard received from phone — written to the desktop clipboard
+    ClipboardReceived(String),
+    // Desktop clipboard read result — content forwarded to device
+    ClipboardReadForDevice(String, String), // device_id, content
+
     // Advanced features
     RemoteInput(String),
     LockDevice(String),

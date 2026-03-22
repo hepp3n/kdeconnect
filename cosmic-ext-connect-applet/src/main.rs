@@ -40,6 +40,12 @@ impl cosmic::Application for KdeConnectApplet {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
+        tokio::spawn(async {
+            if let Err(e) = backend::initialize().await {
+                error!("Backend init failed: {:?}", e);
+            }
+        });
+
         let app = KdeConnectApplet {
             core,
             popup: None,
@@ -48,36 +54,7 @@ impl cosmic::Application for KdeConnectApplet {
             pairing_requests: HashMap::new(),
         };
 
-        // Initialize the D-Bus client then fetch devices — chained so the
-        // fetch only runs after the client is ready, avoiding an empty result.
-        let init_task = Task::perform(
-            async {
-                if let Err(e) = backend::initialize().await {
-                    error!("Backend init failed: {:?}", e);
-                }
-                backend::fetch_devices().await
-            },
-            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
-        );
-
-        // Schedule fetches at increasing intervals to catch the phone
-        // reconnecting after login — phone can take up to ~60s to reconnect.
-        let make_retry = |secs: u64| Task::perform(
-            async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(secs)).await;
-                backend::fetch_devices().await
-            },
-            |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
-        );
-
-        let retries = Task::batch(vec![
-            make_retry(5),
-            make_retry(15),
-            make_retry(30),
-            make_retry(60),
-        ]);
-
-        (app, Task::batch(vec![init_task, retries]))
+        (app, Task::none())
     }
 
     fn on_close_requested(&self, id: SurfaceId) -> Option<Message> {
@@ -143,6 +120,7 @@ impl cosmic::Application for KdeConnectApplet {
                 }
             }
             Message::SendSMS(ref device_id) => {
+                // Look up device name for the window title
                 let device_name = self
                     .devices
                     .get(device_id)
@@ -150,8 +128,12 @@ impl cosmic::Application for KdeConnectApplet {
                     .unwrap_or_else(|| "Unknown Device".to_string());
                 let id = device_id.clone();
 
-                info!("Launching SMS window for device={} name={}", id, device_name);
+                info!(
+                    "Launching SMS window for device={} name={}",
+                    id, device_name
+                );
 
+                // Spawn in a thread so the process::Command doesn't block the executor
                 std::thread::spawn(move || {
                     match std::process::Command::new("cosmic-ext-connect-sms")
                         .arg(&id)
@@ -166,35 +148,45 @@ impl cosmic::Application for KdeConnectApplet {
             Message::PingDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::ping_device(id).await.ok() },
+                    async move {
+                        backend::ping_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::RingDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::ring_device(id).await.ok() },
+                    async move {
+                        backend::ring_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::BrowseDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::browse_device_filesystem(id).await.ok() },
+                    async move {
+                        backend::browse_device_filesystem(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::PairDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::pair_device(id).await.ok() },
+                    async move {
+                        backend::pair_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::UnpairDevice(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::unpair_device(id).await.ok() },
+                    async move {
+                        backend::unpair_device(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
@@ -219,14 +211,23 @@ impl cosmic::Application for KdeConnectApplet {
             }
             Message::ShareClipboard(ref device_id) => {
                 let id = device_id.clone();
-                return Task::perform(
-                    async move {
-                        if let Ok(content) = portal::read_clipboard().await {
-                            backend::send_clipboard(id, content).await.ok();
-                        }
-                    },
-                    |_| cosmic::Action::App(Message::RefreshDevices),
-                );
+                return cosmic::iced::clipboard::read().map(move |content| {
+                    cosmic::Action::App(Message::ClipboardReadForDevice(
+                        id.clone(),
+                        content.unwrap_or_default(),
+                    ))
+                });
+            }
+            Message::ClipboardReadForDevice(device_id, content) => {
+                if !content.is_empty() {
+                    return Task::perform(
+                        async move { backend::send_clipboard(device_id, content).await.ok(); },
+                        |_| cosmic::Action::App(Message::RefreshDevices),
+                    );
+                }
+            }
+            Message::ClipboardReceived(content) => {
+                return cosmic::iced::clipboard::write::<cosmic::Action<Message>>(content);
             }
             Message::AcceptPairing(ref device_id) => {
                 self.pairing_requests.remove(device_id);
@@ -234,18 +235,17 @@ impl cosmic::Application for KdeConnectApplet {
                 return Task::perform(
                     async move {
                         backend::accept_pairing(id).await.ok();
-                    // Give the service time to process pairing before fetching
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                    backend::fetch_devices().await
                     },
-                    |devices| cosmic::Action::App(Message::DevicesUpdated(devices)),
+                    |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::RejectPairing(ref device_id) => {
                 self.pairing_requests.remove(device_id);
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::reject_pairing(id).await.ok() },
+                    async move {
+                        backend::reject_pairing(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
@@ -253,6 +253,9 @@ impl cosmic::Application for KdeConnectApplet {
                 info!("Pairing request received from {} ({})", device_name, device_id);
                 self.pairing_requests.insert(device_id, device_name.clone());
 
+                // Show a system notification so the user is alerted even if they
+                // are not looking at the panel. COSMIC's daemon doesn't support
+                // action buttons so we just point them to the applet.
                 let notif_body = format!(
                     "'{}' wants to pair with this device. Click the KDE Connect applet to accept or decline.",
                     device_name
@@ -266,6 +269,7 @@ impl cosmic::Application for KdeConnectApplet {
                         .show();
                 });
 
+                // Ensure popup is open so the user sees Accept/Decline immediately.
                 if self.popup.is_none() {
                     let new_id = SurfaceId::unique();
                     self.popup.replace(new_id);
@@ -348,6 +352,8 @@ impl cosmic::Application for KdeConnectApplet {
                 .map(|_| Message::RefreshDevices),
             backend::filetransfer_subscription(),
             backend::service_watcher_subscription(),
+            // D-Bus event stream — delivers pairing requests and device state
+            // changes in real time without waiting for the 10s poll.
             Subscription::run(|| {
                 async_stream::stream! {
                     let mut stream = backend::event_stream().await;
@@ -356,14 +362,13 @@ impl cosmic::Application for KdeConnectApplet {
                             kdeconnect_dbus_client::ServiceEvent::PairingRequested(id, name) => {
                                 yield Message::PairingRequestReceived(id, name, "phone".to_string());
                             }
-                            // Pairing confirmed — delay slightly so the service
-                            // device list is settled before we query it.
-                            kdeconnect_dbus_client::ServiceEvent::DevicePaired(_, _) => {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                yield Message::RefreshDevices;
+                            kdeconnect_dbus_client::ServiceEvent::ClipboardReceived(content) => {
+                                yield Message::ClipboardReceived(content);
                             }
-                            kdeconnect_dbus_client::ServiceEvent::DeviceConnected(_, _)
-                            | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(_) => {
+                            kdeconnect_dbus_client::ServiceEvent::DeviceConnected(id, _)
+                            | kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, _)
+                            | kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
+                                let _ = id;
                                 yield Message::RefreshDevices;
                             }
                             _ => {}
