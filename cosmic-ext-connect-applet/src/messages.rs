@@ -23,6 +23,9 @@ pub enum Message {
     ShareUrl(String),
     UpdateTransferProgress(u8),
 
+    // Clipboard received from phone — written to the desktop clipboard
+    ClipboardReceived(String),
+
     // Advanced features
     RemoteInput(String),
     LockDevice(String),

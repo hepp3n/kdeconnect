@@ -133,3 +133,26 @@ pub async fn read_clipboard() -> Result<String, std::io::Error> {
         ))
     }
 }
+
+/// Write content to the desktop clipboard using wl-copy
+pub async fn write_clipboard(content: String) -> Result<(), std::io::Error> {
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut child = tokio::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content.as_bytes()).await?;
+    }
+
+    let status = child.wait().await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "wl-copy exited with non-zero status",
+        ))
+    }
+}
