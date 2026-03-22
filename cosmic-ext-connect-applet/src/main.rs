@@ -211,24 +211,23 @@ impl cosmic::Application for KdeConnectApplet {
             }
             Message::ShareClipboard(ref device_id) => {
                 let id = device_id.clone();
-                return Task::perform(
-                    async move {
-                        if let Ok(content) = portal::read_clipboard().await {
-                            backend::send_clipboard(id, content).await.ok();
-                        }
-                    },
-                    |_| cosmic::Action::App(Message::RefreshDevices),
-                );
+                return cosmic::iced::clipboard::read().map(move |content| {
+                    cosmic::Action::App(Message::ClipboardReadForDevice(
+                        id.clone(),
+                        content.unwrap_or_default(),
+                    ))
+                });
+            }
+            Message::ClipboardReadForDevice(device_id, content) => {
+                if !content.is_empty() {
+                    return Task::perform(
+                        async move { backend::send_clipboard(device_id, content).await.ok(); },
+                        |_| cosmic::Action::App(Message::RefreshDevices),
+                    );
+                }
             }
             Message::ClipboardReceived(content) => {
-                return Task::perform(
-                    async move {
-                        if let Err(e) = portal::write_clipboard(content).await {
-                            error!("Failed to write clipboard from phone: {:?}", e);
-                        }
-                    },
-                    |_| cosmic::Action::App(Message::RefreshDevices),
-                );
+                return cosmic::iced::clipboard::write::<cosmic::Action<Message>>(content);
             }
             Message::AcceptPairing(ref device_id) => {
                 self.pairing_requests.remove(device_id);

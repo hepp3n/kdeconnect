@@ -25,6 +25,8 @@ pub enum Message {
 
     // Clipboard received from phone — written to the desktop clipboard
     ClipboardReceived(String),
+    // Desktop clipboard read result — content forwarded to device
+    ClipboardReadForDevice(String, String), // device_id, content
 
     // Advanced features
     RemoteInput(String),
