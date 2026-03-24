@@ -137,8 +137,19 @@ fn create_device_card<'a>(
 
     if !is_online {
         name_row = name_row.push(widget::text("Offline").size(11));
-    } else if let Some(level) = device.battery_level {
-        name_row = name_row.push(widget::text(format!("{}%", level)).size(11));
+    } else {
+        if let Some(signal_icon) = device.signal_icon() {
+            name_row = name_row.push(widget::icon::from_name(signal_icon).size(16));
+        }
+        if let Some(level) = device.battery_level {
+            name_row = name_row.push(
+                widget::row()
+                    .spacing(2)
+                    .align_y(Alignment::Center)
+                    .push(widget::icon::from_name(device.battery_icon()).size(16))
+                    .push(widget::text(format!("{}%", level)).size(11)),
+            );
+        }
     }
 
     name_row = name_row.push(
