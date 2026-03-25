@@ -42,16 +42,16 @@ impl EmojiCategory {
         }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self {
-            Self::Smileys => "Smileys",
-            Self::People => "People",
-            Self::Animals => "Animals",
-            Self::Food => "Food",
-            Self::Travel => "Travel",
-            Self::Activities => "Activities",
-            Self::Objects => "Objects",
-            Self::Symbols => "Symbols",
+            Self::Smileys => fl!("emoji-smileys"),
+            Self::People => fl!("emoji-people"),
+            Self::Animals => fl!("emoji-animals"),
+            Self::Food => fl!("emoji-food"),
+            Self::Travel => fl!("emoji-travel"),
+            Self::Activities => fl!("emoji-activities"),
+            Self::Objects => fl!("emoji-objects"),
+            Self::Symbols => fl!("emoji-symbols"),
         }
     }
 

@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate cosmic_ext_connect_applet;
+
 use cosmic::widget::button::Catalog;
 use cosmic::{
     Action, Application, ApplicationExt, Element, Task,
@@ -15,79 +18,81 @@ use std::collections::HashMap;
 
 struct PluginInfo {
     id: &'static str,
-    name: &'static str,
-    description: &'static str,
+    name: String,
+    description: String,
     icon: &'static str,
 }
 
-const IMPLEMENTED_PLUGINS: &[PluginInfo] = &[
+fn implemented_plugins() -> Vec<PluginInfo> {
+    vec![
     PluginInfo {
         id: "battery",
-        name: "Battery Monitor",
-        description: "Display the phone's battery level and charging state in the panel.",
+        name: fl!("plugin-battery-name"),
+        description: fl!("plugin-battery-desc"),
         icon: "battery-full-symbolic",
     },
     PluginInfo {
         id: "clipboard",
-        name: "Clipboard Sync",
-        description: "Automatically share clipboard content between your desktop and phone.",
+        name: fl!("plugin-clipboard-name"),
+        description: fl!("plugin-clipboard-desc"),
         icon: "edit-paste-symbolic",
     },
     PluginInfo {
         id: "connectivity_report",
-        name: "Connectivity Report",
-        description: "Show mobile signal strength and network type (4G, 5G, etc.).",
+        name: fl!("plugin-connectivity-name"),
+        description: fl!("plugin-connectivity-desc"),
         icon: "network-cellular-symbolic",
     },
     PluginInfo {
         id: "contacts",
-        name: "Contacts",
-        description: "Sync phone contacts so SMS messages show names instead of numbers.",
+        name: fl!("plugin-contacts-name"),
+        description: fl!("plugin-contacts-desc"),
         icon: "x-office-address-book-symbolic",
     },
     PluginInfo {
         id: "findmyphone",
-        name: "Find My Phone",
-        description: "Ring your phone at full volume to help locate it.",
+        name: fl!("plugin-findmyphone-name"),
+        description: fl!("plugin-findmyphone-desc"),
         icon: "audio-speakers-symbolic",
     },
     PluginInfo {
         id: "mpris",
-        name: "Media Control",
-        description: "Control media playback on your phone from the desktop.",
+        name: fl!("plugin-mpris-name"),
+        description: fl!("plugin-mpris-desc"),
         icon: "media-playback-start-symbolic",
     },
     PluginInfo {
         id: "notification",
-        name: "Notifications",
-        description: "Receive phone notifications as desktop notifications.",
+        name: fl!("plugin-notifications-name"),
+        description: fl!("plugin-notifications-desc"),
         icon: "preferences-system-notifications-symbolic",
     },
     PluginInfo {
         id: "ping",
-        name: "Ping",
-        description: "Send and receive pings to verify connectivity with paired devices.",
+        name: fl!("plugin-ping-name"),
+        description: fl!("plugin-ping-desc"),
         icon: "network-transmit-receive-symbolic",
     },
     PluginInfo {
         id: "runcommand",
-        name: "Run Commands",
-        description: "Execute predefined commands on the desktop triggered from your phone.",
+        name: fl!("plugin-runcommand-name"),
+        description: fl!("plugin-runcommand-desc"),
         icon: "utilities-terminal-symbolic",
     },
     PluginInfo {
         id: "share",
-        name: "Share Files",
-        description: "Send and receive files and URLs between devices.",
+        name: fl!("plugin-share-name"),
+        description: fl!("plugin-share-desc"),
         icon: "document-send-symbolic",
     },
     PluginInfo {
         id: "sms",
-        name: "SMS Messages",
-        description: "Send and receive SMS text messages from your desktop.",
+        name: fl!("plugin-sms-name"),
+        description: fl!("plugin-sms-desc"),
         icon: "mail-message-new-symbolic",
     },
-];
+    ]
+}
 
 // ---------------------------------------------------------------------------
 // Tabs
@@ -144,7 +149,7 @@ impl SettingsApp {
     }
 
     fn default_plugin_map() -> HashMap<String, bool> {
-        IMPLEMENTED_PLUGINS
+        implemented_plugins()
             .iter()
             .map(|p| (p.id.to_string(), true))
             .collect()
@@ -186,7 +191,7 @@ impl Application for SettingsApp {
         };
 
         let title_task = app.set_window_title(
-            "KDE Connect Settings".to_string(),
+            fl!("settings-title").to_string(),
             app.core.main_window_id().unwrap(),
         );
 
@@ -398,18 +403,18 @@ impl SettingsApp {
         spacing: &cosmic::cosmic_theme::Spacing,
     ) -> Element<'a, Message> {
         let paired_btn = if self.active_tab == Tab::PairedDevices {
-            widget::button::standard("Paired Devices")
+            widget::button::standard(fl!("settings-tab-paired"))
                 .on_press(Message::SelectTab(Tab::PairedDevices))
         } else {
-            widget::button::text("Paired Devices")
+            widget::button::text(fl!("settings-tab-paired"))
                 .on_press(Message::SelectTab(Tab::PairedDevices))
         };
 
         let available_btn = if self.active_tab == Tab::AvailableDevices {
-            widget::button::standard("Available Devices")
+            widget::button::standard(fl!("settings-tab-available"))
                 .on_press(Message::SelectTab(Tab::AvailableDevices))
         } else {
-            widget::button::text("Available Devices")
+            widget::button::text(fl!("settings-tab-available"))
                 .on_press(Message::SelectTab(Tab::AvailableDevices))
         };
 
@@ -435,7 +440,7 @@ impl SettingsApp {
             .width(Length::Fixed(220.0));
 
         col = col.push(
-            widget::text("Paired Devices")
+            widget::text(fl!("paired-devices-header"))
                 .size(13)
                 .font(cosmic::font::bold()),
         );
@@ -444,7 +449,7 @@ impl SettingsApp {
         if paired.is_empty() {
             col = col.push(
                 widget::container(
-                    widget::text("No paired devices.\nUse the Available Devices tab to pair.")
+                    widget::text(fl!("paired-devices-none"))
                         .size(12),
                 )
                 .padding(spacing.space_s),
@@ -469,9 +474,9 @@ impl SettingsApp {
                             .push(widget::text(&device.name).size(13))
                             .push(
                                 widget::text(if device.is_reachable {
-                                    "Connected"
+                                    fl!("paired-devices-connected")
                                 } else {
-                                    "Offline"
+                                    fl!("paired-devices-offline")
                                 })
                                 .size(11),
                             )
@@ -544,14 +549,14 @@ impl SettingsApp {
                                 .width(Length::Fill),
                         )
                         .push(
-                            widget::button::destructive("Unpair")
+                            widget::button::destructive(fl!("paired-devices-unpair"))
                                 .on_press(Message::UnpairDevice(unpair_id)),
                         ),
                 );
             }
         } else {
             col = col.push(
-                widget::text("Plugin Settings")
+                widget::text(fl!("paired-plugins-header"))
                     .size(15)
                     .font(cosmic::font::bold()),
             );
@@ -562,14 +567,14 @@ impl SettingsApp {
         if self.selected_device.is_none() {
             col = col.push(
                 widget::container(
-                    widget::text("Select a paired device to configure its plugins.").size(14),
+                    widget::text(fl!("paired-plugins-hint")).size(14),
                 )
                 .padding(spacing.space_l),
             );
             return widget::scrollable(col).height(Length::Fill).into();
         }
 
-        for plugin in IMPLEMENTED_PLUGINS {
+        for plugin in implemented_plugins() {
             let enabled = self.plugin_enabled(plugin.id);
             let plugin_id = plugin.id.to_string();
 
@@ -628,16 +633,16 @@ impl SettingsApp {
                 .spacing(spacing.space_s)
                 .align_y(Alignment::Center)
                 .push(
-                    widget::text("Available Devices")
+                    widget::text(fl!("available-devices-header"))
                         .size(15)
                         .font(cosmic::font::bold())
                         .width(Length::Fill),
                 )
-                .push(widget::button::standard("Scan Again").on_press(Message::Refresh)),
+                .push(widget::button::standard(fl!("settings-scan-again")).on_press(Message::Refresh)),
         );
         col = col.push(widget::divider::horizontal::default());
         col = col.push(
-            widget::text("Devices on the local network that have not been paired yet.").size(13),
+            widget::text(fl!("available-devices-hint")).size(13),
         );
 
         if available.is_empty() {
@@ -647,17 +652,15 @@ impl SettingsApp {
                         .spacing(spacing.space_s)
                         .push(widget::icon::from_name("network-offline-symbolic").size(48))
                         .push(
-                            widget::text("No devices found")
+                            widget::text(fl!("available-devices-none"))
                                 .size(16)
                                 .font(cosmic::font::bold()),
                         )
                         .push(
-                            widget::text(
-                                "Make sure your device is on the same network and KDE Connect is open.",
-                            )
+                            widget::text(fl!("available-devices-none-hint"))
                             .size(13),
                         )
-                        .push(widget::button::standard("Scan Again").on_press(Message::Refresh))
+                        .push(widget::button::standard(fl!("settings-scan-again")).on_press(Message::Refresh))
                         .align_x(Alignment::Center),
                 )
                 .padding([spacing.space_xl, spacing.space_m])
@@ -685,9 +688,9 @@ impl SettingsApp {
                             .width(Length::Fill),
                     )
                     .push(if in_progress {
-                        widget::button::standard("Pairing\u{2026}")
+                        widget::button::standard(fl!("available-devices-pairing"))
                     } else {
-                        widget::button::suggested("Pair")
+                        widget::button::suggested(fl!("available-devices-pair"))
                             .on_press(Message::PairDevice(device_id))
                     });
 

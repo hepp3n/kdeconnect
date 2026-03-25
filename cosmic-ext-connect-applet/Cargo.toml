@@ -29,6 +29,9 @@ notify-rust = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zbus = { workspace = true }
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = "8"
 
 [[bin]]
 name = "cosmic-ext-connect-applet"
