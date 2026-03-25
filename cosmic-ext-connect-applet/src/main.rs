@@ -1,10 +1,7 @@
-mod backend;
-mod messages;
-mod models;
-mod notifications;
-mod plugins;
-mod portal;
-mod ui;
+#[macro_use]
+extern crate cosmic_ext_connect_applet;
+
+use cosmic_ext_connect_applet::{backend, messages, models, portal, ui};
 
 use messages::Message;
 use models::Device;
@@ -194,7 +191,7 @@ impl cosmic::Application for KdeConnectApplet {
                 let id = device_id.clone();
                 return Task::perform(
                     async move {
-                        let files = portal::pick_files("Select files to send", true, None).await;
+                        let files = portal::pick_files(&fl!("file-picker-title"), true, None).await;
                         if !files.is_empty() {
                             backend::send_files(id, files).await.ok();
                         }
@@ -279,7 +276,7 @@ impl cosmic::Application for KdeConnectApplet {
                 tokio::task::spawn_blocking(move || {
                     let _ = notify_rust::Notification::new()
                         .appname("KDE Connect")
-                        .summary("Pairing Request")
+                        .summary(&fl!("notification-pairing-summary"))
                         .body(&notif_body)
                         .icon("network-wireless-symbolic")
                         .show();
