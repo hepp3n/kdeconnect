@@ -1,52 +1,115 @@
 <!--suppress HtmlDeprecatedAttribute -->
 <div align="center">
-  <h1>WORK IN PROGRESS</h1>
+  <h1>⚠️ WORK IN PROGRESS</h1>
+  <p>A native KDE Connect implementation for the COSMIC Desktop, written in Rust.<br>
+  Many features are working but you may encounter bugs — please report them via <a href="https://github.com/hepp3n/kdeconnect/issues">GitHub Issues</a>.</p>
   <br>
   <img alt="KDE Connect applet on COSMIC desktop environment" src="https://raw.githubusercontent.com/hepp3n/kdeconnect/refs/heads/master/resources/screenshots/applet.png" />
 </div>
 
-# Installing from [COSMIC Flatpak Repository](https://github.com/pop-os/cosmic-flatpak)
+---
 
-Add remote: `flatpak remote-add --if-not-exists --user cosmic https://apt.pop-os.org/cosmic/cosmic.flatpakrepo`
+<details>
+<summary>✅ Supported Features</summary>
 
-Install applet: `flatpak install --user io.github.hepp3n.kdeconnect`
+- Device Pairing / Unpairing
+- Battery Monitor
+- Clipboard Sync (bidirectional)
+- Connectivity Report (signal strength / network type)
+- Contacts Sync
+- Find My Phone
+- MPRIS / Media Control (exposed via D-Bus MPRIS2 to COSMIC panel)
+- Notifications (receive, action, reply)
+- Ping
+- Run Commands
+- Share Files & URLs (send files, receive files and URLs)
+- SMS (conversations, send/receive)
+- Plugin Enable / Disable per device
 
-# Testing on COSMIC Desktop
+</details>
 
-For testing COSMIC desktop applet, you can build it with help of justfile.
+<details>
+<summary>🚧 Features Not Yet Supported</summary>
 
-# Cloning repository
+- Lock Device
+- MousePad / Remote Input
+- Presenter Mode
+- SFTP / Browse Device
+- System Volume
+- Telephony
+- Virtual Display
 
-`git clone https://github.com/hepp3n/kdeconnect.git`
+</details>
 
-# Entering directory
+---
 
-`cd kdeconnect`
+## Installing from [COSMIC Flatpak Repository](https://github.com/pop-os/cosmic-flatpak)
 
-# Building
+```bash
+flatpak remote-add --if-not-exists --user cosmic https://apt.pop-os.org/cosmic/cosmic.flatpakrepo
+flatpak install --user io.github.hepp3n.kdeconnect
+```
 
-`just build`
+---
 
-# Installing
+## Building from Source
 
-`just install`
+### Prerequisites
 
-# Enable kdeconnect-service
+- [rustup.rs](https://rustup.rs)
+- `libxkbcommon-dev` (required on some distros — if the build fails, install this first)
+- [`just`](https://github.com/casey/just) command runner
 
-`just enable-service`
+### Quick Start
 
-**May need to reboot to get applet to show on panel**
+```bash
+git clone https://github.com/hepp3n/kdeconnect.git
+cd kdeconnect
+just build
+just install
+```
 
-# Uninstalling
+The service starts automatically on next login via D-Bus activation and XDG autostart.
 
-`just uninstall`
+### Optional: Systemd Integration
 
-Make sure you have [rustup.rs](https://rustup.rs) installed on your system.
+For journalctl logging and `systemctl` control instead of D-Bus activation:
 
-You might need also `libxkbcommon-dev` dependency. If it won't build, please create an issue.
+```bash
+just install-systemd
+just enable-service
+```
 
-# Building as Flatpak
+> **Note:** You may need to log out and back in for the applet to appear in the COSMIC panel.
+> Once logged back in, go to **COSMIC Settings → Desktop → Panel → Configure Panel Applets** and add KDE Connect.
 
-You can also build this applet as flatpak package. You need to install `flatpak-builder` and then run this command:
+### Debug Install
 
-`flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo --install builddir io.github.hepp3n.kdeconnect.json`
+Full logging for both the service and panel applet:
+
+```bash
+just install-debug
+```
+
+- Service logs → `/tmp/kdeconnect-service.log`
+- Applet logs → `/tmp/kdeconnect-applet.log`
+
+Restore to standard install with `just install`.
+
+---
+
+## Uninstalling
+
+```bash
+just uninstall
+```
+
+---
+
+## Building as Flatpak
+
+Requires `flatpak-builder`:
+
+```bash
+flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo --install builddir io.github.hepp3n.kdeconnect.json
+```
