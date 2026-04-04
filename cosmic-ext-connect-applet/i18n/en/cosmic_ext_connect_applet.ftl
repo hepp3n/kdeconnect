@@ -25,6 +25,14 @@ quick-actions-send-file = Send file
 quick-actions-browse-device = Browse device
 quick-actions-run-commands-header = Run Commands
 
+# Run Command management (settings)
+run-commands-manage-header = Commands (triggered from phone)
+run-commands-add-header = Add New Command
+run-commands-name-placeholder = Name (e.g. Lock Screen)
+run-commands-command-placeholder = Shell command (e.g. loginctl lock-session)
+run-commands-add-button = Add Command
+run-commands-delete = Delete
+
 # Settings window
 settings-title = KDE Connect Settings
 settings-tab-paired = Paired Devices

@@ -287,6 +287,10 @@ impl KdeConnectCore {
                         );
                         let _ = sender.send(contacts_pkt);
                     }
+                    drop(guard);
+                    // Send our local command list so the Android app shows
+                    // the Run Command option (requires canAddCommand: true).
+                    plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
                 }
 
                 let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));

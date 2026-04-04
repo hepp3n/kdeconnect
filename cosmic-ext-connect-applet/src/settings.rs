@@ -12,6 +12,31 @@ use cosmic_ext_connect_applet::{backend, models::Device};
 use futures::StreamExt as _;
 use std::collections::HashMap;
 
+/// A desktop command stored as JSON: {id, name, command}
+type LocalCommand = serde_json::Value;
+
+fn run_commands_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(format!("{}/.config/kdeconnect/runcommand.json", home))
+}
+
+fn load_run_commands() -> Vec<LocalCommand> {
+    match std::fs::read_to_string(run_commands_path()) {
+        Ok(json) => serde_json::from_str::<Vec<LocalCommand>>(&json).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+fn save_run_commands(commands: &[LocalCommand]) {
+    let path = run_commands_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(commands) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plugin metadata
 // ---------------------------------------------------------------------------
@@ -122,6 +147,12 @@ pub enum Message {
     UnpairDevice(String),
     /// Fired by the D-Bus event subscription whenever a device connects or pairs.
     ServiceEvent(kdeconnect_dbus_client::ServiceEvent),
+    // Run Command management
+    RunCommandsLoaded(Vec<LocalCommand>),
+    NewRunCommandName(String),
+    NewRunCommandCommand(String),
+    AddRunCommand,
+    DeleteRunCommand(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +167,10 @@ pub struct SettingsApp {
     /// device_id → (plugin_id → enabled)
     plugin_states: HashMap<String, HashMap<String, bool>>,
     pairing_in_progress: HashMap<String, bool>,
+    /// Desktop commands manageable from the Run Command section
+    run_commands: Vec<LocalCommand>,
+    new_cmd_name: String,
+    new_cmd_command: String,
 }
 
 impl SettingsApp {
@@ -188,6 +223,9 @@ impl Application for SettingsApp {
             selected_device: None,
             plugin_states: HashMap::new(),
             pairing_in_progress: HashMap::new(),
+            run_commands: Vec::new(),
+            new_cmd_name: String::new(),
+            new_cmd_command: String::new(),
         };
 
         let title_task = app.set_window_title(
@@ -205,7 +243,12 @@ impl Application for SettingsApp {
             |devices| Action::App(Message::DevicesLoaded(devices)),
         );
 
-        (app, Task::batch(vec![title_task, load_task]))
+        let cmds_task = Task::perform(
+            async { load_run_commands() },
+            |cmds| Action::App(Message::RunCommandsLoaded(cmds)),
+        );
+
+        (app, Task::batch(vec![title_task, load_task, cmds_task]))
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
@@ -342,10 +385,6 @@ impl Application for SettingsApp {
             // A D-Bus service event arrived — refresh device list immediately
             // so paired/connected state changes appear without waiting for polling.
             Message::ServiceEvent(event) => {
-                // For pair-state changes, clear the selection immediately if the
-                // currently selected device is the one that was unpaired — this
-                // prevents the right panel from showing stale plugin state while
-                // the async fetch is in flight.
                 match &event {
                     kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
                         if self.selected_device.as_deref() == Some(id.as_str()) {
@@ -366,6 +405,33 @@ impl Application for SettingsApp {
                     async { backend::fetch_devices().await },
                     |devices| Action::App(Message::DevicesLoaded(devices)),
                 );
+            }
+            Message::RunCommandsLoaded(cmds) => {
+                self.run_commands = cmds;
+            }
+            Message::NewRunCommandName(s) => {
+                self.new_cmd_name = s;
+            }
+            Message::NewRunCommandCommand(s) => {
+                self.new_cmd_command = s;
+            }
+            Message::AddRunCommand => {
+                let name = self.new_cmd_name.trim().to_string();
+                let cmd = self.new_cmd_command.trim().to_string();
+                if !name.is_empty() && !cmd.is_empty() {
+                    self.run_commands.push(serde_json::json!({
+                        "id": uuid_v4(),
+                        "name": name,
+                        "command": cmd,
+                    }));
+                    self.new_cmd_name.clear();
+                    self.new_cmd_command.clear();
+                    save_run_commands(&self.run_commands);
+                }
+            }
+            Message::DeleteRunCommand(id) => {
+                self.run_commands.retain(|c| c["id"].as_str() != Some(&id));
+                save_run_commands(&self.run_commands);
             }
         }
         Task::none()
@@ -577,6 +643,7 @@ impl SettingsApp {
         for plugin in implemented_plugins() {
             let enabled = self.plugin_enabled(plugin.id);
             let plugin_id = plugin.id.to_string();
+            let is_runcommand = plugin.id == "runcommand";
 
             let row = widget::row()
                 .spacing(spacing.space_m)
@@ -608,6 +675,11 @@ impl SettingsApp {
                     .class(cosmic::theme::Container::Card)
                     .width(Length::Fill),
             );
+
+            // Show command management inline below the runcommand toggle
+            if is_runcommand && enabled {
+                col = col.push(self.view_run_commands_section(spacing));
+            }
         }
 
         widget::scrollable(col).height(Length::Fill).into()
@@ -705,11 +777,92 @@ impl SettingsApp {
 
         widget::scrollable(col).height(Length::Fill).into()
     }
+
+    fn view_run_commands_section<'a>(
+        &'a self,
+        spacing: &cosmic::cosmic_theme::Spacing,
+    ) -> Element<'a, Message> {
+        let mut col = widget::column()
+            .spacing(spacing.space_xs)
+            .padding([spacing.space_xs, spacing.space_m]);
+
+        col = col.push(
+            widget::text(fl!("run-commands-manage-header"))
+                .size(13)
+                .font(cosmic::font::bold()),
+        );
+
+        // Existing commands
+        for cmd in &self.run_commands {
+            let name = cmd["name"].as_str().unwrap_or("");
+            let command = cmd["command"].as_str().unwrap_or("");
+            let delete_id = cmd["id"].as_str().unwrap_or("").to_string();
+            let row = widget::row()
+                .spacing(spacing.space_s)
+                .align_y(Alignment::Center)
+                .push(
+                    widget::column()
+                        .push(widget::text(name).size(13).font(cosmic::font::bold()))
+                        .push(widget::text(command).size(11))
+                        .width(Length::Fill),
+                )
+                .push(
+                    widget::button::destructive(fl!("run-commands-delete"))
+                        .on_press(Message::DeleteRunCommand(delete_id)),
+                );
+            col = col.push(
+                widget::container(row)
+                    .padding([spacing.space_xs, spacing.space_s])
+                    .class(cosmic::theme::Container::Background)
+                    .width(Length::Fill),
+            );
+        }
+
+        // Add new command
+        col = col.push(
+            widget::text(fl!("run-commands-add-header"))
+                .size(12)
+                .font(cosmic::font::bold()),
+        );
+        col = col.push(
+            widget::text_input(fl!("run-commands-name-placeholder"), &self.new_cmd_name)
+                .on_input(Message::NewRunCommandName)
+                .width(Length::Fill),
+        );
+        col = col.push(
+            widget::text_input(fl!("run-commands-command-placeholder"), &self.new_cmd_command)
+                .on_input(Message::NewRunCommandCommand)
+                .width(Length::Fill),
+        );
+        col = col.push(
+            widget::button::suggested(fl!("run-commands-add-button"))
+                .on_press(Message::AddRunCommand),
+        );
+
+        widget::container(col)
+            .padding([spacing.space_xs, spacing.space_m])
+            .class(cosmic::theme::Container::Background)
+            .width(Length::Fill)
+            .into()
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+/// Simple UUID v4 generator (no external crate needed).
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    format!(
+        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+        t,
+        t >> 16,
+        t & 0xfff,
+        0x8000 | (t & 0x3fff),
+        t as u64 * 0xdeadbeef,
+    )
+}
 
 fn main() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()
