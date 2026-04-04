@@ -8,6 +8,14 @@ use crate::{
     protocol::ProtocolPacket,
 };
 
+/// A single command offered by a remote device via the RunCommand plugin.
+#[derive(Debug, Clone)]
+pub struct RemoteCommand {
+    pub key: String,
+    pub name: String,
+    pub command: String,
+}
+
 pub enum CoreEvent {
     DeviceDiscovered(Device),
     DevicePaired((DeviceId, Device)),
@@ -65,4 +73,6 @@ pub enum ConnectionEvent {
     /// Phone sent pair:true and is waiting for user decision.
     /// Payload is (device_id, device_name).
     PairingRequested((DeviceId, String)),
+    /// Phone sent its command list via kdeconnect.runcommand.
+    RunCommandListReceived((DeviceId, Vec<RemoteCommand>)),
 }

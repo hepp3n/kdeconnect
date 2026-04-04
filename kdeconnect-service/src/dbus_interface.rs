@@ -319,6 +319,41 @@ impl DaemonInterface {
         device_id: String,
         signal_strength: i32,
     ) -> zbus::Result<()>;
+
+    /// Execute a remote command on a device by key
+    async fn run_command(&self, device_id: String, key: String) -> zbus::fdo::Result<()> {
+        info!("D-Bus: RunCommand called for {} key={}", device_id, key);
+        let packet = ProtocolPacket::new(
+            PacketType::RunCommandRequest,
+            json!({ "key": key }),
+        );
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Request the remote command list from a device
+    async fn request_run_commands(&self, device_id: String) -> zbus::fdo::Result<()> {
+        info!("D-Bus: RequestRunCommands called for {}", device_id);
+        let packet = ProtocolPacket::new(
+            PacketType::RunCommandRequest,
+            json!({ "requestCommandList": true }),
+        );
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Signal: Remote command list received from a paired device.
+    /// commands_json is a JSON array of {key, name, command} objects.
+    #[zbus(signal)]
+    async fn run_command_list_received(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+        commands_json: String,
+    ) -> zbus::Result<()>;
 }
 
 /// SMS-specific D-Bus interface
@@ -866,6 +901,38 @@ impl KdeConnectService {
                         debug!("ConnectivityReceived D-Bus signal emitted");
                     }
                 }
+            }
+            ConnectionEvent::RunCommandListReceived((device_id, commands)) => {
+                info!(
+                    "[dbus] RunCommandListReceived: {} commands from {}",
+                    commands.len(),
+                    device_id.0
+                );
+                let commands_json = serde_json::to_string(
+                    &commands
+                        .iter()
+                        .map(|c| {
+                            json!({
+                                "key": c.key,
+                                "name": c.name,
+                                "command": c.command,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default();
+
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+                DaemonInterface::run_command_list_received(
+                    iface_ref.signal_emitter(),
+                    device_id.0,
+                    commands_json,
+                )
+                .await?;
+                debug!("RunCommandListReceived D-Bus signal emitted");
             }
             _ => {
                 debug!("Unhandled event type received");

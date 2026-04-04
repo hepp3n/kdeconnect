@@ -23,6 +23,7 @@ quick-actions-sms = SMS Messages
 quick-actions-files-header = Files
 quick-actions-send-file = Send file
 quick-actions-browse-device = Browse device
+quick-actions-run-commands-header = Run Commands
 
 # Settings window
 settings-title = KDE Connect Settings
