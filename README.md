@@ -31,7 +31,6 @@
 <details>
 <summary>🚧 Features Not Yet Supported</summary>
 
-- Lock Device
 - MousePad / Remote Input
 - Presenter Mode
 - SFTP / Browse Device
