@@ -241,6 +241,24 @@ fn create_device_card<'a>(
             }
         }
 
+        if !device.run_commands.is_empty() {
+            menu_items = menu_items.push(widget::divider::horizontal::light());
+            menu_items = menu_items.push(
+                widget::text(fl!("quick-actions-run-commands-header"))
+                    .size(12)
+                    .font(cosmic::font::bold()),
+            );
+            for (key, name) in &device.run_commands {
+                let key = key.clone();
+                menu_items = menu_items.push(
+                    widget::button::text(name.as_str())
+                        .on_press(Message::ExecuteRunCommand(device.id.clone(), key))
+                        .width(Length::Fill)
+                        .class(cosmic::theme::Button::Text),
+                );
+            }
+        }
+
         col = col.push(
             widget::container(menu_items)
                 .padding([spacing.space_xs, spacing.space_m])

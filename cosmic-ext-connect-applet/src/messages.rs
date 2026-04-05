@@ -49,4 +49,9 @@ pub enum Message {
 
     // MPRIS events from phone - store as JSON value to avoid direct dependency
     MprisReceived(String, serde_json::Value), // device_id, mpris_data
+
+    // Run Command
+    RequestRunCommands(String),              // device_id
+    RunCommandsReceived(String, String),     // device_id, commands_json
+    ExecuteRunCommand(String, String),       // device_id, key
 }

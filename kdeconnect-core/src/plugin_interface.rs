@@ -278,6 +278,15 @@ impl PluginRegistry {
                     ping.received_packet(&device, core_tx).await;
                 }
             }
+            PacketType::RunCommand => {
+                if let Ok(run_command) =
+                    serde_json::from_value::<plugins::run_command::RunCommand>(body)
+                {
+                    run_command
+                        .received_packet(&device, connection_tx, core_tx)
+                        .await;
+                }
+            }
             PacketType::RunCommandRequest => {
                 if let Ok(run_command_request) =
                     serde_json::from_value::<plugins::run_command::RunCommandRequest>(body)

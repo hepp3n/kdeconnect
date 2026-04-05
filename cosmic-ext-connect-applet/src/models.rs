@@ -29,6 +29,8 @@ pub struct Device {
     pub has_lockdevice: bool,
     pub has_virtualmonitor: bool,
     pub pairing_requests: i32,
+    // Run Command — list of (key, name) pairs offered by the remote device
+    pub run_commands: Vec<(String, String)>,
     // Connectivity information
     pub signal_strength: Option<i32>, // 0-4 bars, or -1 for no signal
     #[allow(dead_code)]

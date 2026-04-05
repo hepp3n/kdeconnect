@@ -65,6 +65,7 @@ pub async fn fetch_devices() -> Vec<Device> {
                         has_presenter: false,
                         has_lockdevice: false,
                         has_virtualmonitor: false,
+                        run_commands: existing.as_ref().map(|e| e.run_commands.clone()).unwrap_or_default(),
                     };
                     cache.insert(d.id.clone(), device.clone());
                     device
@@ -233,6 +234,24 @@ pub async fn send_sms(device_id: String, phone_number: String, message: String) 
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
     client.send_sms(&device_id, &phone_number, &message).await
+}
+
+/// Request the remote command list from a device
+pub async fn request_run_commands(device_id: String) -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.request_run_commands(&device_id).await
+}
+
+/// Execute a remote command on a device by key
+pub async fn execute_run_command(device_id: String, key: String) -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.run_command(&device_id, &key).await
 }
 
 /// Stream of service events. Reconnects automatically when the client is

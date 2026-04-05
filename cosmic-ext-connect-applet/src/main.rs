@@ -114,6 +114,11 @@ impl cosmic::Application for KdeConnectApplet {
                     self.expanded_device = None;
                 } else {
                     self.expanded_device = Some(device_id.clone());
+                    let id = device_id.clone();
+                    return Task::perform(
+                        async move { backend::request_run_commands(id).await.ok(); },
+                        |_| cosmic::Action::App(Message::RefreshDevices),
+                    );
                 }
             }
             Message::SendSMS(ref device_id) => {
@@ -327,6 +332,39 @@ impl cosmic::Application for KdeConnectApplet {
             Message::ShareUrl(ref device_id) => {
                 debug!("Share URL: {}", device_id);
             }
+            Message::RequestRunCommands(ref device_id) => {
+                let id = device_id.clone();
+                return Task::perform(
+                    async move { backend::request_run_commands(id).await.ok(); },
+                    |_| cosmic::Action::App(Message::RefreshDevices),
+                );
+            }
+            Message::RunCommandsReceived(ref device_id, ref commands_json) => {
+                let commands: Vec<(String, String)> =
+                    serde_json::from_str::<Vec<serde_json::Value>>(commands_json)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|v| {
+                            let key = v["key"].as_str()?.to_string();
+                            let name = v["name"].as_str()?.to_string();
+                            Some((key, name))
+                        })
+                        .collect();
+                if let Some(device) = self.devices.get_mut(device_id) {
+                    device.run_commands = commands;
+                    let d = device.clone();
+                    let did = device_id.clone();
+                    tokio::spawn(async move { backend::update_device(did, d).await; });
+                }
+            }
+            Message::ExecuteRunCommand(ref device_id, ref key) => {
+                let id = device_id.clone();
+                let k = key.clone();
+                return Task::perform(
+                    async move { backend::execute_run_command(id, k).await.ok(); },
+                    |_| cosmic::Action::App(Message::RefreshDevices),
+                );
+            }
         }
         Task::none()
     }
@@ -383,6 +421,9 @@ impl cosmic::Application for KdeConnectApplet {
                             }
                             kdeconnect_dbus_client::ServiceEvent::ConnectivityReceived(id, strength) => {
                                 yield Message::ConnectivityUpdated(id, strength);
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::RunCommandListReceived(id, commands_json) => {
+                                yield Message::RunCommandsReceived(id, commands_json);
                             }
                             kdeconnect_dbus_client::ServiceEvent::DeviceConnected(id, _)
                             | kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, _)

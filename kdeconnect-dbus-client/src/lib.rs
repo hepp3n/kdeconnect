@@ -37,6 +37,7 @@ pub enum ServiceEvent {
     ClipboardReceived(String),                 // clipboard content from phone
     BatteryReceived(String, i32, bool),        // device_id, level, is_charging
     ConnectivityReceived(String, i32),         // device_id, signal_strength
+    RunCommandListReceived(String, String),    // device_id, commands_json
 }
 
 /// D-Bus proxy for daemon interface
@@ -63,6 +64,8 @@ trait Daemon {
     async fn broadcast_identity(&self) -> zbus::Result<()>;
     async fn accept_pairing(&self, device_id: &str) -> zbus::Result<()>;
     async fn reject_pairing(&self, device_id: &str) -> zbus::Result<()>;
+    async fn run_command(&self, device_id: &str, key: &str) -> zbus::Result<()>;
+    async fn request_run_commands(&self, device_id: &str) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn pairing_requested(&self, device_id: String, device_name: String) -> zbus::Result<()>;
@@ -95,6 +98,13 @@ trait Daemon {
         &self,
         device_id: String,
         signal_strength: i32,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn run_command_list_received(
+        &self,
+        device_id: String,
+        commands_json: String,
     ) -> zbus::Result<()>;
 }
 
@@ -219,6 +229,16 @@ impl KdeConnectClient {
     /// Broadcast our identity over UDP to trigger device discovery
     pub async fn broadcast_identity(&self) -> Result<()> {
         Ok(self.daemon_proxy.broadcast_identity().await?)
+    }
+
+    /// Execute a remote command on a device by key
+    pub async fn run_command(&self, device_id: &str, key: &str) -> Result<()> {
+        Ok(self.daemon_proxy.run_command(device_id, key).await?)
+    }
+
+    /// Request the remote command list from a device
+    pub async fn request_run_commands(&self, device_id: &str) -> Result<()> {
+        Ok(self.daemon_proxy.request_run_commands(device_id).await?)
     }
 
     /// Request SMS conversations
@@ -368,6 +388,19 @@ impl KdeConnectClient {
                 ServiceEvent::ConnectivityReceived(args.device_id.clone(), args.signal_strength)
             });
 
+        let run_command_list = self
+            .daemon_proxy
+            .receive_run_command_list_received()
+            .await
+            .unwrap()
+            .map(|s| {
+                let args = s.args().unwrap();
+                ServiceEvent::RunCommandListReceived(
+                    args.device_id.clone(),
+                    args.commands_json.clone(),
+                )
+            });
+
         Box::pin(select_all(vec![
             Box::pin(connected) as futures::stream::BoxStream<'static, ServiceEvent>,
             Box::pin(paired),
@@ -378,6 +411,7 @@ impl KdeConnectClient {
             Box::pin(clipboard),
             Box::pin(battery),
             Box::pin(connectivity),
+            Box::pin(run_command_list),
         ]))
     }
 
