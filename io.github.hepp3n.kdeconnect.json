@@ -28,7 +28,8 @@
             "buildsystem": "simple",
             "build-commands": [
                 "just build-rel-offline",
-                "just PREFIX=/app install"
+                "just PREFIX=/app install",
+                "printf '[D-BUS Service]\\nName=io.github.hepp3n.kdeconnect\\nExec=flatpak run --command=kdeconnect-service io.github.hepp3n.kdeconnect\\n' > /app/share/dbus-1/services/io.github.hepp3n.kdeconnect.service"
             ],
             "build-options": {
                 "env": {

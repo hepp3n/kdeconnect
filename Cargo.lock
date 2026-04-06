@@ -2752,6 +2752,7 @@ dependencies = [
  "futures",
  "futures-util",
  "kdeconnect-core",
+ "ron",
  "serde",
  "serde_json",
  "tokio",
