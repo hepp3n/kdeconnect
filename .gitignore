@@ -21,10 +21,11 @@
 # Dev Notes
 Dev/
 
-#move
+# Builds
 .cargo/
 vendor/
 vendor.tar
 builddir/
 .flatpak-builder/
 repo/
+*.flatpak
