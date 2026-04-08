@@ -116,6 +116,12 @@ fn implemented_plugins() -> Vec<PluginInfo> {
         description: fl!("plugin-sms-desc"),
         icon: "mail-message-new-symbolic",
     },
+    PluginInfo {
+        id: "systemvolume",
+        name: fl!("plugin-systemvolume-name"),
+        description: fl!("plugin-systemvolume-desc"),
+        icon: "audio-volume-high-symbolic",
+    },
     ]
 }
 

@@ -19,6 +19,7 @@ use crate::{
         clipboard::Clipboard,
         connectivity_report::ConnectivityReport,
         mpris::{Mpris, MprisRequest},
+        systemvolume::SystemVolumeRequest,
     },
     protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
     transport::prepare_listener_for_payload,
@@ -56,6 +57,7 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::SmsRequestConversation
         | PacketType::SmsAttachmentFile
         | PacketType::SmsRequestAttachment => Some("sms"),
+        PacketType::SystemVolume | PacketType::SystemVolumeRequest => Some("systemvolume"),
         // Core / unmanaged packets are never gated
         PacketType::Identity
         | PacketType::Pair
@@ -67,8 +69,6 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::Presenter
         | PacketType::Sftp
         | PacketType::SftpRequest
-        | PacketType::SystemVolume
-        | PacketType::SystemVolumeRequest
         | PacketType::Telephony
         | PacketType::TelephonyRequestMute
         | PacketType::Unknown(_) => None,
@@ -308,6 +308,19 @@ impl PluginRegistry {
                             warn!("[share] receive_share failed: {}", e);
                         }
                     });
+                }
+            }
+            PacketType::SystemVolumeRequest => {
+                if let Ok(req) = serde_json::from_value::<SystemVolumeRequest>(body) {
+                    // On first requestSinks, also start the desktop-side watcher
+                    // so the phone receives push updates when local volume changes.
+                    if req.request_sinks == Some(true) {
+                        plugins::systemvolume::spawn_volume_watcher(
+                            device.device_id.clone(),
+                            core_tx.clone(),
+                        );
+                    }
+                    req.handle(&device, core_tx).await;
                 }
             }
             _ => {

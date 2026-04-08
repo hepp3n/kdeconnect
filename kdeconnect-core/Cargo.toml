@@ -25,3 +25,5 @@ tokio-rustls = { workspace = true }
 tracing = { workspace = true }
 mpris = { workspace = true }
 zbus = { workspace = true }
+libpulse-binding = { workspace = true }
+
