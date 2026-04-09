@@ -12,7 +12,6 @@
     "finish-args": [
         "--share=ipc",
         "--socket=wayland",
-        "--socket=inherit-wayland-socket",
         "--socket=session-bus",
         "--device=dri",
         "--share=network",
