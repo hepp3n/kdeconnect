@@ -498,10 +498,38 @@ pub struct KdeConnectService {
 }
 
 impl KdeConnectService {
-    /// Block until the process is killed. All work runs in spawned tasks started
-    /// by `new()`; this just keeps the service process alive.
+    /// Block until the session ends or a signal is received. All work runs in
+    /// spawned tasks started by `new()`; this just keeps the process alive and
+    /// ensures a clean exit so the phone sees the disconnect promptly.
+    ///
+    /// Two exit paths are monitored:
+    /// - SIGTERM / SIGINT: covers systemd-managed local installs.
+    /// - Session D-Bus closed: covers cosmic-session logout, where the session
+    ///   daemon closes all connections without necessarily delivering SIGTERM to
+    ///   processes it did not directly register.
     pub async fn run(&self) -> Result<()> {
-        std::future::pending::<()>().await;
+        use futures::StreamExt;
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigterm = signal(SignalKind::terminate())?;
+
+        // Dedicated watch connection — no messages are expected on it.
+        // When the session bus closes (cosmic-session logout or systemd user
+        // session teardown), the MessageStream ends and this future completes.
+        let session_ended = async {
+            let Ok(watch_conn) = zbus::Connection::session().await else {
+                std::future::pending::<()>().await;
+                return;
+            };
+            let mut stream = zbus::MessageStream::from(&watch_conn);
+            while stream.next().await.is_some() {}
+        };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => { info!("SIGINT received, shutting down"); }
+            _ = sigterm.recv() => { info!("SIGTERM received, shutting down"); }
+            _ = session_ended => { info!("Session D-Bus closed, shutting down"); }
+        }
         Ok(())
     }
 }
@@ -524,6 +552,40 @@ impl KdeConnectService {
         info!("kdeconnect-core initialized");
 
         let devices = Arc::new(Mutex::new(HashMap::new()));
+
+        // Pre-populate known paired devices as offline so list_devices() returns
+        // them immediately after reboot, before the phone actively reconnects.
+        {
+            use kdeconnect_core::{config::CONFIG_DIR, device::Device as CoreDevice};
+            let mut map = devices.lock().await;
+            if let Some(config_dir) = dirs::config_dir() {
+                let kc_dir = config_dir.join(CONFIG_DIR);
+                if let Ok(mut entries) = tokio::fs::read_dir(&kc_dir).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) == Some("ron") {
+                            if let Ok(raw) = tokio::fs::read_to_string(&path).await {
+                                if let Ok(dev) = ron::de::from_str::<CoreDevice>(&raw) {
+                                    if dev.pair_state == PairState::Paired {
+                                        info!("Restoring offline paired device: {}", dev.name);
+                                        map.insert(
+                                            dev.device_id.0.clone(),
+                                            DbusDevice {
+                                                id: dev.device_id.0.clone(),
+                                                name: dev.name.clone(),
+                                                device_type: "phone".to_string(),
+                                                is_paired: true,
+                                                is_reachable: false,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let daemon_interface = DaemonInterface {
             event_sender: event_sender.clone(),

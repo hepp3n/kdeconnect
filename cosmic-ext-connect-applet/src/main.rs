@@ -449,5 +449,17 @@ fn main() -> cosmic::iced::Result {
         .init();
 
     ctrlc::set_handler(move || std::process::exit(0)).ok();
+
+    // In a flatpak the host D-Bus daemon cannot activate /app/bin/kdeconnect-service
+    // because /app only exists inside the sandbox. Spawning here ensures the service
+    // is always running and places it in the same process group as the applet, so
+    // it is killed when the session ends. If the service is already running the new
+    // process exits immediately when the D-Bus name is already taken.
+    let _ = std::process::Command::new("kdeconnect-service")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
     cosmic::applet::run::<KdeConnectApplet>(())
 }
