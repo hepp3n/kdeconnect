@@ -12,13 +12,16 @@
   <content_rating type="oars-1.1" />
   <name>KDE Connect</name>
   <summary>KDE Connect implementation for COSMIC Desktop</summary>
+  <summary xml:lang="cs">Implementace KDE Connect pro prostředí COSMIC</summary>
   <description>
     <p>KDE Connect allows you to connect to your devices and share files, messages, and more.</p>
+    <p xml:lang="cs">KDE Connect umožňuje připojit se k vašim zařízením a následně sdílet soubory, zprávy a další obsah.</p>
   </description>
     <screenshots>
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/hepp3n/kdeconnect/refs/heads/master/resources/screenshots/applet.png</image>
       <caption>COSMIC Ext Connect Main Applet Window</caption>
+      <caption xml:lang="cs">Hlavní okno appletu COSMIC Ext Connect</caption>
      </screenshot>
   </screenshots>
   <icon type="stock">io.github.hepp3n.kdeconnect.svg</icon>
