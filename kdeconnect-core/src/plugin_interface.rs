@@ -312,14 +312,6 @@ impl PluginRegistry {
             }
             PacketType::SystemVolumeRequest => {
                 if let Ok(req) = serde_json::from_value::<SystemVolumeRequest>(body) {
-                    // On first requestSinks, also start the desktop-side watcher
-                    // so the phone receives push updates when local volume changes.
-                    if req.request_sinks == Some(true) {
-                        plugins::systemvolume::spawn_volume_watcher(
-                            device.device_id.clone(),
-                            core_tx.clone(),
-                        );
-                    }
                     req.handle(&device, core_tx).await;
                 }
             }

@@ -1,8 +1,8 @@
-use anyhow::anyhow;
 use libpulse_binding::{
     callbacks::ListResult,
     context::{
         Context, FlagSet as ContextFlagSet, State as ContextState,
+        introspect::SinkInfo as PASinkInfo,
         subscribe::{Facility, InterestMaskSet},
     },
     mainloop::threaded::Mainloop,
@@ -19,7 +19,6 @@ use crate::{
     protocol::{PacketType, ProtocolPacket},
 };
 
-/// PA_VOLUME_NORM — matches the protocol's maxVolume field.
 const MAX_VOLUME: u32 = 0x10000;
 
 // ---------------------------------------------------------------------------
@@ -54,257 +53,306 @@ pub struct SystemVolumeRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Incoming packet handler
+// Internal PA thread messages
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+#[allow(dead_code)]
+enum PaMessage {
+    GetSinks,
+    SetSinkVolume(String, u32),
+    SetSinkMute(String, bool),
+    Quit,
+}
+
+// ---------------------------------------------------------------------------
+// Connection wrapper
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct PaConnection {
+    tx: mpsc::UnboundedSender<PaMessage>,
+}
+
+impl PaConnection {
+    fn send(&self, msg: PaMessage) {
+        let _ = self.tx.send(msg);
+    }
+}
+
+// Global map: device_id → PA connection handle.
+static PA_CONNECTIONS: std::sync::LazyLock<Mutex<std::collections::HashMap<String, PaConnection>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+// ---------------------------------------------------------------------------
+// Public API
 // ---------------------------------------------------------------------------
 
 impl SystemVolumeRequest {
-    pub async fn handle(&self, device: &Device, core_tx: mpsc::UnboundedSender<CoreEvent>) {
+    pub async fn handle(&self, device: &Device, _core_tx: mpsc::UnboundedSender<CoreEvent>) {
+        let conn = {
+            let map = PA_CONNECTIONS.lock().unwrap();
+            map.get(&device.device_id.0).cloned()
+        };
+
+        let Some(conn) = conn else {
+            warn!("[systemvolume] no PA connection for {}", device.device_id);
+            return;
+        };
+
         if self.request_sinks == Some(true) {
-            debug!("[systemvolume] sink list requested");
-            match tokio::task::spawn_blocking(get_sinks_sync).await {
-                Ok(Ok(sinks)) => send_sink_list(sinks, &device.device_id, &core_tx),
-                Ok(Err(e)) => warn!("[systemvolume] sink enumeration failed: {}", e),
-                Err(e) => warn!("[systemvolume] spawn_blocking join failed: {}", e),
-            }
+            debug!("[systemvolume] phone requested sink list");
+            conn.send(PaMessage::GetSinks);
             return;
         }
 
         if let Some(name) = self.name.clone() {
             if let Some(vol) = self.volume {
-                let n = name.clone();
-                if let Err(e) =
-                    tokio::task::spawn_blocking(move || set_sink_volume_sync(&n, vol)).await
-                {
-                    warn!("[systemvolume] set_volume join failed: {}", e);
-                }
+                debug!("[systemvolume] set volume {} on '{}'", vol, name);
+                conn.send(PaMessage::SetSinkVolume(name.clone(), vol));
             }
             if let Some(muted) = self.muted {
-                if let Err(e) =
-                    tokio::task::spawn_blocking(move || set_sink_mute_sync(&name, muted)).await
-                {
-                    warn!("[systemvolume] set_mute join failed: {}", e);
-                }
+                debug!("[systemvolume] set mute {} on '{}'", muted, name);
+                conn.send(PaMessage::SetSinkMute(name, muted));
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Device connect entry point
-// ---------------------------------------------------------------------------
-
-/// Called on device connect — sends initial sink list then starts the watcher.
+/// Called on device connect — starts the persistent PA thread for this device.
 pub fn on_device_connect(device_id: DeviceId, core_tx: mpsc::UnboundedSender<CoreEvent>) {
-    info!("[systemvolume] on_device_connect called for {}", device_id.0);
-    let core_tx_watcher = core_tx.clone();
-    let device_id_watcher = device_id.clone();
-    tokio::spawn(async move {
-        match tokio::task::spawn_blocking(get_sinks_sync).await {
-            Ok(Ok(sinks)) => {
-                info!("[systemvolume] got {} sink(s), sending to phone", sinks.len());
-                send_sink_list(sinks, &device_id, &core_tx);
-            }
-            Ok(Err(e)) => warn!("[systemvolume] initial sink list failed: {}", e),
-            Err(e) => warn!("[systemvolume] spawn_blocking failed: {}", e),
-        }
-        spawn_volume_watcher(device_id_watcher, core_tx_watcher);
-    });
-}
+    info!("[systemvolume] on_device_connect for {}", device_id.0);
 
-// ---------------------------------------------------------------------------
-// Volume watcher — pushes updates to phone when desktop volume changes
-// ---------------------------------------------------------------------------
+    let (tx, rx) = mpsc::unbounded_channel::<PaMessage>();
+    let conn = PaConnection { tx };
 
-pub fn spawn_volume_watcher(device_id: DeviceId, core_tx: mpsc::UnboundedSender<CoreEvent>) {
-    // Unbounded channel: PA thread signals "something changed", tokio task responds.
-    let (change_tx, mut change_rx) = mpsc::unbounded_channel::<()>();
+    {
+        let mut map = PA_CONNECTIONS.lock().unwrap();
+        map.insert(device_id.0.clone(), conn);
+    }
 
-    // PA subscription runs on a dedicated std thread (libpulse is not async).
+    let did = device_id.clone();
     std::thread::spawn(move || {
-        if let Err(e) = run_pa_subscription(change_tx) {
-            warn!("[systemvolume] PA subscription thread exited: {}", e);
-        }
-    });
-
-    // Tokio task: on each change signal, enumerate sinks and push to phone.
-    tokio::spawn(async move {
-        while change_rx.recv().await.is_some() {
-            debug!("[systemvolume] sink change received, enumerating");
-            match tokio::task::spawn_blocking(get_sinks_sync).await {
-                Ok(Ok(sinks)) => send_sink_list(sinks, &device_id, &core_tx),
-                Ok(Err(e)) => warn!("[systemvolume] watcher enumeration failed: {}", e),
-                Err(e) => warn!("[systemvolume] watcher join failed: {}", e),
-            }
-        }
+        pa_thread(did.clone(), core_tx, rx);
+        let mut map = PA_CONNECTIONS.lock().unwrap();
+        map.remove(&did.0);
+        info!("[systemvolume] PA thread exited for {}", did.0);
     });
 }
 
-fn run_pa_subscription(change_tx: mpsc::UnboundedSender<()>) -> anyhow::Result<()> {
-    let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop create failed"))?;
-    let mut context = Context::new(&mainloop, "kdeconnect-vol-watcher")
-        .ok_or_else(|| anyhow!("PA context create failed"))?;
+// ---------------------------------------------------------------------------
+// PA thread — persistent connection with exponential backoff retry
+// ---------------------------------------------------------------------------
 
-    mainloop.lock();
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .map_err(|_| anyhow!("PA context connect failed"))?;
-    mainloop
-        .start()
-        .map_err(|_| anyhow!("PA mainloop start failed"))?;
+fn pa_thread(
+    device_id: DeviceId,
+    core_tx: mpsc::UnboundedSender<CoreEvent>,
+    mut rx: mpsc::UnboundedReceiver<PaMessage>,
+) {
+    let mut retry_count: u32 = 0;
 
-    let mut attempts = 0u32;
-    loop {
-        match context.get_state() {
-            ContextState::Ready => break,
-            ContextState::Failed | ContextState::Terminated => {
-                mainloop.unlock();
-                return Err(anyhow!("PA context failed to reach ready state"));
+    'outer: loop {
+        if retry_count > 0 {
+            let delay_ms = (100u64 * (1u64 << (retry_count - 1).min(6))).min(5000);
+            info!(
+                "[systemvolume] PA reconnect in {}ms (attempt {})",
+                delay_ms, retry_count
+            );
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+
+        let mut mainloop = match Mainloop::new() {
+            Some(m) => m,
+            None => {
+                warn!("[systemvolume] PA mainloop create failed");
+                retry_count += 1;
+                continue;
             }
-            _ => {
-                attempts += 1;
-                if attempts > 200 {
-                    mainloop.unlock();
-                    return Err(anyhow!("PA watcher context connect timed out"));
+        };
+
+        let mut context = match Context::new(&mainloop, "kdeconnect-systemvolume") {
+            Some(c) => c,
+            None => {
+                warn!("[systemvolume] PA context create failed");
+                retry_count += 1;
+                continue;
+            }
+        };
+
+        mainloop.lock();
+
+        if context
+            .connect(None, ContextFlagSet::NOFLAGS, None)
+            .is_err()
+        {
+            warn!("[systemvolume] PA context.connect() failed");
+            mainloop.unlock();
+            retry_count += 1;
+            continue;
+        }
+
+        if mainloop.start().is_err() {
+            warn!("[systemvolume] PA mainloop start failed");
+            mainloop.unlock();
+            retry_count += 1;
+            continue;
+        }
+
+        info!("[systemvolume] connecting to PulseAudio...");
+
+        // Wait for context ready with timeout.
+        let mut attempts = 0u32;
+        let ready = loop {
+            match context.get_state() {
+                ContextState::Ready => break true,
+                ContextState::Failed | ContextState::Terminated => break false,
+                _ => {
+                    attempts += 1;
+                    if attempts > 300 {
+                        warn!("[systemvolume] PA connect timed out — check PULSE_SERVER");
+                        break false;
+                    }
+                    mainloop.wait();
                 }
-                mainloop.wait();
+            }
+        };
+
+        if !ready {
+            mainloop.unlock();
+            context.disconnect();
+            mainloop.stop();
+            retry_count += 1;
+            continue;
+        }
+
+        info!("[systemvolume] PA connected");
+        retry_count = 0;
+
+        // Subscribe to sink changes — signal ourselves via the message channel.
+        let did_sub = device_id.clone();
+        context.set_subscribe_callback(Some(Box::new(move |facility, _op, _index| {
+            if facility == Some(Facility::Sink) {
+                let map = PA_CONNECTIONS.lock().unwrap();
+                if let Some(conn) = map.get(&did_sub.0) {
+                    conn.send(PaMessage::GetSinks);
+                }
+            }
+        })));
+        context.subscribe(InterestMaskSet::SINK, |_| {});
+
+        // Send initial sink list.
+        mainloop.unlock();
+        if let Some(sinks) = enumerate_sinks(&mut mainloop, &context) {
+            info!(
+                "[systemvolume] sending {} initial sink(s) to phone",
+                sinks.len()
+            );
+            send_sink_list(sinks, &device_id, &core_tx);
+        }
+
+        // Message loop.
+        loop {
+            // Check context is still alive.
+            mainloop.lock();
+            let state = context.get_state();
+            mainloop.unlock();
+
+            match state {
+                ContextState::Ready => {}
+                _ => {
+                    warn!("[systemvolume] PA context lost — reconnecting");
+                    context.disconnect();
+                    mainloop.stop();
+                    retry_count += 1;
+                    continue 'outer;
+                }
+            }
+
+            match rx.try_recv() {
+                Ok(PaMessage::Quit) => {
+                    info!("[systemvolume] PA thread quitting for {}", device_id.0);
+                    context.disconnect();
+                    mainloop.stop();
+                    return;
+                }
+                Ok(PaMessage::GetSinks) => {
+                    // Drain duplicate GetSinks — only respond once.
+                    while matches!(rx.try_recv(), Ok(PaMessage::GetSinks)) {}
+                    if let Some(sinks) = enumerate_sinks(&mut mainloop, &context) {
+                        send_sink_list(sinks, &device_id, &core_tx);
+                    }
+                }
+                Ok(PaMessage::SetSinkVolume(name, volume)) => {
+                    // Deduplicate rapid volume changes for the same sink.
+                    let mut final_vol = volume;
+                    while let Ok(PaMessage::SetSinkVolume(n, v)) = rx.try_recv() {
+                        if n == name {
+                            final_vol = v;
+                        }
+                    }
+                    info!("[systemvolume] set volume {} on '{}'", final_vol, name);
+                    set_volume(&mut mainloop, &context, &name, final_vol);
+                }
+                Ok(PaMessage::SetSinkMute(name, muted)) => {
+                    info!("[systemvolume] set mute {} on '{}'", muted, name);
+                    set_mute(&mut mainloop, &context, &name, muted);
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // Nothing pending — yield briefly.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    info!(
+                        "[systemvolume] channel closed for {} — exiting",
+                        device_id.0
+                    );
+                    context.disconnect();
+                    mainloop.stop();
+                    return;
+                }
             }
         }
     }
-
-    context.subscribe(InterestMaskSet::SINK, |_| {});
-
-    let change_tx_cb = change_tx.clone();
-    context.set_subscribe_callback(Some(Box::new(move |facility, _op, _index| {
-        if facility == Some(Facility::Sink) {
-            // Ignore send errors — receiver dropped means device disconnected.
-            let _ = change_tx_cb.send(());
-        }
-    })));
-
-    // Unlock: the PA mainloop thread now runs freely and drives callbacks.
-    mainloop.unlock();
-
-    // Keep the thread alive and poll for device disconnect.
-    while !change_tx.is_closed() {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-    }
-
-    // Cleanup.
-    mainloop.lock();
-    context.disconnect();
-    mainloop.unlock();
-    mainloop.stop();
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// libpulse operations (blocking — call via spawn_blocking)
+// PA operations
 // ---------------------------------------------------------------------------
 
-fn get_sinks_sync() -> anyhow::Result<Vec<SinkInfo>> {
-    let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop failed"))?;
-    let mut context = Context::new(&mainloop, "kdeconnect-sinks")
-        .ok_or_else(|| anyhow!("PA context failed"))?;
-
-    mainloop.lock();
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .map_err(|_| anyhow!("PA connect failed"))?;
-    mainloop
-        .start()
-        .map_err(|_| anyhow!("PA mainloop start failed"))?;
-
-    info!("[systemvolume] connecting to PulseAudio...");
-    let mut attempts = 0u32;
-    loop {
-        match context.get_state() {
-            ContextState::Ready => {
-                info!("[systemvolume] PA context ready");
-                break;
-            }
-            ContextState::Failed | ContextState::Terminated => {
-                mainloop.unlock();
-                return Err(anyhow!("PA context failed to connect — is PipeWire/PulseAudio running?"));
-            }
-            _ => {
-                attempts += 1;
-                if attempts > 200 {
-                    mainloop.unlock();
-                    return Err(anyhow!("PA context connect timed out — check PULSE_SERVER socket"));
-                }
-                mainloop.wait();
-            }
-        }
-    }
-
+fn enumerate_sinks(mainloop: &mut Mainloop, context: &Context) -> Option<Vec<SinkInfo>> {
     let sinks: Arc<Mutex<Vec<SinkInfo>>> = Arc::new(Mutex::new(Vec::new()));
     let sinks_cb = Arc::clone(&sinks);
 
+    mainloop.lock();
     let introspect = context.introspect();
     let op = introspect.get_sink_info_list(move |result| {
         if let ListResult::Item(info) = result {
-            let name = info.name.as_deref().unwrap_or("").to_string();
-            let description = info.description.as_deref().unwrap_or(&name).to_string();
-            sinks_cb.lock().unwrap().push(SinkInfo {
-                name,
-                description,
-                muted: info.mute,
-                volume: info.volume.avg().0,
-                max_volume: MAX_VOLUME,
-                enabled: true,
-            });
+            if let Some(sink) = pa_sink_to_info(info) {
+                sinks_cb.lock().unwrap().push(sink);
+            }
         }
     });
 
+    let mut timeout = 0u32;
     while op.get_state() == libpulse_binding::operation::State::Running {
+        timeout += 1;
+        if timeout > 500 {
+            warn!("[systemvolume] enumerate_sinks timed out");
+            mainloop.unlock();
+            return None;
+        }
         mainloop.wait();
     }
-
     mainloop.unlock();
-    context.disconnect();
-    mainloop.stop();
 
-    Ok(Arc::try_unwrap(sinks).unwrap().into_inner().unwrap())
+    Arc::try_unwrap(sinks).ok()?.into_inner().ok()
 }
 
-fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
-    info!("[systemvolume] setting volume on '{}' to {}", name, volume);
-    let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop failed"))?;
-    let mut context = Context::new(&mainloop, "kdeconnect-setvol")
-        .ok_or_else(|| anyhow!("PA context failed"))?;
-
-    mainloop.lock();
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .map_err(|_| anyhow!("PA connect failed"))?;
-    mainloop
-        .start()
-        .map_err(|_| anyhow!("PA mainloop start failed"))?;
-
-    let mut attempts = 0u32;
-    loop {
-        match context.get_state() {
-            ContextState::Ready => break,
-            ContextState::Failed | ContextState::Terminated => {
-                mainloop.unlock();
-                return Err(anyhow!("PA context failed"));
-            }
-            _ => {
-                attempts += 1;
-                if attempts > 200 {
-                    mainloop.unlock();
-                    return Err(anyhow!("PA setvol context connect timed out"));
-                }
-                mainloop.wait();
-            }
-        }
-    }
-
-    // Get the sink's channel count before setting volume.
+fn set_volume(mainloop: &mut Mainloop, context: &Context, name: &str, volume: u32) {
     let channels: Arc<Mutex<u8>> = Arc::new(Mutex::new(2));
     let channels_cb = Arc::clone(&channels);
 
+    mainloop.lock();
     let mut introspect = context.introspect();
     let op = introspect.get_sink_info_by_name(name, move |result| {
         if let ListResult::Item(info) = result {
@@ -312,7 +360,12 @@ fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
         }
     });
 
+    let mut timeout = 0u32;
     while op.get_state() == libpulse_binding::operation::State::Running {
+        timeout += 1;
+        if timeout > 200 {
+            break;
+        }
         mainloop.wait();
     }
 
@@ -321,68 +374,54 @@ fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
     cvol.set(ch, Volume(volume));
 
     let op = introspect.set_sink_volume_by_name(name, &cvol, None::<Box<dyn FnMut(bool)>>);
+    let mut timeout = 0u32;
     while op.get_state() == libpulse_binding::operation::State::Running {
+        timeout += 1;
+        if timeout > 200 {
+            break;
+        }
         mainloop.wait();
     }
-
     mainloop.unlock();
-    context.disconnect();
-    mainloop.stop();
-
-    Ok(())
 }
 
-fn set_sink_mute_sync(name: &str, muted: bool) -> anyhow::Result<()> {
-    info!("[systemvolume] setting mute on '{}' to {}", name, muted);
-    let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop failed"))?;
-    let mut context = Context::new(&mainloop, "kdeconnect-setmute")
-        .ok_or_else(|| anyhow!("PA context failed"))?;
-
+fn set_mute(mainloop: &mut Mainloop, context: &Context, name: &str, muted: bool) {
     mainloop.lock();
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .map_err(|_| anyhow!("PA connect failed"))?;
-    mainloop
-        .start()
-        .map_err(|_| anyhow!("PA mainloop start failed"))?;
-
-    let mut attempts = 0u32;
-    loop {
-        match context.get_state() {
-            ContextState::Ready => break,
-            ContextState::Failed | ContextState::Terminated => {
-                mainloop.unlock();
-                return Err(anyhow!("PA context failed"));
-            }
-            _ => {
-                attempts += 1;
-                if attempts > 200 {
-                    mainloop.unlock();
-                    return Err(anyhow!("PA setmute context connect timed out"));
-                }
-                mainloop.wait();
-            }
-        }
-    }
-
     let mut introspect = context.introspect();
     let op = introspect.set_sink_mute_by_name(name, muted, None::<Box<dyn FnMut(bool)>>);
+    let mut timeout = 0u32;
     while op.get_state() == libpulse_binding::operation::State::Running {
+        timeout += 1;
+        if timeout > 200 {
+            break;
+        }
         mainloop.wait();
     }
-
     mainloop.unlock();
-    context.disconnect();
-    mainloop.stop();
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Helper
+// Helpers
 // ---------------------------------------------------------------------------
 
-fn send_sink_list(sinks: Vec<SinkInfo>, device_id: &DeviceId, core_tx: &mpsc::UnboundedSender<CoreEvent>) {
+fn pa_sink_to_info(info: &PASinkInfo) -> Option<SinkInfo> {
+    let name = info.name.as_deref()?.to_string();
+    let description = info.description.as_deref().unwrap_or(&name).to_string();
+    Some(SinkInfo {
+        name,
+        description,
+        muted: info.mute,
+        volume: info.volume.avg().0,
+        max_volume: MAX_VOLUME,
+        enabled: true,
+    })
+}
+
+fn send_sink_list(
+    sinks: Vec<SinkInfo>,
+    device_id: &DeviceId,
+    core_tx: &mpsc::UnboundedSender<CoreEvent>,
+) {
     let packet = ProtocolPacket::new(
         PacketType::SystemVolume,
         serde_json::to_value(SystemVolume { sink_list: sinks }).unwrap(),
