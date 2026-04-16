@@ -11,7 +11,7 @@ use libpulse_binding::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     device::{Device, DeviceId},
@@ -90,6 +90,28 @@ impl SystemVolumeRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Device connect entry point
+// ---------------------------------------------------------------------------
+
+/// Called on device connect — sends initial sink list then starts the watcher.
+pub fn on_device_connect(device_id: DeviceId, core_tx: mpsc::UnboundedSender<CoreEvent>) {
+    info!("[systemvolume] on_device_connect called for {}", device_id.0);
+    let core_tx_watcher = core_tx.clone();
+    let device_id_watcher = device_id.clone();
+    tokio::spawn(async move {
+        match tokio::task::spawn_blocking(get_sinks_sync).await {
+            Ok(Ok(sinks)) => {
+                info!("[systemvolume] got {} sink(s), sending to phone", sinks.len());
+                send_sink_list(sinks, &device_id, &core_tx);
+            }
+            Ok(Err(e)) => warn!("[systemvolume] initial sink list failed: {}", e),
+            Err(e) => warn!("[systemvolume] spawn_blocking failed: {}", e),
+        }
+        spawn_volume_watcher(device_id_watcher, core_tx_watcher);
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Volume watcher — pushes updates to phone when desktop volume changes
 // ---------------------------------------------------------------------------
 
@@ -130,6 +152,7 @@ fn run_pa_subscription(change_tx: mpsc::UnboundedSender<()>) -> anyhow::Result<(
         .start()
         .map_err(|_| anyhow!("PA mainloop start failed"))?;
 
+    let mut attempts = 0u32;
     loop {
         match context.get_state() {
             ContextState::Ready => break,
@@ -137,7 +160,14 @@ fn run_pa_subscription(change_tx: mpsc::UnboundedSender<()>) -> anyhow::Result<(
                 mainloop.unlock();
                 return Err(anyhow!("PA context failed to reach ready state"));
             }
-            _ => mainloop.wait(),
+            _ => {
+                attempts += 1;
+                if attempts > 200 {
+                    mainloop.unlock();
+                    return Err(anyhow!("PA watcher context connect timed out"));
+                }
+                mainloop.wait();
+            }
         }
     }
 
@@ -185,14 +215,26 @@ fn get_sinks_sync() -> anyhow::Result<Vec<SinkInfo>> {
         .start()
         .map_err(|_| anyhow!("PA mainloop start failed"))?;
 
+    info!("[systemvolume] connecting to PulseAudio...");
+    let mut attempts = 0u32;
     loop {
         match context.get_state() {
-            ContextState::Ready => break,
+            ContextState::Ready => {
+                info!("[systemvolume] PA context ready");
+                break;
+            }
             ContextState::Failed | ContextState::Terminated => {
                 mainloop.unlock();
-                return Err(anyhow!("PA context failed"));
+                return Err(anyhow!("PA context failed to connect — is PipeWire/PulseAudio running?"));
             }
-            _ => mainloop.wait(),
+            _ => {
+                attempts += 1;
+                if attempts > 200 {
+                    mainloop.unlock();
+                    return Err(anyhow!("PA context connect timed out — check PULSE_SERVER socket"));
+                }
+                mainloop.wait();
+            }
         }
     }
 
@@ -227,6 +269,7 @@ fn get_sinks_sync() -> anyhow::Result<Vec<SinkInfo>> {
 }
 
 fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
+    info!("[systemvolume] setting volume on '{}' to {}", name, volume);
     let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop failed"))?;
     let mut context = Context::new(&mainloop, "kdeconnect-setvol")
         .ok_or_else(|| anyhow!("PA context failed"))?;
@@ -239,6 +282,7 @@ fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
         .start()
         .map_err(|_| anyhow!("PA mainloop start failed"))?;
 
+    let mut attempts = 0u32;
     loop {
         match context.get_state() {
             ContextState::Ready => break,
@@ -246,7 +290,14 @@ fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
                 mainloop.unlock();
                 return Err(anyhow!("PA context failed"));
             }
-            _ => mainloop.wait(),
+            _ => {
+                attempts += 1;
+                if attempts > 200 {
+                    mainloop.unlock();
+                    return Err(anyhow!("PA setvol context connect timed out"));
+                }
+                mainloop.wait();
+            }
         }
     }
 
@@ -282,6 +333,7 @@ fn set_sink_volume_sync(name: &str, volume: u32) -> anyhow::Result<()> {
 }
 
 fn set_sink_mute_sync(name: &str, muted: bool) -> anyhow::Result<()> {
+    info!("[systemvolume] setting mute on '{}' to {}", name, muted);
     let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("PA mainloop failed"))?;
     let mut context = Context::new(&mainloop, "kdeconnect-setmute")
         .ok_or_else(|| anyhow!("PA context failed"))?;
@@ -294,6 +346,7 @@ fn set_sink_mute_sync(name: &str, muted: bool) -> anyhow::Result<()> {
         .start()
         .map_err(|_| anyhow!("PA mainloop start failed"))?;
 
+    let mut attempts = 0u32;
     loop {
         match context.get_state() {
             ContextState::Ready => break,
@@ -301,7 +354,14 @@ fn set_sink_mute_sync(name: &str, muted: bool) -> anyhow::Result<()> {
                 mainloop.unlock();
                 return Err(anyhow!("PA context failed"));
             }
-            _ => mainloop.wait(),
+            _ => {
+                attempts += 1;
+                if attempts > 200 {
+                    mainloop.unlock();
+                    return Err(anyhow!("PA setmute context connect timed out"));
+                }
+                mainloop.wait();
+            }
         }
     }
 
