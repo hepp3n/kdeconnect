@@ -291,6 +291,10 @@ impl KdeConnectCore {
                     // Send our local command list so the Android app shows
                     // the Run Command option (requires canAddCommand: true).
                     plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
+                    
+                    if self.plugin_registry.is_plugin_enabled(&id.0, "systemvolume").await {
+                        plugins::systemvolume::on_device_connect(id.clone(), self.event_tx.clone());
+                    }
                 }
 
                 let conn_event = ConnectionEvent::Connected((id.clone(), device.clone()));

@@ -136,6 +136,7 @@ impl PluginRegistry {
         }
 
         let body = packet.body.clone();
+        info!("[dispatch] packet type: {:?}", packet.packet_type);
         let core_tx = core_tx.clone();
         let connection_tx = tx.clone();
         let mpris_connection_tx = mpris_tx.clone();

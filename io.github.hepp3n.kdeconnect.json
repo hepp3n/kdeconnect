@@ -17,8 +17,7 @@
         "--share=network",
         "--filesystem=xdg-download",
         "--filesystem=xdg-config/cosmic:rw",
-        "--socket=pulseaudio",
-        "--env=PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native"
+        "--socket=pulseaudio"
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin"
