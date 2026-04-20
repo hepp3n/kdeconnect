@@ -576,7 +576,7 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                    "kdeconnect.contacts.response_vcards"],                                  &["kdeconnect.contacts.request_all_uids_timestamps",
                                                                                                               "kdeconnect.contacts.request_vcards_by_uid"]),
         ("findmyphone",         &[],                                                                        &["kdeconnect.findmyphone.request"]),
-        ("mpris",               &["kdeconnect.mpris"],                                                      &["kdeconnect.mpris.request"]),
+        ("mpris",               &["kdeconnect.mpris", "kdeconnect.mpris.request"],                          &["kdeconnect.mpris", "kdeconnect.mpris.request"]),
         ("notification",        &["kdeconnect.notification"],                                               &["kdeconnect.notification.request"]),
         ("ping",                &["kdeconnect.ping"],                                                       &["kdeconnect.ping"]),
         ("runcommand",          &["kdeconnect.runcommand.request"],                                         &["kdeconnect.runcommand"]),

@@ -25,6 +25,7 @@
 - Share Files & URLs (send files, receive files and URLs)
 - SMS (conversations, send/receive)
 - Plugin Enable / Disable per device
+- System Volume (Partial support - May not work on certain devices - Known Mobile App Bug)
 
 </details>
 
@@ -34,7 +35,6 @@
 - MousePad / Remote Input
 - Presenter Mode
 - SFTP / Browse Device
-- System Volume
 - Telephony
 - Virtual Display
 

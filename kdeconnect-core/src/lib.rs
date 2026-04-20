@@ -105,7 +105,7 @@ impl KdeConnectCore {
         };
         plugin_registry.register(Arc::new(sms_plugin)).await;
 
-        let _ = mpris_conn_rx;
+        plugins::mpris::expose_phone_mpris(mpris_conn_rx, event_tx.clone());
 
         Ok((
             Self {
@@ -130,6 +130,11 @@ impl KdeConnectCore {
 
     pub async fn run_event_loop(&mut self) {
         info!("Starting KdeConnect event loop");
+
+        plugins::mpris::monitor_mpris(
+            (*self.device_manager).clone(),
+            self.event_tx.clone(),
+        );
 
         loop {
             select! {
@@ -196,6 +201,27 @@ impl KdeConnectCore {
                             serde_json::json!({}),
                         );
                         let _ = sender.send(contacts_pkt);
+                    }
+                }
+
+                // Bootstrap MPRIS: request the phone's player list so
+                // expose_phone_mpris can register D-Bus proxies for them.
+                if self
+                    .plugin_registry
+                    .is_plugin_enabled(&device_id.0, "mpris")
+                    .await
+                {
+                    if let Some(sender) = guard.get(&device_id) {
+                        let mpris_pkt = ProtocolPacket::new(
+                            PacketType::MprisRequest,
+                            serde_json::to_value(
+                                crate::plugins::mpris::MprisRequest {
+                                    request_player_list: Some(true),
+                                    ..Default::default()
+                                }
+                            ).unwrap(),
+                        );
+                        let _ = sender.send(mpris_pkt);
                     }
                 }
 
