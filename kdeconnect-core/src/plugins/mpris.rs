@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
@@ -18,7 +18,7 @@ pub enum Mpris {
     List {
         #[serde(rename = "playerList")]
         player_list: Vec<String>,
-        #[serde(rename = "supportAlbumArtPayload")]
+        #[serde(rename = "supportAlbumArtPayload", default)]
         supports_album_art_payload: bool,
     },
     TransferringArt {
@@ -95,7 +95,11 @@ impl MprisPlayer {
             let can_go_next = player.can_go_next().unwrap_or(false);
             let can_go_previous = player.can_go_previous().unwrap_or(false);
             let can_seek = player.can_seek().unwrap_or(false);
-            let is_playing = player.is_running();
+            // Correctly check playback status rather than process liveness.
+            let is_playing = player
+                .get_playback_status()
+                .map(|s| s == mpris::PlaybackStatus::Playing)
+                .unwrap_or(false);
             let loop_status =
                 MprisLoopStatus::from(player.get_loop_status().unwrap_or(mpris::LoopStatus::None));
             let shuffle = player.get_shuffle().unwrap_or(false);
@@ -216,6 +220,17 @@ pub fn get_mpris_metadata(name: Option<&str>) -> anyhow::Result<mpris::Metadata>
     Ok(get_mpris_players(name)?.get_metadata()?)
 }
 
+pub fn get_all_mpris_player_names() -> Vec<String> {
+    let finder = match mpris::PlayerFinder::new() {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    match finder.find_all() {
+        Ok(players) => players.into_iter().map(|p| p.identity().to_string()).collect(),
+        Err(_) => vec![],
+    }
+}
+
 impl Plugin for MprisRequest {
     fn id(&self) -> &'static str {
         "kdeconnect.mpris.request"
@@ -232,23 +247,20 @@ impl MprisRequest {
 
         if self.request_player_list == Some(true) {
             debug!("MPRIS Player list requested");
-            let players = get_mpris_players(None);
-
-            if let Ok(player) = players {
-                let packet = ProtocolPacket::new(
-                    PacketType::Mpris,
-                    serde_json::to_value(Mpris::List {
-                        player_list: vec![player.identity().into()],
-                        supports_album_art_payload: true,
-                    })
-                    .unwrap(),
-                );
-
-                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                    device: device.device_id.clone(),
-                    packet,
-                });
-            }
+            let player_list = get_all_mpris_player_names();
+            debug!("Sending player list: {:?}", player_list);
+            let packet = ProtocolPacket::new(
+                PacketType::Mpris,
+                serde_json::to_value(Mpris::List {
+                    player_list,
+                    supports_album_art_payload: true,
+                })
+                .unwrap(),
+            );
+            let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                device: device.device_id.clone(),
+                packet,
+            });
             return;
         }
 
@@ -371,69 +383,120 @@ pub fn monitor_mpris(
     device_manager: DeviceManager,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) {
+    let dm_sup = device_manager.clone();
+    let ctx_sup = core_tx.clone();
+
     tokio::task::spawn_blocking(move || {
-        let finder = match mpris::PlayerFinder::new() {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::error!("Failed to create PlayerFinder: {}", e);
-                return;
-            }
-        };
+        let mut known_players: Vec<String> = vec![];
+        // Track which players already have a watcher thread so we don't
+        // spawn duplicates when the list changes again later.
+        let mut watched_players: HashSet<String> = HashSet::new();
 
         loop {
-            let player = match finder.find_active() {
-                Ok(p) => p,
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    continue;
-                }
-            };
+            let current_names = get_all_mpris_player_names();
 
-            let events = match player.events() {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!("Failed to get player events: {}", e);
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    continue;
-                }
-            };
+            if current_names != known_players {
+                tracing::info!("MPRIS player list changed: {:?}", current_names);
 
-            for event in events {
-                match event {
-                    Ok(mpris::Event::Playing)
-                    | Ok(mpris::Event::Paused)
-                    | Ok(mpris::Event::Stopped)
-                    | Ok(mpris::Event::TrackChanged(_))
-                    | Ok(mpris::Event::Seeked { .. })
-                    | Ok(mpris::Event::VolumeChanged(_)) => {
-                        let identity = player.identity();
-                        if let Ok(mpris_player) = MprisPlayer::new(Some(identity)) {
-                            let packet = ProtocolPacket::new(
-                                PacketType::Mpris,
-                                serde_json::to_value(Mpris::Info(mpris_player)).unwrap(),
-                            );
+                // Push the updated list to all connected devices.
+                let packet = ProtocolPacket::new(
+                    PacketType::Mpris,
+                    serde_json::to_value(Mpris::List {
+                        player_list: current_names.clone(),
+                        supports_album_art_payload: true,
+                    })
+                    .unwrap(),
+                );
+                let dm = dm_sup.clone();
+                let ctx = ctx_sup.clone();
+                tokio::spawn(async move {
+                    let devices = dm.get_devices().await;
+                    for device in devices {
+                        let _ = ctx.send(crate::event::CoreEvent::SendPacket {
+                            device: device.device_id.clone(),
+                            packet: packet.clone(),
+                        });
+                    }
+                });
 
-                            let dm = device_manager.clone();
-                            let ctx = core_tx.clone();
+                // Spawn a watcher only for players that are NEW this cycle.
+                for name in &current_names {
+                    if watched_players.contains(name) {
+                        continue;
+                    }
+                    watched_players.insert(name.clone());
 
-                            tokio::spawn(async move {
-                                let devices = dm.get_devices().await;
-                                for device in devices {
-                                    let _ = ctx.send(crate::event::CoreEvent::SendPacket {
-                                        device: device.device_id.clone(),
-                                        packet: packet.clone(),
-                                    });
+                    let name = name.clone();
+                    let dm2 = device_manager.clone();
+                    let ctx2 = core_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let finder = match mpris::PlayerFinder::new() {
+                            Ok(f) => f,
+                            Err(e) => {
+                                tracing::error!("PlayerFinder error: {}", e);
+                                return;
+                            }
+                        };
+                        let player = match finder.find_by_name(&name) {
+                            Ok(p) => p,
+                            Err(_) => return,
+                        };
+                        let events = match player.events() {
+                            Ok(e) => e,
+                            Err(e) => {
+                                tracing::error!("Failed to get events for {}: {}", name, e);
+                                return;
+                            }
+                        };
+                        for event in events {
+                            match event {
+                                Ok(mpris::Event::Playing)
+                                | Ok(mpris::Event::Paused)
+                                | Ok(mpris::Event::Stopped)
+                                | Ok(mpris::Event::TrackChanged(_))
+                                | Ok(mpris::Event::Seeked { .. })
+                                | Ok(mpris::Event::VolumeChanged(_)) => {
+                                    let identity = player.identity();
+                                    if let Ok(mpris_player) = MprisPlayer::new(Some(identity)) {
+                                        let packet = ProtocolPacket::new(
+                                            PacketType::Mpris,
+                                            serde_json::to_value(Mpris::Info(mpris_player))
+                                                .unwrap(),
+                                        );
+                                        let dm = dm2.clone();
+                                        let ctx = ctx2.clone();
+                                        tokio::spawn(async move {
+                                            let devices = dm.get_devices().await;
+                                            for device in devices {
+                                                let _ =
+                                                    ctx.send(crate::event::CoreEvent::SendPacket {
+                                                        device: device.device_id.clone(),
+                                                        packet: packet.clone(),
+                                                    });
+                                            }
+                                        });
+                                    }
                                 }
-                            });
+                                Err(e) => {
+                                    tracing::warn!("MPRIS event error for {}: {}", name, e);
+                                    break;
+                                }
+                                _ => {}
+                            }
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!("MPRIS event error: {}", e);
-                        break;
-                    }
-                    _ => {}
+                        tracing::info!("MPRIS watcher exited for player: {}", name);
+                        // The supervisor loop will detect the player is gone on
+                        // its next poll and remove it from known_players, which
+                        // will allow a fresh watcher if it restarts.
+                    });
                 }
+
+                known_players = current_names;
+                // Clean up watched set for players that have gone away.
+                watched_players.retain(|p| known_players.contains(p));
             }
+
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
     });
 }
@@ -450,7 +513,7 @@ struct PhoneMprisPlayer {
 
 #[interface(name = "org.mpris.MediaPlayer2.Player")]
 impl PhoneMprisPlayer {
-    async fn play(&self) {
+    async fn play(&self, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) {
         let mut state = self.player_state.write().await;
         let is_playing = state.is_playing.unwrap_or(false);
         let action = if is_playing {
@@ -459,7 +522,6 @@ impl PhoneMprisPlayer {
             MprisAction::Play
         };
 
-        // Optimistically update state immediately
         state.is_playing = Some(!is_playing);
 
         let request = MprisRequest {
@@ -467,12 +529,13 @@ impl PhoneMprisPlayer {
             action: Some(action),
             ..Default::default()
         };
-        drop(state); // Release lock before async call
+        drop(state);
 
+        let _ = self.playback_status_changed(&emitter).await;
         self.send_request(request).await;
     }
 
-    async fn pause(&self) {
+    async fn pause(&self, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) {
         let mut state = self.player_state.write().await;
         state.is_playing = Some(false);
 
@@ -483,10 +546,11 @@ impl PhoneMprisPlayer {
         };
         drop(state);
 
+        let _ = self.playback_status_changed(&emitter).await;
         self.send_request(request).await;
     }
 
-    async fn play_pause(&self) {
+    async fn play_pause(&self, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) {
         let mut state = self.player_state.write().await;
         let is_playing = state.is_playing.unwrap_or(false);
         state.is_playing = Some(!is_playing);
@@ -498,6 +562,7 @@ impl PhoneMprisPlayer {
         };
         drop(state);
 
+        let _ = self.playback_status_changed(&emitter).await;
         self.send_request(request).await;
     }
 
@@ -678,17 +743,19 @@ impl PhoneMprisRoot {
 struct PhonePlayerConnection {
     connection: zbus::Connection,
     player_state: Arc<RwLock<MprisPlayer>>,
+    device_id: crate::device::DeviceId,
 }
-
-// Replace the expose_phone_mpris function with this corrected version:
 
 pub fn expose_phone_mpris(
     mut conn_rx: mpsc::UnboundedReceiver<crate::event::ConnectionEvent>,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) {
     tokio::spawn(async move {
+        // Keyed by "{device_id}_{player_name}". Stores the connection AND the
+        // device_id directly so we never need to parse it back out of the key.
         let mut active_players: HashMap<String, PhonePlayerConnection> = HashMap::new();
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        // Poll every 5s for now-playing updates from the phone.
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
 
         loop {
             tokio::select! {
@@ -696,38 +763,96 @@ pub fn expose_phone_mpris(
                     match event {
                         crate::event::ConnectionEvent::Mpris((device_id, mpris_data)) => {
                             match mpris_data {
+                                // Phone sent its player list — request now-playing for each.
+                                Mpris::List { player_list, .. } => {
+                                    tracing::info!(
+                                        "Phone player list from {}: {:?}",
+                                        device_id.0, player_list
+                                    );
+                                    for player_name in player_list {
+                                        let request = MprisRequest {
+                                            player: Some(player_name.clone()),
+                                            request_now_playing: Some(true),
+                                            request_volume: Some(true),
+                                            ..Default::default()
+                                        };
+                                        let packet = ProtocolPacket::new(
+                                            PacketType::MprisRequest,
+                                            serde_json::to_value(request).unwrap(),
+                                        );
+                                        let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                                            device: device_id.clone(),
+                                            packet,
+                                        });
+                                    }
+                                }
+                                // Phone sent state for one of its players — register or update.
                                 Mpris::Info(player_info) => {
-                                    let player_key = format!("{}_{}", device_id.0, player_info.player);
+                                    let player_key = format!(
+                                        "{}_{}",
+                                        device_id.0, player_info.player
+                                    );
 
-                                    if let Some(player_conn) = active_players.get_mut(&player_key) {
-                                        let old_state = player_conn.player_state.read().await.clone();
+                                    if let Some(player_conn) =
+                                        active_players.get_mut(&player_key)
+                                    {
+                                        let old_state =
+                                            player_conn.player_state.read().await.clone();
 
                                         {
-                                            let mut state = player_conn.player_state.write().await;
+                                            let mut state =
+                                                player_conn.player_state.write().await;
                                             *state = player_info.clone();
                                         }
 
                                         if old_state.is_playing != player_info.is_playing {
-                                            let obj_server = player_conn.connection.object_server();
-                                            if let Ok(iface_ref) = obj_server.interface::<_, PhoneMprisPlayer>("/org/mpris/MediaPlayer2").await {
+                                            let obj_server =
+                                                player_conn.connection.object_server();
+                                            if let Ok(iface_ref) = obj_server
+                                                .interface::<_, PhoneMprisPlayer>(
+                                                    "/org/mpris/MediaPlayer2",
+                                                )
+                                                .await
+                                            {
                                                 let emitter = iface_ref.signal_emitter();
                                                 let iface = iface_ref.get().await;
-                                                let _ = iface.playback_status_changed(&emitter).await;
+                                                let _ = iface
+                                                    .playback_status_changed(&emitter)
+                                                    .await;
                                             }
                                         }
 
-                                        tracing::debug!("Updated phone MPRIS player: {}", player_key);
+                                        tracing::debug!(
+                                            "Updated phone MPRIS player: {}",
+                                            player_key
+                                        );
                                     } else {
-                                        match register_phone_player(&device_id, &player_info, core_tx.clone()).await {
+                                        match register_phone_player(
+                                            &device_id,
+                                            &player_info,
+                                            core_tx.clone(),
+                                        )
+                                        .await
+                                        {
                                             Ok((conn, state)) => {
-                                                tracing::info!("✓ Registered D-Bus MPRIS for phone player: {}", player_key);
-                                                active_players.insert(player_key.clone(), PhonePlayerConnection {
-                                                    connection: conn,
-                                                    player_state: state,
-                                                });
+                                                tracing::info!(
+                                                    "✓ Registered D-Bus MPRIS for phone player: {}",
+                                                    player_key
+                                                );
+                                                active_players.insert(
+                                                    player_key.clone(),
+                                                    PhonePlayerConnection {
+                                                        connection: conn,
+                                                        player_state: state,
+                                                        device_id: device_id.clone(),
+                                                    },
+                                                );
                                             }
                                             Err(e) => {
-                                                tracing::error!("✗ Failed to register D-Bus MPRIS: {}", e);
+                                                tracing::error!(
+                                                    "✗ Failed to register D-Bus MPRIS: {}",
+                                                    e
+                                                );
                                             }
                                         }
                                     }
@@ -736,30 +861,32 @@ pub fn expose_phone_mpris(
                             }
                         }
                         crate::event::ConnectionEvent::Disconnected(device_id) => {
-                            active_players.retain(|key, _| !key.starts_with(&device_id.0));
-                            tracing::info!("Removed MPRIS players for disconnected device: {}", device_id.0);
+                            active_players.retain(|_, conn| conn.device_id != device_id);
+                            tracing::info!(
+                                "Removed MPRIS players for disconnected device: {}",
+                                device_id.0
+                            );
                         }
                         _ => {}
                     }
                 }
                 _ = interval.tick() => {
-                    for (player_key, player_conn) in &active_players {
-                        if let Some((device_id_str, _)) = player_key.split_once('_') {
-                            let player_name = player_conn.player_state.read().await.player.clone();
-                            let info_request = MprisRequest {
-                                player: Some(player_name),
-                                request_now_playing: Some(true),
-                                ..Default::default()
-                            };
-                            let packet = ProtocolPacket::new(
-                                PacketType::MprisRequest,
-                                serde_json::to_value(info_request).unwrap(),
-                            );
-                            let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                                device: crate::device::DeviceId(device_id_str.to_string()),
-                                packet,
-                            });
-                        }
+                    // Ask each phone to refresh now-playing for all its players.
+                    for player_conn in active_players.values() {
+                        let player_name = player_conn.player_state.read().await.player.clone();
+                        let info_request = MprisRequest {
+                            player: Some(player_name),
+                            request_now_playing: Some(true),
+                            ..Default::default()
+                        };
+                        let packet = ProtocolPacket::new(
+                            PacketType::MprisRequest,
+                            serde_json::to_value(info_request).unwrap(),
+                        );
+                        let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                            device: player_conn.device_id.clone(),
+                            packet,
+                        });
                     }
                 }
             }
@@ -772,9 +899,15 @@ async fn register_phone_player(
     player_info: &MprisPlayer,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) -> anyhow::Result<(zbus::Connection, Arc<RwLock<MprisPlayer>>)> {
+    let sanitized_player = player_info
+        .player
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>();
     let service_name = format!(
-        "org.mpris.MediaPlayer2.KDEConnect_{}",
-        device_id.0.replace("-", "_")
+        "org.mpris.MediaPlayer2.KDEConnect_{}_{}",
+        device_id.0.replace("-", "_"),
+        sanitized_player
     );
 
     let player_state = Arc::new(RwLock::new(player_info.clone()));
@@ -786,7 +919,7 @@ async fn register_phone_player(
     };
 
     let phone_root = PhoneMprisRoot {
-        device_name: device_id.0.clone(),
+        device_name: player_info.player.clone(),
     };
 
     let conn = zbus::connection::Builder::session()?

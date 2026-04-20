@@ -81,6 +81,8 @@ plugin-share-name = Share Files
 plugin-share-desc = Send and receive files and URLs between devices.
 plugin-sms-name = SMS Messages
 plugin-sms-desc = Send and receive SMS text messages from your desktop.
+plugin-systemvolume-name = System Volume
+plugin-systemvolume-desc = Control desktop audio volume and mute from your phone.
 
 # SMS app
 sms-window-title = SMS - { $device }

@@ -288,9 +288,22 @@ impl UdpTransport {
     pub async fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
 
-        let socket = UdpSocket::bind(config.listen_addr)
-            .await
-            .expect("failed to bind to socket address");
+        let socket = {
+            let mut attempts = 0u32;
+            loop {
+                match UdpSocket::bind(config.listen_addr).await {
+                    Ok(s) => break s,
+                    Err(e) => {
+                        attempts += 1;
+                        if attempts >= 10 {
+                            panic!("failed to bind UDP socket after {} attempts: {}", attempts, e);
+                        }
+                        tracing::warn!("UDP bind failed (attempt {}), retrying in 1s: {}", attempts, e);
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        };
         let _ = socket.set_broadcast(true);
         let socket = Arc::new(socket);
 
@@ -563,7 +576,7 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                    "kdeconnect.contacts.response_vcards"],                                  &["kdeconnect.contacts.request_all_uids_timestamps",
                                                                                                               "kdeconnect.contacts.request_vcards_by_uid"]),
         ("findmyphone",         &[],                                                                        &["kdeconnect.findmyphone.request"]),
-        ("mpris",               &["kdeconnect.mpris"],                                                      &["kdeconnect.mpris.request"]),
+        ("mpris",               &["kdeconnect.mpris", "kdeconnect.mpris.request"],                          &["kdeconnect.mpris", "kdeconnect.mpris.request"]),
         ("notification",        &["kdeconnect.notification"],                                               &["kdeconnect.notification.request"]),
         ("ping",                &["kdeconnect.ping"],                                                       &["kdeconnect.ping"]),
         ("runcommand",          &["kdeconnect.runcommand.request"],                                         &["kdeconnect.runcommand"]),

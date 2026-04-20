@@ -42,6 +42,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 urlencoding = "2.1"
 uuid = { version = "1.18", features = ["v4"] }
 zbus = "5.14"
+libpulse-binding = { version = "2.28" }
 
 kdeconnect-core = { path = "kdeconnect-core" }
 kdeconnect-dbus-client = { path = "kdeconnect-dbus-client" }
