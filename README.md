@@ -26,6 +26,7 @@
 - SMS (conversations, send/receive)
 - Plugin Enable / Disable per device
 - System Volume (Partial support - May not work on certain devices - Known Mobile App Bug)
+- Telephony
 
 </details>
 
@@ -35,7 +36,6 @@
 - MousePad / Remote Input
 - Presenter Mode
 - SFTP / Browse Device
-- Telephony
 - Virtual Display
 
 </details>
