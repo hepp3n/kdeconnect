@@ -379,6 +379,16 @@ impl MprisRequest {
     }
 }
 
+/// Telephony plugin sends true (call active) / false (call ended) here.
+/// Initialised when monitor_mpris starts.
+static TELEPHONY_CALL_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<bool>> =
+    std::sync::OnceLock::new();
+
+/// Called by the telephony plugin to signal call state changes.
+pub fn telephony_call_signal() -> Option<&'static std::sync::mpsc::SyncSender<bool>> {
+    TELEPHONY_CALL_TX.get()
+}
+
 pub fn monitor_mpris(
     device_manager: DeviceManager,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
@@ -387,12 +397,47 @@ pub fn monitor_mpris(
     let ctx_sup = core_tx.clone();
 
     tokio::task::spawn_blocking(move || {
+        let (call_tx, call_rx) = std::sync::mpsc::sync_channel::<bool>(1);
+        TELEPHONY_CALL_TX.set(call_tx).ok();
+
+        let mut paused_for_call: Vec<String> = Vec::new();
         let mut known_players: Vec<String> = vec![];
-        // Track which players already have a watcher thread so we don't
-        // spawn duplicates when the list changes again later.
         let mut watched_players: HashSet<String> = HashSet::new();
 
         loop {
+            // Handle telephony call signal (non-blocking).
+            if let Ok(call_active) = call_rx.try_recv() {
+                if let Ok(finder) = mpris::PlayerFinder::new() {
+                    if call_active {
+                        paused_for_call.clear();
+                        if let Ok(players) = finder.find_all() {
+                            for player in players {
+                                if matches!(
+                                    player.get_playback_status(),
+                                    Ok(mpris::PlaybackStatus::Playing)
+                                ) {
+                                    let bus = player.bus_name().to_string();
+                                    if player.pause().is_ok() {
+                                        tracing::info!("[mpris] paused for call: {}", bus);
+                                        paused_for_call.push(bus);
+                                    }
+                                }
+                            }
+                        }
+                    } else if !paused_for_call.is_empty() {
+                        if let Ok(players) = finder.find_all() {
+                            for player in players {
+                                if paused_for_call.contains(&player.bus_name().to_string()) {
+                                    let _ = player.play().or_else(|_| player.play_pause());
+                                    tracing::info!("[mpris] resumed after call: {}", player.bus_name());
+                                }
+                            }
+                        }
+                        paused_for_call.clear();
+                    }
+                } // finder drops here — no persistent D-Bus connection held
+            }
+
             let current_names = get_all_mpris_player_names();
 
             if current_names != known_players {
