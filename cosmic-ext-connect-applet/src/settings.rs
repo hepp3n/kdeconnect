@@ -122,6 +122,12 @@ fn implemented_plugins() -> Vec<PluginInfo> {
         description: fl!("plugin-systemvolume-desc"),
         icon: "audio-volume-high-symbolic",
     },
+    PluginInfo {
+        id: "telephony",
+        name: fl!("plugin-telephony-name"),
+        description: fl!("plugin-telephony-desc"),
+        icon: "phone-symbolic",
+    },
     ]
 }
 

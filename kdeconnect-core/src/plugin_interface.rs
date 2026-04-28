@@ -20,6 +20,7 @@ use crate::{
         connectivity_report::ConnectivityReport,
         mpris::{Mpris, MprisRequest},
         systemvolume::SystemVolumeRequest,
+        telephony::TelephonyPacket,
     },
     protocol::{PacketPayloadTransferInfo, PacketType, ProtocolPacket},
     transport::prepare_listener_for_payload,
@@ -58,6 +59,7 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::SmsAttachmentFile
         | PacketType::SmsRequestAttachment => Some("sms"),
         PacketType::SystemVolume | PacketType::SystemVolumeRequest => Some("systemvolume"),
+        PacketType::Telephony | PacketType::TelephonyRequestMute => Some("telephony"),
         // Core / unmanaged packets are never gated
         PacketType::Identity
         | PacketType::Pair
@@ -69,8 +71,6 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::Presenter
         | PacketType::Sftp
         | PacketType::SftpRequest
-        | PacketType::Telephony
-        | PacketType::TelephonyRequestMute
         | PacketType::Unknown(_) => None,
     }
 }
@@ -315,6 +315,14 @@ impl PluginRegistry {
                 if let Ok(req) = serde_json::from_value::<SystemVolumeRequest>(body) {
                     req.handle(&device, core_tx).await;
                 }
+            }
+            PacketType::Telephony => {
+                if let Ok(pkt) = serde_json::from_value::<TelephonyPacket>(body) {
+                    pkt.received_packet(&device, core_tx).await;
+                }
+            }
+            PacketType::TelephonyRequestMute => {
+                debug!("TelephonyRequestMute received — no action needed on desktop");
             }
             _ => {
                 debug!(
