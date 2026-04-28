@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use base64::{engine::general_purpose, Engine as _};
-use std::sync::{Mutex, OnceLock};
+use crate::plugins::mpris;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -11,83 +11,8 @@ use crate::{
     protocol::{PacketType, ProtocolPacket},
 };
 
-// ---------------------------------------------------------------------------
-// Pause-on-call state
-// Names of desktop MPRIS players that were paused due to an active call.
-// Persists across packet boundaries so we know what to resume on isCancel.
-// ---------------------------------------------------------------------------
-
-static PAUSED_PLAYERS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-
-fn paused_players_store() -> &'static Mutex<Vec<String>> {
-    PAUSED_PLAYERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// Pause every currently-playing desktop MPRIS player and remember their names.
-fn pause_playing_players() {
-    let finder = match mpris::PlayerFinder::new() {
-        Ok(f) => f,
-        Err(e) => {
-            info!("[telephony] MPRIS PlayerFinder unavailable: {}", e);
-            return;
-        }
-    };
-
-    let players = match finder.find_all() {
-        Ok(p) => p,
-        Err(e) => {
-            info!("[telephony] could not list MPRIS players: {}", e);
-            return;
-        }
-    };
-
-    let mut paused = paused_players_store().lock().unwrap();
-    paused.clear();
-
-    for player in players {
-        if matches!(player.get_playback_status(), Ok(mpris::PlaybackStatus::Playing)) {
-            let bus_name = player.bus_name().to_string();
-            if player.pause().is_ok() {
-                info!("[telephony] paused MPRIS player: {}", bus_name);
-                paused.push(bus_name);
-            }
-        }
-    }
-}
-
-/// Resume the players that were paused by `pause_playing_players`.
-fn resume_paused_players() {
-    let finder = match mpris::PlayerFinder::new() {
-        Ok(f) => f,
-        Err(e) => {
-            info!("[telephony] MPRIS PlayerFinder unavailable: {}", e);
-            return;
-        }
-    };
-
-    let mut paused = paused_players_store().lock().unwrap();
-    if paused.is_empty() {
-        return;
-    }
-
-    let all_players = match finder.find_all() {
-        Ok(p) => p,
-        Err(e) => {
-            info!("[telephony] could not list MPRIS players for resume: {}", e);
-            return;
-        }
-    };
-
-    for player in all_players {
-        if paused.contains(&player.bus_name().to_string()) {
-            if player.play_pause().is_ok() {
-                info!("[telephony] resumed MPRIS player: {}", player.bus_name());
-            }
-        }
-    }
-
-    paused.clear();
-}
+// Pause/resume is handled by mpris::monitor_mpris via telephony_call_signal()
+// which reuses the persistent PlayerFinder held in that thread.
 
 // ---------------------------------------------------------------------------
 // Packet types
@@ -128,7 +53,9 @@ impl TelephonyPacket {
         // isCancel=true signals the event is over — resume any paused players.
         if self.is_cancel.unwrap_or(false) {
             info!("[telephony] isCancel received — call ended, resuming players");
-            tokio::task::spawn_blocking(resume_paused_players).await.ok();
+            if let Some(tx) = mpris::telephony_call_signal() {
+                let _ = tx.send(false);
+            }
             return;
         }
 
@@ -174,7 +101,9 @@ impl TelephonyPacket {
         // Pause desktop players before showing the notification.
         // missedCall arrives after the fact so we skip pausing for that.
         if event != "missedCall" {
-            tokio::task::spawn_blocking(pause_playing_players).await.ok();
+            if let Some(tx) = mpris::telephony_call_signal() {
+                let _ = tx.send(true);
+            }
         }
 
         let thumbnail_path = self.phone_thumbnail.as_deref().and_then(|b64| {
