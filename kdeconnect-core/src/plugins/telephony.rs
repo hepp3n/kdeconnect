@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose, Engine as _};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 use tracing::info;
@@ -176,14 +177,33 @@ impl TelephonyPacket {
             tokio::task::spawn_blocking(pause_playing_players).await.ok();
         }
 
+        let thumbnail_path = self.phone_thumbnail.as_deref().and_then(|b64| {
+            use std::io::Write;
+            let bytes = general_purpose::STANDARD.decode(b64).ok()?;
+            let mut tmp = tempfile::Builder::new()
+                .prefix("kdeconnect-thumb-")
+                .suffix(".jpg")
+                .tempfile()
+                .ok()?;
+            tmp.write_all(&bytes).ok()?;
+            // Keep the file alive by converting to a path-only handle
+            let (_, path) = tmp.keep().ok()?;
+            Some(path)
+        });
+
         let _ = tokio::task::spawn_blocking(move || {
-            notify_rust::Notification::new()
+            let mut notif = notify_rust::Notification::new();
+            notif
                 .appname("KDE Connect")
                 .summary(&summary)
                 .body(&body)
-                .timeout(notify_rust::Timeout::Milliseconds(10_000))
-                .show()
-                .ok();
+                .timeout(notify_rust::Timeout::Milliseconds(10_000));
+            if let Some(path) = thumbnail_path {
+                notif.icon(&path.to_string_lossy().into_owned());
+            } else {
+                notif.icon("call-start-symbolic");
+            }
+            notif.show().ok();
         })
         .await;
     }
