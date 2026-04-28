@@ -26,7 +26,7 @@
 - SMS (conversations, send/receive)
 - Plugin Enable / Disable per device
 - System Volume (Partial support - May not work on certain devices - Known Mobile App Bug)
-- Telephony (Known Bug with Chromium/Chrome based browsers will not resume but does pause when having an incoming call)
+- Telephony
 
 </details>
 
