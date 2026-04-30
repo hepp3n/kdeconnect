@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate cosmic_ext_connect_applet;
 
+use cosmic::iced::Radius;
 use cosmic::widget::button::Catalog;
 use cosmic::{
     Action, Application, ApplicationExt, Element, Task,
@@ -50,78 +51,78 @@ struct PluginInfo {
 
 fn implemented_plugins() -> Vec<PluginInfo> {
     vec![
-    PluginInfo {
-        id: "battery",
-        name: fl!("plugin-battery-name"),
-        description: fl!("plugin-battery-desc"),
-        icon: "battery-full-symbolic",
-    },
-    PluginInfo {
-        id: "clipboard",
-        name: fl!("plugin-clipboard-name"),
-        description: fl!("plugin-clipboard-desc"),
-        icon: "edit-paste-symbolic",
-    },
-    PluginInfo {
-        id: "connectivity_report",
-        name: fl!("plugin-connectivity-name"),
-        description: fl!("plugin-connectivity-desc"),
-        icon: "network-cellular-symbolic",
-    },
-    PluginInfo {
-        id: "contacts",
-        name: fl!("plugin-contacts-name"),
-        description: fl!("plugin-contacts-desc"),
-        icon: "x-office-address-book-symbolic",
-    },
-    PluginInfo {
-        id: "findmyphone",
-        name: fl!("plugin-findmyphone-name"),
-        description: fl!("plugin-findmyphone-desc"),
-        icon: "audio-speakers-symbolic",
-    },
-    PluginInfo {
-        id: "mpris",
-        name: fl!("plugin-mpris-name"),
-        description: fl!("plugin-mpris-desc"),
-        icon: "media-playback-start-symbolic",
-    },
-    PluginInfo {
-        id: "notification",
-        name: fl!("plugin-notifications-name"),
-        description: fl!("plugin-notifications-desc"),
-        icon: "preferences-system-notifications-symbolic",
-    },
-    PluginInfo {
-        id: "ping",
-        name: fl!("plugin-ping-name"),
-        description: fl!("plugin-ping-desc"),
-        icon: "network-transmit-receive-symbolic",
-    },
-    PluginInfo {
-        id: "runcommand",
-        name: fl!("plugin-runcommand-name"),
-        description: fl!("plugin-runcommand-desc"),
-        icon: "utilities-terminal-symbolic",
-    },
-    PluginInfo {
-        id: "share",
-        name: fl!("plugin-share-name"),
-        description: fl!("plugin-share-desc"),
-        icon: "document-send-symbolic",
-    },
-    PluginInfo {
-        id: "sms",
-        name: fl!("plugin-sms-name"),
-        description: fl!("plugin-sms-desc"),
-        icon: "mail-message-new-symbolic",
-    },
-    PluginInfo {
-        id: "systemvolume",
-        name: fl!("plugin-systemvolume-name"),
-        description: fl!("plugin-systemvolume-desc"),
-        icon: "audio-volume-high-symbolic",
-    },
+        PluginInfo {
+            id: "battery",
+            name: fl!("plugin-battery-name"),
+            description: fl!("plugin-battery-desc"),
+            icon: "battery-full-symbolic",
+        },
+        PluginInfo {
+            id: "clipboard",
+            name: fl!("plugin-clipboard-name"),
+            description: fl!("plugin-clipboard-desc"),
+            icon: "edit-paste-symbolic",
+        },
+        PluginInfo {
+            id: "connectivity_report",
+            name: fl!("plugin-connectivity-name"),
+            description: fl!("plugin-connectivity-desc"),
+            icon: "network-cellular-symbolic",
+        },
+        PluginInfo {
+            id: "contacts",
+            name: fl!("plugin-contacts-name"),
+            description: fl!("plugin-contacts-desc"),
+            icon: "x-office-address-book-symbolic",
+        },
+        PluginInfo {
+            id: "findmyphone",
+            name: fl!("plugin-findmyphone-name"),
+            description: fl!("plugin-findmyphone-desc"),
+            icon: "audio-speakers-symbolic",
+        },
+        PluginInfo {
+            id: "mpris",
+            name: fl!("plugin-mpris-name"),
+            description: fl!("plugin-mpris-desc"),
+            icon: "media-playback-start-symbolic",
+        },
+        PluginInfo {
+            id: "notification",
+            name: fl!("plugin-notifications-name"),
+            description: fl!("plugin-notifications-desc"),
+            icon: "preferences-system-notifications-symbolic",
+        },
+        PluginInfo {
+            id: "ping",
+            name: fl!("plugin-ping-name"),
+            description: fl!("plugin-ping-desc"),
+            icon: "network-transmit-receive-symbolic",
+        },
+        PluginInfo {
+            id: "runcommand",
+            name: fl!("plugin-runcommand-name"),
+            description: fl!("plugin-runcommand-desc"),
+            icon: "utilities-terminal-symbolic",
+        },
+        PluginInfo {
+            id: "share",
+            name: fl!("plugin-share-name"),
+            description: fl!("plugin-share-desc"),
+            icon: "document-send-symbolic",
+        },
+        PluginInfo {
+            id: "sms",
+            name: fl!("plugin-sms-name"),
+            description: fl!("plugin-sms-desc"),
+            icon: "mail-message-new-symbolic",
+        },
+        PluginInfo {
+            id: "systemvolume",
+            name: fl!("plugin-systemvolume-name"),
+            description: fl!("plugin-systemvolume-desc"),
+            icon: "audio-volume-high-symbolic",
+        },
     ]
 }
 
@@ -249,10 +250,9 @@ impl Application for SettingsApp {
             |devices| Action::App(Message::DevicesLoaded(devices)),
         );
 
-        let cmds_task = Task::perform(
-            async { load_run_commands() },
-            |cmds| Action::App(Message::RunCommandsLoaded(cmds)),
-        );
+        let cmds_task = Task::perform(async { load_run_commands() }, |cmds| {
+            Action::App(Message::RunCommandsLoaded(cmds))
+        });
 
         (app, Task::batch(vec![title_task, load_task, cmds_task]))
     }
@@ -313,10 +313,9 @@ impl Application for SettingsApp {
                 let trigger_broadcast = tab == Tab::AvailableDevices;
                 self.active_tab = tab;
                 if trigger_broadcast {
-                    return Task::perform(
-                        async { backend::fetch_devices().await },
-                        |devices| Action::App(Message::DevicesLoaded(devices)),
-                    );
+                    return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                        Action::App(Message::DevicesLoaded(devices))
+                    });
                 }
             }
 
@@ -343,9 +342,7 @@ impl Application for SettingsApp {
                     let pid = plugin_id;
                     return Task::perform(
                         async move {
-                            if let Err(e) =
-                                backend::set_plugin_enabled(did, pid, enabled).await
-                            {
+                            if let Err(e) = backend::set_plugin_enabled(did, pid, enabled).await {
                                 eprintln!("[settings] set_plugin_enabled failed: {:?}", e);
                             }
                         },
@@ -355,10 +352,9 @@ impl Application for SettingsApp {
             }
 
             Message::Refresh => {
-                return Task::perform(
-                    async { backend::fetch_devices().await },
-                    |devices| Action::App(Message::DevicesLoaded(devices)),
-                );
+                return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                    Action::App(Message::DevicesLoaded(devices))
+                });
             }
 
             Message::PairDevice(device_id) => {
@@ -398,8 +394,7 @@ impl Application for SettingsApp {
                         }
                     }
                     kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, device) => {
-                        if !device.is_paired
-                            && self.selected_device.as_deref() == Some(id.as_str())
+                        if !device.is_paired && self.selected_device.as_deref() == Some(id.as_str())
                         {
                             self.selected_device = None;
                             self.plugin_states.remove(id);
@@ -407,10 +402,9 @@ impl Application for SettingsApp {
                     }
                     _ => {}
                 }
-                return Task::perform(
-                    async { backend::fetch_devices().await },
-                    |devices| Action::App(Message::DevicesLoaded(devices)),
-                );
+                return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                    Action::App(Message::DevicesLoaded(devices))
+                });
             }
             Message::RunCommandsLoaded(cmds) => {
                 self.run_commands = cmds;
@@ -447,7 +441,7 @@ impl Application for SettingsApp {
         let spacing = cosmic::theme::active().cosmic().spacing;
 
         let content: Element<'_, Message> = match self.active_tab {
-            Tab::PairedDevices => widget::row()
+            Tab::PairedDevices => widget::row::with_capacity(3)
                 .push(self.view_paired_sidebar(&spacing))
                 .push(widget::divider::vertical::default())
                 .push(self.view_plugin_panel(&spacing))
@@ -456,7 +450,7 @@ impl Application for SettingsApp {
             Tab::AvailableDevices => self.view_available_devices(&spacing),
         };
 
-        widget::column()
+        widget::column::with_capacity(3)
             .push(self.view_tab_bar(&spacing))
             .push(widget::divider::horizontal::default())
             .push(content)
@@ -470,10 +464,7 @@ impl Application for SettingsApp {
 // ---------------------------------------------------------------------------
 
 impl SettingsApp {
-    fn view_tab_bar<'a>(
-        &'a self,
-        spacing: &cosmic::cosmic_theme::Spacing,
-    ) -> Element<'a, Message> {
+    fn view_tab_bar<'a>(&'a self, spacing: &cosmic::cosmic_theme::Spacing) -> Element<'a, Message> {
         let paired_btn = if self.active_tab == Tab::PairedDevices {
             widget::button::standard(fl!("settings-tab-paired"))
                 .on_press(Message::SelectTab(Tab::PairedDevices))
@@ -490,7 +481,7 @@ impl SettingsApp {
                 .on_press(Message::SelectTab(Tab::AvailableDevices))
         };
 
-        widget::row()
+        widget::row::with_capacity(3)
             .spacing(spacing.space_xs)
             .padding([spacing.space_xs, spacing.space_m])
             .align_y(Alignment::Center)
@@ -506,7 +497,7 @@ impl SettingsApp {
     ) -> Element<'a, Message> {
         let paired: Vec<&Device> = self.devices.iter().filter(|d| d.is_paired).collect();
 
-        let mut col = widget::column()
+        let mut col = widget::column::with_capacity(3)
             .spacing(spacing.space_xxs)
             .padding(spacing.space_s)
             .width(Length::Fixed(220.0));
@@ -520,11 +511,8 @@ impl SettingsApp {
 
         if paired.is_empty() {
             col = col.push(
-                widget::container(
-                    widget::text(fl!("paired-devices-none"))
-                        .size(12),
-                )
-                .padding(spacing.space_s),
+                widget::container(widget::text(fl!("paired-devices-none")).size(12))
+                    .padding(spacing.space_s),
             );
         } else {
             for device in paired {
@@ -536,12 +524,12 @@ impl SettingsApp {
                     "network-offline-symbolic"
                 };
 
-                let item = widget::row()
+                let item = widget::row::with_capacity(3)
                     .spacing(spacing.space_s)
                     .align_y(Alignment::Center)
                     .push(widget::icon::from_name(device.device_icon()).size(20))
                     .push(
-                        widget::column()
+                        widget::column::with_capacity(2)
                             .spacing(2)
                             .push(widget::text(&device.name).size(13))
                             .push(
@@ -560,22 +548,22 @@ impl SettingsApp {
                     .class(cosmic::theme::Button::Custom {
                         active: Box::new(|focused, theme| {
                             let mut s = theme.active(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = Radius::from(0.0);
                             s
                         }),
                         hovered: Box::new(|focused, theme| {
                             let mut s = theme.hovered(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = Radius::from(0.0);
                             s
                         }),
                         disabled: Box::new(|theme| {
                             let mut s = theme.disabled(&cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = Radius::from(0.0);
                             s
                         }),
                         pressed: Box::new(|focused, theme| {
                             let mut s = theme.pressed(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = Radius::from(0.0);
                             s
                         }),
                     })
@@ -601,7 +589,7 @@ impl SettingsApp {
         &'a self,
         spacing: &cosmic::cosmic_theme::Spacing,
     ) -> Element<'a, Message> {
-        let mut col = widget::column()
+        let mut col = widget::column::with_capacity(5)
             .spacing(spacing.space_s)
             .padding(spacing.space_m)
             .width(Length::Fill);
@@ -610,7 +598,7 @@ impl SettingsApp {
             if let Some(device) = self.devices.iter().find(|d| &d.id == device_id) {
                 let unpair_id = device_id.clone();
                 col = col.push(
-                    widget::row()
+                    widget::row::with_capacity(3)
                         .spacing(spacing.space_s)
                         .align_y(Alignment::Center)
                         .push(widget::icon::from_name(device.device_icon()).size(20))
@@ -638,10 +626,8 @@ impl SettingsApp {
 
         if self.selected_device.is_none() {
             col = col.push(
-                widget::container(
-                    widget::text(fl!("paired-plugins-hint")).size(14),
-                )
-                .padding(spacing.space_l),
+                widget::container(widget::text(fl!("paired-plugins-hint")).size(14))
+                    .padding(spacing.space_l),
             );
             return widget::scrollable(col).height(Length::Fill).into();
         }
@@ -651,7 +637,7 @@ impl SettingsApp {
             let plugin_id = plugin.id.to_string();
             let is_runcommand = plugin.id == "runcommand";
 
-            let row = widget::row()
+            let row = widget::row::with_capacity(3)
                 .spacing(spacing.space_m)
                 .align_y(Alignment::Center)
                 .push(
@@ -660,7 +646,7 @@ impl SettingsApp {
                         .align_x(Alignment::Center),
                 )
                 .push(
-                    widget::column()
+                    widget::column::with_capacity(2)
                         .spacing(2)
                         .push(
                             widget::text(plugin.name)
@@ -701,13 +687,13 @@ impl SettingsApp {
             .filter(|d| !d.is_paired && d.is_reachable)
             .collect();
 
-        let mut col = widget::column()
+        let mut col = widget::column::with_capacity(5)
             .spacing(spacing.space_s)
             .padding(spacing.space_m)
             .width(Length::Fill);
 
         col = col.push(
-            widget::row()
+            widget::row::with_capacity(2)
                 .spacing(spacing.space_s)
                 .align_y(Alignment::Center)
                 .push(
@@ -716,17 +702,17 @@ impl SettingsApp {
                         .font(cosmic::font::bold())
                         .width(Length::Fill),
                 )
-                .push(widget::button::standard(fl!("settings-scan-again")).on_press(Message::Refresh)),
+                .push(
+                    widget::button::standard(fl!("settings-scan-again")).on_press(Message::Refresh),
+                ),
         );
         col = col.push(widget::divider::horizontal::default());
-        col = col.push(
-            widget::text(fl!("available-devices-hint")).size(13),
-        );
+        col = col.push(widget::text(fl!("available-devices-hint")).size(13));
 
         if available.is_empty() {
             col = col.push(
                 widget::container(
-                    widget::column()
+                    widget::column::with_capacity(4)
                         .spacing(spacing.space_s)
                         .push(widget::icon::from_name("network-offline-symbolic").size(48))
                         .push(
@@ -734,11 +720,11 @@ impl SettingsApp {
                                 .size(16)
                                 .font(cosmic::font::bold()),
                         )
+                        .push(widget::text(fl!("available-devices-none-hint")).size(13))
                         .push(
-                            widget::text(fl!("available-devices-none-hint"))
-                            .size(13),
+                            widget::button::standard(fl!("settings-scan-again"))
+                                .on_press(Message::Refresh),
                         )
-                        .push(widget::button::standard(fl!("settings-scan-again")).on_press(Message::Refresh))
                         .align_x(Alignment::Center),
                 )
                 .padding([spacing.space_xl, spacing.space_m])
@@ -750,12 +736,12 @@ impl SettingsApp {
                 let device_id = device.id.clone();
                 let in_progress = *self.pairing_in_progress.get(&device.id).unwrap_or(&false);
 
-                let card = widget::row()
+                let card = widget::row::with_capacity(3)
                     .spacing(spacing.space_m)
                     .align_y(Alignment::Center)
                     .push(widget::icon::from_name(device.device_icon()).size(32))
                     .push(
-                        widget::column()
+                        widget::column::with_capacity(2)
                             .spacing(2)
                             .push(
                                 widget::text(&device.name)
@@ -788,7 +774,7 @@ impl SettingsApp {
         &'a self,
         spacing: &cosmic::cosmic_theme::Spacing,
     ) -> Element<'a, Message> {
-        let mut col = widget::column()
+        let mut col = widget::column::with_capacity(7)
             .spacing(spacing.space_xs)
             .padding([spacing.space_xs, spacing.space_m]);
 
@@ -803,11 +789,11 @@ impl SettingsApp {
             let name = cmd["name"].as_str().unwrap_or("");
             let command = cmd["command"].as_str().unwrap_or("");
             let delete_id = cmd["id"].as_str().unwrap_or("").to_string();
-            let row = widget::row()
+            let row = widget::row::with_capacity(2)
                 .spacing(spacing.space_s)
                 .align_y(Alignment::Center)
                 .push(
-                    widget::column()
+                    widget::column::with_capacity(2)
                         .push(widget::text(name).size(13).font(cosmic::font::bold()))
                         .push(widget::text(command).size(11))
                         .width(Length::Fill),
@@ -836,9 +822,12 @@ impl SettingsApp {
                 .width(Length::Fill),
         );
         col = col.push(
-            widget::text_input(fl!("run-commands-command-placeholder"), &self.new_cmd_command)
-                .on_input(Message::NewRunCommandCommand)
-                .width(Length::Fill),
+            widget::text_input(
+                fl!("run-commands-command-placeholder"),
+                &self.new_cmd_command,
+            )
+            .on_input(Message::NewRunCommandCommand)
+            .width(Length::Fill),
         );
         col = col.push(
             widget::button::suggested(fl!("run-commands-add-button"))
@@ -871,7 +860,6 @@ fn uuid_v4() -> String {
 }
 
 fn main() -> cosmic::iced::Result {
-    let settings = cosmic::app::Settings::default()
-        .size(cosmic::iced::Size::new(740.0, 540.0));
+    let settings = cosmic::app::Settings::default().size(cosmic::iced::Size::new(740.0, 540.0));
     cosmic::app::run::<SettingsApp>(settings, ())
 }
