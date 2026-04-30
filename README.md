@@ -112,3 +112,38 @@ Requires `flatpak-builder`:
 ```bash
 flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo --install builddir io.github.hepp3n.kdeconnect.json
 ```
+
+## Troubleshooting
+
+Some distributions enables Firewall by default. Or you are enabled it by yourself.
+In this case, check what firewall you are using. And allow 1714-1764 port range for TCP and UDP connections.
+
+For UFW firewall:
+
+```bash
+sudo ufw allow 1714:1764/udp
+sudo ufw allow 1714:1764/tcp
+sudo ufw reload
+```
+
+For Firewalld:
+
+```bash
+sudo firewall-cmd --permanent --zone=home --add-service=kdeconnect
+sudo firewall-cmd --reload
+```
+
+For IPTables:
+
+```bash
+sudo iptables -I INPUT -i <yourinterface> -p udp --dport 1714:1764 -m state --state NEW,ESTABLISHED -j ACCEPT
+sudo iptables -I INPUT -i <yourinterface> -p tcp --dport 1714:1764 -m state --state NEW,ESTABLISHED -j ACCEPT
+
+sudo iptables -A OUTPUT -o <yourinterface> -p udp --sport 1714:1764 -m state --state NEW,ESTABLISHED -j ACCEPT
+sudo iptables -A OUTPUT -o <yourinterface> -p tcp --sport 1714:1764 -m state --state NEW,ESTABLISHED -j ACCEPT
+```
+
+For more, directly from official KDEConnect userbase: [KDEConnect Firewall](https://userbase.kde.org/KDEConnect#ufw)
+
+
+
