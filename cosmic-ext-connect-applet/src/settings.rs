@@ -453,7 +453,7 @@ impl Application for SettingsApp {
         let spacing = cosmic::theme::active().cosmic().spacing;
 
         let content: Element<'_, Message> = match self.active_tab {
-            Tab::PairedDevices => widget::row()
+            Tab::PairedDevices => widget::Row::new()
                 .push(self.view_paired_sidebar(&spacing))
                 .push(widget::divider::vertical::default())
                 .push(self.view_plugin_panel(&spacing))
@@ -462,7 +462,7 @@ impl Application for SettingsApp {
             Tab::AvailableDevices => self.view_available_devices(&spacing),
         };
 
-        widget::column()
+        widget::Column::new()
             .push(self.view_tab_bar(&spacing))
             .push(widget::divider::horizontal::default())
             .push(content)
@@ -496,7 +496,7 @@ impl SettingsApp {
                 .on_press(Message::SelectTab(Tab::AvailableDevices))
         };
 
-        widget::row()
+        widget::Row::new()
             .spacing(spacing.space_xs)
             .padding([spacing.space_xs, spacing.space_m])
             .align_y(Alignment::Center)
@@ -512,7 +512,7 @@ impl SettingsApp {
     ) -> Element<'a, Message> {
         let paired: Vec<&Device> = self.devices.iter().filter(|d| d.is_paired).collect();
 
-        let mut col = widget::column()
+        let mut col = widget::Column::new()
             .spacing(spacing.space_xxs)
             .padding(spacing.space_s)
             .width(Length::Fixed(220.0));
@@ -542,12 +542,12 @@ impl SettingsApp {
                     "network-offline-symbolic"
                 };
 
-                let item = widget::row()
+                let item = widget::Row::new()
                     .spacing(spacing.space_s)
                     .align_y(Alignment::Center)
                     .push(widget::icon::from_name(device.device_icon()).size(20))
                     .push(
-                        widget::column()
+                        widget::Column::new()
                             .spacing(2)
                             .push(widget::text(&device.name).size(13))
                             .push(
@@ -566,22 +566,22 @@ impl SettingsApp {
                     .class(cosmic::theme::Button::Custom {
                         active: Box::new(|focused, theme| {
                             let mut s = theme.active(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = cosmic::iced::Radius::from(0.0);
                             s
                         }),
                         hovered: Box::new(|focused, theme| {
                             let mut s = theme.hovered(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = cosmic::iced::Radius::from(0.0);
                             s
                         }),
                         disabled: Box::new(|theme| {
                             let mut s = theme.disabled(&cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = cosmic::iced::Radius::from(0.0);
                             s
                         }),
                         pressed: Box::new(|focused, theme| {
                             let mut s = theme.pressed(focused, false, &cosmic::theme::Button::Text);
-                            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+                            s.border_radius = cosmic::iced::Radius::from(0.0);
                             s
                         }),
                     })
@@ -607,7 +607,7 @@ impl SettingsApp {
         &'a self,
         spacing: &cosmic::cosmic_theme::Spacing,
     ) -> Element<'a, Message> {
-        let mut col = widget::column()
+        let mut col = widget::Column::new()
             .spacing(spacing.space_s)
             .padding(spacing.space_m)
             .width(Length::Fill);
@@ -616,7 +616,7 @@ impl SettingsApp {
             if let Some(device) = self.devices.iter().find(|d| &d.id == device_id) {
                 let unpair_id = device_id.clone();
                 col = col.push(
-                    widget::row()
+                    widget::Row::new()
                         .spacing(spacing.space_s)
                         .align_y(Alignment::Center)
                         .push(widget::icon::from_name(device.device_icon()).size(20))
@@ -657,7 +657,7 @@ impl SettingsApp {
             let plugin_id = plugin.id.to_string();
             let is_runcommand = plugin.id == "runcommand";
 
-            let row = widget::row()
+            let row = widget::Row::new()
                 .spacing(spacing.space_m)
                 .align_y(Alignment::Center)
                 .push(
@@ -666,7 +666,7 @@ impl SettingsApp {
                         .align_x(Alignment::Center),
                 )
                 .push(
-                    widget::column()
+                    widget::Column::new()
                         .spacing(2)
                         .push(
                             widget::text(plugin.name)
@@ -707,13 +707,13 @@ impl SettingsApp {
             .filter(|d| !d.is_paired && d.is_reachable)
             .collect();
 
-        let mut col = widget::column()
+        let mut col = widget::Column::new()
             .spacing(spacing.space_s)
             .padding(spacing.space_m)
             .width(Length::Fill);
 
         col = col.push(
-            widget::row()
+            widget::Row::new()
                 .spacing(spacing.space_s)
                 .align_y(Alignment::Center)
                 .push(
@@ -732,7 +732,7 @@ impl SettingsApp {
         if available.is_empty() {
             col = col.push(
                 widget::container(
-                    widget::column()
+                    widget::Column::new()
                         .spacing(spacing.space_s)
                         .push(widget::icon::from_name("network-offline-symbolic").size(48))
                         .push(
@@ -756,12 +756,12 @@ impl SettingsApp {
                 let device_id = device.id.clone();
                 let in_progress = *self.pairing_in_progress.get(&device.id).unwrap_or(&false);
 
-                let card = widget::row()
+                let card = widget::Row::new()
                     .spacing(spacing.space_m)
                     .align_y(Alignment::Center)
                     .push(widget::icon::from_name(device.device_icon()).size(32))
                     .push(
-                        widget::column()
+                        widget::Column::new()
                             .spacing(2)
                             .push(
                                 widget::text(&device.name)
@@ -794,7 +794,7 @@ impl SettingsApp {
         &'a self,
         spacing: &cosmic::cosmic_theme::Spacing,
     ) -> Element<'a, Message> {
-        let mut col = widget::column()
+        let mut col = widget::Column::new()
             .spacing(spacing.space_xs)
             .padding([spacing.space_xs, spacing.space_m]);
 
@@ -809,11 +809,11 @@ impl SettingsApp {
             let name = cmd["name"].as_str().unwrap_or("");
             let command = cmd["command"].as_str().unwrap_or("");
             let delete_id = cmd["id"].as_str().unwrap_or("").to_string();
-            let row = widget::row()
+            let row = widget::Row::new()
                 .spacing(spacing.space_s)
                 .align_y(Alignment::Center)
                 .push(
-                    widget::column()
+                    widget::Column::new()
                         .push(widget::text(name).size(13).font(cosmic::font::bold()))
                         .push(widget::text(command).size(11))
                         .width(Length::Fill),

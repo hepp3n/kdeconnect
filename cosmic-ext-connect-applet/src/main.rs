@@ -9,7 +9,7 @@ use models::Device;
 use cosmic::app::Core;
 use cosmic::iced::window::Id as SurfaceId;
 use cosmic::iced::{Limits, Subscription};
-use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
+use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::{Element, Task, widget};
 use std::collections::HashMap;
 use tracing::{debug, error, info};

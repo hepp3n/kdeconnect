@@ -14,13 +14,13 @@ pub fn create_popup_view<'a>(
     pairing_requests: Option<&'a HashMap<String, String>>,
 ) -> Element<'a, Message> {
     let spacing = cosmic::theme::active().cosmic().spacing;
-    let mut content = widget::column()
+    let mut content = widget::Column::new()
         .spacing(spacing.space_s)
         .padding(spacing.space_s);
 
     // Header
     content = content.push(
-        widget::row()
+        widget::Row::new()
             .push(
                 widget::text(fl!("applet-title"))
                     .size(18)
@@ -51,12 +51,12 @@ pub fn create_popup_view<'a>(
                 let device_id_reject = device_id.clone();
 
                 let request_card = widget::container(
-                    widget::column()
+                    widget::Column::new()
                         .push(
-                            widget::row()
+                            widget::Row::new()
                                 .push(widget::icon::from_name("phone-symbolic").size(24))
                                 .push(
-                                    widget::column()
+                                    widget::Column::new()
                                         .push(widget::text(device_name).size(14))
                                         .push(widget::text(fl!("pairing-wants-to-pair")).size(11))
                                         .spacing(spacing.space_xxxs),
@@ -66,7 +66,7 @@ pub fn create_popup_view<'a>(
                         )
                         .push(widget::Space::new().height(Length::Fixed(spacing.space_xs as f32)))
                         .push(
-                            widget::row()
+                            widget::Row::new()
                                 .push(
                                     widget::button::suggested(fl!("pairing-accept"))
                                         .on_press(Message::AcceptPairing(device_id_accept))
@@ -129,7 +129,7 @@ fn create_device_card<'a>(
     let is_expanded = expanded_device == Some(&device.id);
     let is_online = device.is_reachable;
 
-    let mut name_row = widget::row()
+    let mut name_row = widget::Row::new()
         .push(widget::icon::from_name(device.device_icon()).size(20))
         .push(widget::text(&device.name).size(14).width(Length::Fill))
         .spacing(spacing.space_xs)
@@ -143,7 +143,7 @@ fn create_device_card<'a>(
         }
         if let Some(level) = device.battery_level {
             name_row = name_row.push(
-                widget::row()
+                widget::Row::new()
                     .spacing(2)
                     .align_y(Alignment::Center)
                     .push(widget::icon::from_name(device.battery_icon()).size(16))
@@ -167,10 +167,10 @@ fn create_device_card<'a>(
         .width(Length::Fill)
         .class(cosmic::theme::Button::Text);
 
-    let mut col = widget::column().push(device_button);
+    let mut col = widget::Column::new().push(device_button);
 
     if is_expanded && is_online {
-        let mut menu_items = widget::column().spacing(spacing.space_xxs);
+        let mut menu_items = widget::Column::new().spacing(spacing.space_xxs);
 
         menu_items = menu_items.push(
             widget::text(fl!("quick-actions-header"))
@@ -225,7 +225,7 @@ fn create_device_card<'a>(
                         .class(cosmic::theme::Button::Text),
                 );
                 menu_items = menu_items.push_maybe(if let Some(progress) = device.share_progress {
-                    Some(widget::progress_bar(0.0..=100.0, progress as f32))
+                    Some(widget::progress_bar::determinate_linear(progress as f32 / 100.0))
                 } else {
                     None
                 });

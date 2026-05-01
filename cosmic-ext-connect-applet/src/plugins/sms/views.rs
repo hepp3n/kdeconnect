@@ -17,7 +17,7 @@ pub static CONVERSATIONS_SCROLLABLE_ID: std::sync::LazyLock<cosmic::widget::Id> 
 pub fn view_main(app: &SmsWindow) -> Element<'_, SmsMessage> {
     let spacing = cosmic::theme::active().cosmic().spacing;
 
-    widget::row()
+    widget::Row::new()
         .spacing(0)
         .push(view_conversations_list(app, &spacing))
         .push(widget::divider::vertical::default())
@@ -30,7 +30,7 @@ pub fn view_new_chat_dialog(app: &SmsWindow) -> Element<'_, SmsMessage> {
     let spacing = cosmic::theme::active().cosmic().spacing;
 
     // Left column: title, input, actions
-    let left = widget::column()
+    let left = widget::Column::new()
         .spacing(spacing.space_m)
         .padding(spacing.space_l)
         .push(
@@ -39,7 +39,7 @@ pub fn view_new_chat_dialog(app: &SmsWindow) -> Element<'_, SmsMessage> {
                 .font(cosmic::font::bold()),
         )
         .push(
-            widget::column()
+            widget::Column::new()
                 .spacing(spacing.space_xs)
                 .push(widget::text(fl!("sms-new-chat-prompt")).size(14))
                 .push(
@@ -55,14 +55,14 @@ pub fn view_new_chat_dialog(app: &SmsWindow) -> Element<'_, SmsMessage> {
         .width(Length::Fixed(340.0));
 
     // Right column: contacts list
-    let right = widget::column()
+    let right = widget::Column::new()
         .spacing(spacing.space_s)
         .padding(spacing.space_l)
         .push(widget::text(fl!("sms-new-chat-contacts")).size(16).font(cosmic::font::bold()))
         .push(view_contacts_list(app, &spacing))
         .width(Length::Fill);
 
-    let content = widget::row()
+    let content = widget::Row::new()
         .push(left)
         .push(widget::divider::vertical::default())
         .push(right)
@@ -80,7 +80,7 @@ fn view_new_chat_actions<'a>(
 ) -> Element<'a, SmsMessage> {
     let start_button_enabled = !app.new_chat_phone_input.trim().is_empty();
 
-    widget::row()
+    widget::Row::new()
         .spacing(spacing.space_xs)
         .push(widget::button::standard(fl!("sms-new-chat-cancel")).on_press(SmsMessage::CloseNewChatDialog))
         .push(widget::space::horizontal())
@@ -100,7 +100,7 @@ fn view_contacts_list<'a>(
         return widget::text(fl!("sms-new-chat-no-contacts")).size(12).into();
     }
 
-    let mut contacts_list = widget::column().spacing(spacing.space_xxs);
+    let mut contacts_list = widget::Column::new().spacing(spacing.space_xxs);
     let filtered_contacts = get_filtered_contacts(app);
 
     if filtered_contacts.is_empty() {
@@ -155,7 +155,7 @@ fn view_conversations_list<'a>(
     app: &'a SmsWindow,
     spacing: &cosmic::cosmic_theme::Spacing,
 ) -> Element<'a, SmsMessage> {
-    let mut content = widget::column().spacing(spacing.space_xs);
+    let mut content = widget::Column::new().spacing(spacing.space_xs);
 
     // Start Chat button
     content = content.push(
@@ -199,7 +199,7 @@ fn view_conversations_list<'a>(
                 .center_x(Length::Fill),
         );
     } else {
-        let mut list = widget::column().spacing(0);
+        let mut list = widget::Column::new().spacing(0);
 
         for conv in filtered {
             list = list.push(view_conversation_item(app, conv, spacing));
@@ -240,30 +240,30 @@ fn view_conversation_item<'a>(
     let flat_button_class = cosmic::theme::Button::Custom {
         active: Box::new(|focused, theme| {
             let mut s = theme.active(focused, false, &cosmic::theme::Button::Text);
-            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s.border_radius = cosmic::iced::Radius::from(0.0);
             s
         }),
         hovered: Box::new(|focused, theme| {
             let mut s = theme.hovered(focused, false, &cosmic::theme::Button::Text);
-            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s.border_radius = cosmic::iced::Radius::from(0.0);
             s
         }),
         disabled: Box::new(|theme| {
             let mut s = theme.disabled(&cosmic::theme::Button::Text);
-            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s.border_radius = cosmic::iced::Radius::from(0.0);
             s
         }),
         pressed: Box::new(|focused, theme| {
             let mut s = theme.pressed(focused, false, &cosmic::theme::Button::Text);
-            s.border_radius = cosmic::iced_core::border::Radius::from(0.0);
+            s.border_radius = cosmic::iced::Radius::from(0.0);
             s
         }),
     };
 
     let button = widget::button::custom(
-        widget::column()
+        widget::Column::new()
             .push(
-                widget::row()
+                widget::Row::new()
                     .push(
                         widget::text(display_name)
                             .size(14)
@@ -313,7 +313,7 @@ fn view_thread_panel<'a>(
             .into();
     };
 
-    let mut content = widget::column().spacing(0);
+    let mut content = widget::Column::new().spacing(0);
 
     // Header
     content = content.push(view_thread_header(app, conv, spacing));
@@ -341,7 +341,7 @@ fn view_thread_header<'a>(
         get_contact_name(app, &conv.phone_number).unwrap_or_else(|| conv.phone_number.clone());
 
     widget::container(
-        widget::column()
+        widget::Column::new()
             .push(
                 widget::text(display_name)
                     .size(16)
@@ -360,14 +360,14 @@ fn view_messages_list<'a>(
     app: &'a SmsWindow,
     spacing: &cosmic::cosmic_theme::Spacing,
 ) -> Element<'a, SmsMessage> {
-    let mut messages_column = widget::column()
+    let mut messages_column = widget::Column::new()
         .spacing(spacing.space_m)
         .padding(spacing.space_m);
 
     if app.messages.is_empty() {
         messages_column = messages_column.push(
             widget::container(
-                widget::column()
+                widget::Column::new()
                     .push(widget::text(fl!("sms-waiting-for-messages")).size(14))
                     .push(
                         widget::text(fl!("sms-messages-will-appear"))
@@ -401,7 +401,7 @@ fn view_message_bubble<'a>(
     spacing: &cosmic::cosmic_theme::Spacing,
 ) -> Element<'a, SmsMessage> {
     let is_sent = msg.is_sent();
-    let mut message_content = widget::column().spacing(spacing.space_xxs);
+    let mut message_content = widget::Column::new().spacing(spacing.space_xxs);
 
     // Show sender label only for received messages
     if !is_sent {
@@ -433,13 +433,13 @@ fn view_message_bubble<'a>(
     };
 
     if is_sent {
-        widget::row()
+        widget::Row::new()
             .push(widget::space::horizontal())
             .push(message_bubble)
             .width(Length::Fill)
             .into()
     } else {
-        widget::row()
+        widget::Row::new()
             .push(message_bubble)
             .width(Length::Fill)
             .into()
@@ -451,7 +451,7 @@ fn view_message_input<'a>(
     spacing: &cosmic::cosmic_theme::Spacing,
 ) -> Element<'a, SmsMessage> {
     let message_placeholder = fl!("sms-message-placeholder");
-    widget::row()
+    widget::Row::new()
         .push(
             widget::text_input(message_placeholder, &app.message_input)
                 .on_input(SmsMessage::UpdateInput)
