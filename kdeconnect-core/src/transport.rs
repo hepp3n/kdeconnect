@@ -296,7 +296,15 @@ impl UdpTransport {
                     Err(e) => {
                         attempts += 1;
                         if attempts >= 10 {
-                            panic!("failed to bind UDP socket after {} attempts: {}", attempts, e);
+                            // Port still held — another instance is almost certainly
+                            // running. Exit cleanly so the caller (the real owner) is
+                            // not disrupted, rather than panicking into the journal.
+                            tracing::error!(
+                                "UDP port {} still in use after {} attempts — \
+                                 another instance may be running, exiting: {}",
+                                config.listen_addr.port(), attempts, e
+                            );
+                            std::process::exit(1);
                         }
                         tracing::warn!("UDP bind failed (attempt {}), retrying in 1s: {}", attempts, e);
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -585,6 +593,7 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                                                                                               "kdeconnect.sms.request_conversations",
                                                                                                               "kdeconnect.sms.request_conversation",
                                                                                                               "kdeconnect.sms.request_attachment"]),
+        ("telephony",           &["kdeconnect.telephony"],                                                  &["kdeconnect.telephony.request_mute"]),                                                                                                      
     ];
 
     let mut remove_inc: std::collections::HashSet<&str> = std::collections::HashSet::new();

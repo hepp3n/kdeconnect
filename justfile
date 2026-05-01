@@ -69,6 +69,7 @@ install-systemd: install-bins install-applet-desktop install-systemd-service
 
 # Enable and start the systemd service
 enable-service:
+    systemctl --user daemon-reload
     systemctl --user enable --now kdeconnect.service
     @echo "Systemd service now enabled and started"
     @echo ""

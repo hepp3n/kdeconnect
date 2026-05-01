@@ -14,21 +14,21 @@ license = "GPL-3.0-only"
 [workspace.dependencies]
 anyhow = "1.0"
 async-stream = "0.3"
-ashpd = { version = "0.13.3", features = ["file_chooser"] }
-ctrlc = "3.4"
+ashpd = { version = "0.13.10", features = ["file_chooser"] }
+ctrlc = "3.5.2"
 dirs = "6"
 futures = "0.3"
 futures-util = "0.3"
 hostname = "0.4"
 lazy_static = "1.5"
-mpris = "2.0.1"
+mpris = "2.1.0"
 notify-rust = "4"
-once_cell = "1.21.3"
+once_cell = "1.21.4"
 percent-encoding = "2.3"
 pin-project = "1.1.11"
 rcgen = "0.14"
 ron = "0.12"
-rustls = "0.23.35"
+rustls = "0.23.40"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 socket2 = { version = "0.6", features = ["all"] }
@@ -38,11 +38,11 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1" }
 tokio-rustls = "0.26.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 urlencoding = "2.1"
-uuid = { version = "1.18", features = ["v4"] }
-zbus = "5.14"
-libpulse-binding = { version = "2.28" }
+uuid = { version = "1.23.1", features = ["v4"] }
+zbus = "5.15"
+libpulse-binding = { version = "2.30" }
 
 kdeconnect-core = { path = "kdeconnect-core" }
 kdeconnect-dbus-client = { path = "kdeconnect-dbus-client" }

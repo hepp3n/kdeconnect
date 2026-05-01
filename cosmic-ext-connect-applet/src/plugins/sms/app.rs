@@ -3,10 +3,10 @@ use cosmic::{
     Action, Application, ApplicationExt, Element, Task,
     app::Core,
     iced::{Length, Subscription},
-    iced_futures::futures::StreamExt,
     widget,
 };
 use cosmic::iced::widget::scrollable;
+use futures::StreamExt;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
