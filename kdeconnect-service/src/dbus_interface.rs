@@ -117,6 +117,31 @@ async fn load_sms_cache(device_id: &str) -> Option<String> {
 
 // ----------------------------------------------------------------------------
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sms_conversation_request_uses_gsconnect_thread_id_shape() {
+        assert_eq!(
+            sms_conversation_request_body(42),
+            json!({ "threadID": "42" })
+        );
+    }
+
+    #[test]
+    fn sms_send_request_matches_legacy_android_payload() {
+        assert_eq!(
+            sms_send_request_body("555-555-5555", "message body"),
+            json!({
+                "sendSms": true,
+                "phoneNumber": "555-555-5555",
+                "messageBody": "message body",
+            })
+        );
+    }
+}
+
 /// Main daemon D-Bus interface
 pub struct DaemonInterface {
     event_sender: Arc<mpsc::UnboundedSender<AppEvent>>,
@@ -364,6 +389,18 @@ pub struct SmsInterface {
     current_device_id: Arc<Mutex<Option<String>>>,
 }
 
+fn sms_conversation_request_body(thread_id: i64) -> serde_json::Value {
+    json!({ "threadID": thread_id.to_string() })
+}
+
+fn sms_send_request_body(phone_number: &str, message: &str) -> serde_json::Value {
+    json!({
+        "sendSms": true,
+        "phoneNumber": phone_number,
+        "messageBody": message,
+    })
+}
+
 #[interface(name = "io.github.hepp3n.kdeconnect.Sms")]
 impl SmsInterface {
     /// Return cached SMS JSON — in-memory first, disk fallback, empty if neither
@@ -404,7 +441,7 @@ impl SmsInterface {
         );
         let packet = ProtocolPacket::new(
             PacketType::SmsRequestConversation,
-            json!({ "threadID": thread_id }),
+            sms_conversation_request_body(thread_id),
         );
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
@@ -429,12 +466,7 @@ impl SmsInterface {
         );
         let packet = ProtocolPacket::new(
             PacketType::SmsRequest,
-            json!({
-                "sendSms": true,
-                "addresses": [{ "address": phone_number }],
-                "messageBody": message,
-                "version": 2
-            }),
+            sms_send_request_body(&phone_number, &message),
         );
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))

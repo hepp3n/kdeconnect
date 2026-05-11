@@ -92,6 +92,7 @@ impl From<String> for PacketType {
             | "kdeconnect.contacts.response_all_uids_timestamps" => {
                 PacketType::ContactsResponseUidsTimestamps
             }
+            "kdeconnect.contacts.request_vcards_by_uid" => PacketType::ContactsRequestVcardsByUid,
             "kdeconnect.contacts.response_vcards" => PacketType::ContactsResponseVcards,
             "kdeconnect.findmyphone.request" => PacketType::FindMyPhoneRequest,
             "kdeconnect.lock" => PacketType::Lock,
@@ -160,7 +161,7 @@ impl Display for PacketType {
             PacketType::Lock => write!(f, "kdeconnect.lock"),
             PacketType::LockRequest => write!(f, "kdeconnect.lock.request"),
             PacketType::MousePadEcho => write!(f, "kdeconnect.mousepad.echo"),
-            PacketType::MousePadKeyboardState => write!(f, "kdeconnect.mousepad.keyboard_state"),
+            PacketType::MousePadKeyboardState => write!(f, "kdeconnect.mousepad.keyboardstate"),
             PacketType::MousePadRequest => write!(f, "kdeconnect.mousepad.request"),
             PacketType::Mpris => write!(f, "kdeconnect.mpris"),
             PacketType::MprisRequest => write!(f, "kdeconnect.mpris.request"),
@@ -279,14 +280,55 @@ impl ProtocolPacket {
     }
 
     pub fn from_raw(raw: &[u8]) -> anyhow::Result<Self> {
-        let pkt: ProtocolPacket =
-            serde_json::from_slice(raw).expect("Failed to parse ProtocolPacket from raw data");
-        Ok(pkt)
+        Ok(serde_json::from_slice(raw)?)
     }
 
     pub fn as_raw(&self) -> anyhow::Result<Vec<u8>> {
         let str = serde_json::to_string(self)?;
         Ok(format!("{}\n", str).as_bytes().to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn packet_type_round_trips_known_protocol_names() {
+        let cases = [
+            (
+                "kdeconnect.contacts.request_vcards_by_uid",
+                PacketType::ContactsRequestVcardsByUid,
+            ),
+            (
+                "kdeconnect.mousepad.keyboardstate",
+                PacketType::MousePadKeyboardState,
+            ),
+        ];
+
+        for (wire_name, packet_type) in cases {
+            assert!(matches!(
+                PacketType::from(wire_name.to_string()),
+                pt if std::mem::discriminant(&pt) == std::mem::discriminant(&packet_type)
+            ));
+            assert_eq!(packet_type.to_string(), wire_name);
+        }
+    }
+
+    #[test]
+    fn from_raw_returns_error_for_invalid_json() {
+        assert!(ProtocolPacket::from_raw(b"not json\n").is_err());
+    }
+
+    #[test]
+    fn packet_serialization_uses_newline_delimited_json() {
+        let packet = ProtocolPacket::new(PacketType::Ping, json!({"message": "hello"}));
+        let raw = packet.as_raw().unwrap();
+        assert_eq!(raw.last(), Some(&b'\n'));
+        let decoded = ProtocolPacket::from_raw(&raw).unwrap();
+        assert!(matches!(decoded.packet_type, PacketType::Ping));
+        assert_eq!(decoded.body["message"], "hello");
     }
 }
 

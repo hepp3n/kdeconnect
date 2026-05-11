@@ -593,6 +593,7 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                                                                                               "kdeconnect.sms.request_conversations",
                                                                                                               "kdeconnect.sms.request_conversation",
                                                                                                               "kdeconnect.sms.request_attachment"]),
+        ("systemvolume",        &["kdeconnect.systemvolume.request"],                                        &["kdeconnect.systemvolume"]),
         ("telephony",           &["kdeconnect.telephony"],                                                  &["kdeconnect.telephony.request_mute"]),                                                                                                      
     ];
 

@@ -33,6 +33,7 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.share.request",
     "kdeconnect.sms.messages",
     "kdeconnect.sms.attachment_file",
+    "kdeconnect.systemvolume.request",
     "kdeconnect.telephony",
 ];
 
@@ -55,6 +56,7 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.request_conversations",
     "kdeconnect.sms.request_conversation",
     "kdeconnect.sms.request_attachment",
+    "kdeconnect.systemvolume",
 ];
 
 #[derive(Debug)]
