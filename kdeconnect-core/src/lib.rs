@@ -20,12 +20,12 @@ use crate::{
 };
 
 pub mod config;
-pub mod plugin_config;
 pub(crate) mod crypto;
 pub mod device;
 pub mod event;
 pub mod filetransfer;
 pub(crate) mod pairing;
+pub mod plugin_config;
 pub(crate) mod plugin_interface;
 pub mod plugins;
 pub(crate) mod protocol;
@@ -132,10 +132,7 @@ impl KdeConnectCore {
     pub async fn run_event_loop(&mut self) {
         info!("Starting KdeConnect event loop");
 
-        plugins::mpris::monitor_mpris(
-            (*self.device_manager).clone(),
-            self.event_tx.clone(),
-        );
+        plugins::mpris::monitor_mpris((*self.device_manager).clone(), self.event_tx.clone());
 
         loop {
             select! {
@@ -189,57 +186,46 @@ impl KdeConnectCore {
             CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired: {}", device_id);
 
+                if self
+                    .plugin_registry
+                    .is_plugin_enabled(&device_id.0, "contacts")
+                    .await
                 {
-                    let guard = self.writer_map.lock().await;
+                    let contacts_pkt = ProtocolPacket::new(
+                        PacketType::ContactsRequestAllUidsTimestamps,
+                        serde_json::json!({}),
+                    );
+                    let _ = self.queue_packet(&device_id, contacts_pkt).await;
+                }
 
-                    if self
-                        .plugin_registry
-                        .is_plugin_enabled(&device_id.0, "contacts")
-                        .await
-                    {
-                        if let Some(sender) = guard.get(&device_id) {
-                            let contacts_pkt = ProtocolPacket::new(
-                                PacketType::ContactsRequestAllUidsTimestamps,
-                                serde_json::json!({}),
-                            );
-                            let _ = sender.send(contacts_pkt);
-                        }
-                    }
+                if self
+                    .plugin_registry
+                    .is_plugin_enabled(&device_id.0, "sms")
+                    .await
+                {
+                    let sms_pkt = ProtocolPacket::new(
+                        PacketType::SmsRequestConversations,
+                        serde_json::json!({}),
+                    );
+                    let _ = self.queue_packet(&device_id, sms_pkt).await;
+                }
 
-                    if self
-                        .plugin_registry
-                        .is_plugin_enabled(&device_id.0, "sms")
-                        .await
-                    {
-                        if let Some(sender) = guard.get(&device_id) {
-                            let sms_pkt = ProtocolPacket::new(
-                                PacketType::SmsRequestConversations,
-                                serde_json::json!({}),
-                            );
-                            let _ = sender.send(sms_pkt);
-                        }
-                    }
-
-                    // Bootstrap MPRIS: request the phone's player list so
-                    // expose_phone_mpris can register D-Bus proxies for them.
-                    if self
-                        .plugin_registry
-                        .is_plugin_enabled(&device_id.0, "mpris")
-                        .await
-                    {
-                        if let Some(sender) = guard.get(&device_id) {
-                            let mpris_pkt = ProtocolPacket::new(
-                                PacketType::MprisRequest,
-                                serde_json::to_value(
-                                    crate::plugins::mpris::MprisRequest {
-                                        request_player_list: Some(true),
-                                        ..Default::default()
-                                    }
-                                ).unwrap(),
-                            );
-                            let _ = sender.send(mpris_pkt);
-                        }
-                    }
+                // Bootstrap MPRIS: request the phone's player list so
+                // expose_phone_mpris can register D-Bus proxies for them.
+                if self
+                    .plugin_registry
+                    .is_plugin_enabled(&device_id.0, "mpris")
+                    .await
+                {
+                    let mpris_pkt = ProtocolPacket::new(
+                        PacketType::MprisRequest,
+                        serde_json::to_value(crate::plugins::mpris::MprisRequest {
+                            request_player_list: Some(true),
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                    );
+                    let _ = self.queue_packet(&device_id, mpris_pkt).await;
                 }
 
                 let conn_event = ConnectionEvent::DevicePaired((device_id, device));
@@ -262,12 +248,7 @@ impl KdeConnectCore {
             }
             CoreEvent::SendPacket { device, packet } => {
                 info!("[core] sending packet");
-                let guard = self.writer_map.lock().await;
-                if let Some(sender) = guard.get(&device) {
-                    if let Err(e) = sender.send(packet) {
-                        tracing::warn!("[core] failed to queue packet for {}: {}", device, e);
-                    }
-                }
+                let _ = self.queue_packet(&device, packet).await;
             }
             CoreEvent::SendPaylod {
                 device,
@@ -332,86 +313,75 @@ impl KdeConnectCore {
                 self.pending_pair.lock().await.remove(&id);
 
                 if device.pair_state == crate::device::PairState::Paired {
-                    let guard = self.writer_map.lock().await;
-                    if let Some(sender) = guard.get(&id) {
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "contacts")
-                            .await
-                        {
-                            let contacts_pkt = ProtocolPacket::new(
-                                PacketType::ContactsRequestAllUidsTimestamps,
-                                serde_json::json!({}),
-                            );
-                            let _ = sender.send(contacts_pkt);
-                        }
-
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "notification")
-                            .await
-                        {
-                            let notification_pkt = ProtocolPacket::new(
-                                PacketType::NotificationRequest,
-                                serde_json::json!({ "request": true }),
-                            );
-                            let _ = sender.send(notification_pkt);
-                        }
-
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "sms")
-                            .await
-                        {
-                            let sms_pkt = ProtocolPacket::new(
-                                PacketType::SmsRequestConversations,
-                                serde_json::json!({}),
-                            );
-                            let _ = sender.send(sms_pkt);
-                        }
-
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "battery")
-                            .await
-                        {
-                            let battery_pkt = ProtocolPacket::new(
-                                PacketType::BatteryRequest,
-                                serde_json::json!({ "request": true }),
-                            );
-                            let _ = sender.send(battery_pkt);
-                            plugins::battery::send_local_state(
-                                id.clone(),
-                                self.event_tx.clone(),
-                            )
-                            .await;
-                        }
-
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "connectivity_report")
-                            .await
-                        {
-                            let connectivity_pkt = ProtocolPacket::new(
-                                PacketType::ConnectivityReportRequest,
-                                serde_json::json!({ "request": true }),
-                            );
-                            let _ = sender.send(connectivity_pkt);
-                        }
-
-                        if self
-                            .plugin_registry
-                            .is_plugin_enabled(&id.0, "mousepad")
-                            .await
-                        {
-                            let keyboard_state_pkt = ProtocolPacket::new(
-                                PacketType::MousePadKeyboardState,
-                                serde_json::json!({ "state": true }),
-                            );
-                            let _ = sender.send(keyboard_state_pkt);
-                        }
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "contacts")
+                        .await
+                    {
+                        let contacts_pkt = ProtocolPacket::new(
+                            PacketType::ContactsRequestAllUidsTimestamps,
+                            serde_json::json!({}),
+                        );
+                        let _ = self.queue_packet(&id, contacts_pkt).await;
                     }
-                    drop(guard);
+
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "notification")
+                        .await
+                    {
+                        let notification_pkt = ProtocolPacket::new(
+                            PacketType::NotificationRequest,
+                            serde_json::json!({ "request": true }),
+                        );
+                        let _ = self.queue_packet(&id, notification_pkt).await;
+                    }
+
+                    if self.plugin_registry.is_plugin_enabled(&id.0, "sms").await {
+                        let sms_pkt = ProtocolPacket::new(
+                            PacketType::SmsRequestConversations,
+                            serde_json::json!({}),
+                        );
+                        let _ = self.queue_packet(&id, sms_pkt).await;
+                    }
+
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "battery")
+                        .await
+                    {
+                        let battery_pkt = ProtocolPacket::new(
+                            PacketType::BatteryRequest,
+                            serde_json::json!({ "request": true }),
+                        );
+                        let _ = self.queue_packet(&id, battery_pkt).await;
+                        plugins::battery::send_local_state(id.clone(), self.event_tx.clone()).await;
+                    }
+
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "connectivity_report")
+                        .await
+                    {
+                        let connectivity_pkt = ProtocolPacket::new(
+                            PacketType::ConnectivityReportRequest,
+                            serde_json::json!({ "request": true }),
+                        );
+                        let _ = self.queue_packet(&id, connectivity_pkt).await;
+                    }
+
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "mousepad")
+                        .await
+                    {
+                        let keyboard_state_pkt = ProtocolPacket::new(
+                            PacketType::MousePadKeyboardState,
+                            serde_json::json!({ "state": true }),
+                        );
+                        let _ = self.queue_packet(&id, keyboard_state_pkt).await;
+                    }
+
                     // Send our local command list so the Android app shows
                     // the Run Command option (requires canAddCommand: true).
                     if self
@@ -422,7 +392,11 @@ impl KdeConnectCore {
                         plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
                     }
 
-                    if self.plugin_registry.is_plugin_enabled(&id.0, "systemvolume").await {
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "systemvolume")
+                        .await
+                    {
                         plugins::systemvolume::on_device_connect(id.clone(), self.event_tx.clone());
                     }
                 }
@@ -447,9 +421,15 @@ impl KdeConnectCore {
                                     // user can still initiate pairing normally from the settings app.
                                     self.pending_pair.lock().await.remove(&id);
                                     if device.pair_state == crate::device::PairState::Paired {
-                                        info!("[core] Phone unpairing from us — cleaning up {}", id);
+                                        info!(
+                                            "[core] Phone unpairing from us — cleaning up {}",
+                                            id
+                                        );
                                         self.device_manager
-                                            .update_pair_state(&id, crate::device::PairState::NotPaired)
+                                            .update_pair_state(
+                                                &id,
+                                                crate::device::PairState::NotPaired,
+                                            )
                                             .await;
                                         cleanup_device_data(&id.0).await;
                                         let conn_event = ConnectionEvent::PairStateChanged((
@@ -459,7 +439,10 @@ impl KdeConnectCore {
                                         let _ = self.conn_tx.send(conn_event.clone());
                                         let _ = self.mpris_conn_tx.send(conn_event);
                                     } else {
-                                        info!("[core] pair:false from {} — device not paired, ignoring", id);
+                                        info!(
+                                            "[core] pair:false from {} — device not paired, ignoring",
+                                            id
+                                        );
                                     }
                                 } else {
                                     let device_name = device.name.clone();
@@ -537,15 +520,11 @@ impl KdeConnectCore {
             }
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
-                {
-                    let guard = self.writer_map.lock().await;
-                    if let Some(sender) = guard.get(&device_id) {
-                        let pair = Pair::new(true);
-                        let value = serde_json::to_value(pair).expect("fail serializing pair");
-                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                        let _ = sender.send(pkt);
-                        info!("Sent pair request packet to device: {}", device_id);
-                    }
+                let pair = Pair::new(true);
+                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                if self.queue_packet(&device_id, pkt).await {
+                    info!("Sent pair request packet to device: {}", device_id);
                 }
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::Requesting)
@@ -564,16 +543,7 @@ impl KdeConnectCore {
             }
             AppEvent::SendPacket(device_id, packet) => {
                 info!("Sending packet to device: {}", device_id);
-                let guard = self.writer_map.lock().await;
-                if let Some(sender) = guard.get(&device_id) {
-                    let _ = sender.send(packet);
-                } else {
-                    debug!(
-                        "No sender for device {} — available: {:?}",
-                        device_id,
-                        guard.keys().collect::<Vec<_>>()
-                    );
-                }
+                let _ = self.queue_packet(&device_id, packet).await;
             }
             AppEvent::SendFiles((device_id, files_list)) => {
                 info!("frontend trying to sent files to device: {}", device_id);
@@ -656,15 +626,11 @@ impl KdeConnectCore {
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent unpair event to device: {}", device_id);
 
-                {
-                    let guard = self.writer_map.lock().await;
-                    if let Some(sender) = guard.get(&device_id) {
-                        let pair = Pair::new(false);
-                        let value = serde_json::to_value(pair).expect("fail serializing pair");
-                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                        let _ = sender.send(pkt);
-                        info!("[core] sent pair:false to {} on unpair", device_id);
-                    }
+                let pair = Pair::new(false);
+                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                if self.queue_packet(&device_id, pkt).await {
+                    info!("[core] sent pair:false to {} on unpair", device_id);
                 }
 
                 let _ = self.pairing.cancel_pairing(device_id.clone()).await;
@@ -679,29 +645,21 @@ impl KdeConnectCore {
             }
             AppEvent::AcceptPairing(device_id) => {
                 info!("User accepted pairing from {}", device_id);
-                {
-                    let guard = self.writer_map.lock().await;
-                    if let Some(sender) = guard.get(&device_id) {
-                        let pair = Pair::new(true);
-                        let value = serde_json::to_value(pair).expect("fail serializing pair");
-                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                        let _ = sender.send(pkt);
-                        info!("[core] sent pair:true to {} on accept", device_id);
-                    }
+                let pair = Pair::new(true);
+                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                if self.queue_packet(&device_id, pkt).await {
+                    info!("[core] sent pair:true to {} on accept", device_id);
                 }
                 self.device_manager.set_paired(&device_id, true).await;
             }
             AppEvent::RejectPairing(device_id) => {
                 info!("User rejected pairing from {}", device_id);
-                {
-                    let guard = self.writer_map.lock().await;
-                    if let Some(sender) = guard.get(&device_id) {
-                        let pair = Pair::new(false);
-                        let value = serde_json::to_value(pair).expect("fail serializing pair");
-                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                        let _ = sender.send(pkt);
-                        info!("[core] sent pair:false to {} on reject", device_id);
-                    }
+                let pair = Pair::new(false);
+                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                if self.queue_packet(&device_id, pkt).await {
+                    info!("[core] sent pair:false to {} on reject", device_id);
                 }
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::NotPaired)
@@ -745,11 +703,46 @@ impl KdeConnectCore {
                     self.conn_id_map.lock().await.remove(&device_id);
                     let mut guard = self.writer_map.lock().await;
                     if guard.remove(&device_id).is_some() {
-                        info!("[plugin] dropped connection to {} — phone will reconnect with updated capabilities", device_id);
+                        info!(
+                            "[plugin] dropped connection to {} — phone will reconnect with updated capabilities",
+                            device_id
+                        );
                     }
                 }
             }
         };
+    }
+
+    async fn queue_packet(&self, device_id: &DeviceId, packet: ProtocolPacket) -> bool {
+        let sender = {
+            let guard = self.writer_map.lock().await;
+            guard.get(device_id).cloned()
+        };
+
+        let Some(sender) = sender else {
+            debug!(
+                "No sender for device {} — available: {:?}",
+                device_id,
+                self.writer_map.lock().await.keys().collect::<Vec<_>>()
+            );
+            return false;
+        };
+
+        if let Err(e) = sender.send(packet) {
+            tracing::warn!(
+                "[core] failed to queue packet for {}: {}; removing stale writer",
+                device_id,
+                e
+            );
+            self.writer_map.lock().await.remove(device_id);
+            self.conn_id_map.lock().await.remove(device_id);
+            let conn_event = ConnectionEvent::Disconnected(device_id.clone());
+            let _ = self.conn_tx.send(conn_event.clone());
+            let _ = self.mpris_conn_tx.send(conn_event);
+            return false;
+        }
+
+        true
     }
 
     pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {
@@ -767,7 +760,11 @@ async fn cleanup_device_data(device_id: &str) {
             .join(format!("{}_plugins.json", device_id));
         if let Err(e) = tokio::fs::remove_file(&plugin_file).await {
             if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!("[cleanup] failed to remove plugin config for {}: {}", device_id, e);
+                tracing::warn!(
+                    "[cleanup] failed to remove plugin config for {}: {}",
+                    device_id,
+                    e
+                );
             }
         }
     }
@@ -777,7 +774,11 @@ async fn cleanup_device_data(device_id: &str) {
         let cache_dir = data_dir.join("kdeconnect").join(device_id);
         if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
             if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!("[cleanup] failed to remove cache dir for {}: {}", device_id, e);
+                tracing::warn!(
+                    "[cleanup] failed to remove cache dir for {}: {}",
+                    device_id,
+                    e
+                );
             }
         }
     }

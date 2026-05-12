@@ -105,7 +105,13 @@ impl Config {
             .or(stored_device_id)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        if fs::read_to_string(&id_file).await.ok().as_deref().map(str::trim) != Some(device_id.as_str()) {
+        if fs::read_to_string(&id_file)
+            .await
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            != Some(device_id.as_str())
+        {
             let mut file = fs::File::create(&id_file).await?;
             file.write_all(device_id.as_bytes()).await?;
         }

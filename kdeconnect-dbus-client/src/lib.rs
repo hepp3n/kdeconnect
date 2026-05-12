@@ -264,12 +264,7 @@ impl KdeConnectClient {
     }
 
     /// Send an SMS message
-    pub async fn send_sms(
-        &self,
-        device_id: &str,
-        phone_number: &str,
-        message: &str,
-    ) -> Result<()> {
+    pub async fn send_sms(&self, device_id: &str, phone_number: &str, message: &str) -> Result<()> {
         Ok(self
             .sms_proxy
             .send_sms(device_id, phone_number, message)
@@ -292,9 +287,7 @@ impl KdeConnectClient {
     }
 
     /// Create a stream of service events
-    pub async fn listen_for_events(
-        &self,
-    ) -> futures::stream::BoxStream<'static, ServiceEvent> {
+    pub async fn listen_for_events(&self) -> futures::stream::BoxStream<'static, ServiceEvent> {
         use futures::stream::select_all;
 
         let connected = self
@@ -357,10 +350,7 @@ impl KdeConnectClient {
             .unwrap()
             .map(|s| {
                 let args = s.args().unwrap();
-                ServiceEvent::PairingRequested(
-                    args.device_id.clone(),
-                    args.device_name.clone(),
-                )
+                ServiceEvent::PairingRequested(args.device_id.clone(), args.device_name.clone())
             });
 
         let clipboard = self
@@ -380,11 +370,7 @@ impl KdeConnectClient {
             .unwrap()
             .map(|s| {
                 let args = s.args().unwrap();
-                ServiceEvent::BatteryReceived(
-                    args.device_id.clone(),
-                    args.level,
-                    args.is_charging,
-                )
+                ServiceEvent::BatteryReceived(args.device_id.clone(), args.level, args.is_charging)
             });
 
         let connectivity = self

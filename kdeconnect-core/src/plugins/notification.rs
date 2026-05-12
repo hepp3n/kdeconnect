@@ -90,7 +90,11 @@ impl Notification {
         let _ = tokio::task::spawn_blocking(move || {
             let mut notify = notify_rust::Notification::new();
             notify.appname(&app_name);
-            notify.summary(if app_name.is_empty() { &title } else { &app_name });
+            notify.summary(if app_name.is_empty() {
+                &title
+            } else {
+                &app_name
+            });
             notify.body(&notification_body(&title, &text, &app_name));
 
             for action in actions.iter() {
@@ -110,7 +114,10 @@ impl Notification {
             };
 
             if !key.is_empty() {
-                NOTIFICATION_IDS.lock().unwrap().insert(key.clone(), handle.id());
+                NOTIFICATION_IDS
+                    .lock()
+                    .unwrap()
+                    .insert(key.clone(), handle.id());
             }
 
             handle.wait_for_action(|action| {

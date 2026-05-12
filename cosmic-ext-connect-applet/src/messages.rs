@@ -29,8 +29,8 @@ pub enum Message {
     ClipboardReadForDevice(String, String), // device_id, content
 
     // Battery and connectivity updates — patch device in place without full refresh
-    BatteryUpdated(String, i32, bool),  // device_id, level, is_charging
-    ConnectivityUpdated(String, i32),   // device_id, signal_strength
+    BatteryUpdated(String, i32, bool), // device_id, level, is_charging
+    ConnectivityUpdated(String, i32),  // device_id, signal_strength
 
     // Advanced features
     RemoteInput(String),
@@ -51,7 +51,7 @@ pub enum Message {
     MprisReceived(String, serde_json::Value), // device_id, mpris_data
 
     // Run Command
-    RequestRunCommands(String),              // device_id
-    RunCommandsReceived(String, String),     // device_id, commands_json
-    ExecuteRunCommand(String, String),       // device_id, key
+    RequestRunCommands(String),          // device_id
+    RunCommandsReceived(String, String), // device_id, commands_json
+    ExecuteRunCommand(String, String),   // device_id, key
 }

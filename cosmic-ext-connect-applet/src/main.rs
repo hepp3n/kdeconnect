@@ -7,9 +7,9 @@ use messages::Message;
 use models::Device;
 
 use cosmic::app::Core;
+use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id as SurfaceId;
 use cosmic::iced::{Limits, Subscription};
-use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::{Element, Task, widget};
 use std::collections::HashMap;
 use tracing::{debug, error, info};
@@ -116,7 +116,9 @@ impl cosmic::Application for KdeConnectApplet {
                     self.expanded_device = Some(device_id.clone());
                     let id = device_id.clone();
                     return Task::perform(
-                        async move { backend::request_run_commands(id).await.ok(); },
+                        async move {
+                            backend::request_run_commands(id).await.ok();
+                        },
                         |_| cosmic::Action::App(Message::RefreshDevices),
                     );
                 }
@@ -223,7 +225,9 @@ impl cosmic::Application for KdeConnectApplet {
             Message::ClipboardReadForDevice(device_id, content) => {
                 if !content.is_empty() {
                     return Task::perform(
-                        async move { backend::send_clipboard(device_id, content).await.ok(); },
+                        async move {
+                            backend::send_clipboard(device_id, content).await.ok();
+                        },
                         |_| cosmic::Action::App(Message::RefreshDevices),
                     );
                 }
@@ -237,14 +241,18 @@ impl cosmic::Application for KdeConnectApplet {
                     device.is_charging = Some(charging);
                     // Also patch the backend cache so the next fetch_devices() preserves it
                     let d = device.clone();
-                    tokio::spawn(async move { backend::update_device(device_id, d).await; });
+                    tokio::spawn(async move {
+                        backend::update_device(device_id, d).await;
+                    });
                 }
             }
             Message::ConnectivityUpdated(device_id, strength) => {
                 if let Some(device) = self.devices.get_mut(&device_id) {
                     device.signal_strength = Some(strength);
                     let d = device.clone();
-                    tokio::spawn(async move { backend::update_device(device_id, d).await; });
+                    tokio::spawn(async move {
+                        backend::update_device(device_id, d).await;
+                    });
                 }
             }
             Message::AcceptPairing(ref device_id) => {
@@ -268,7 +276,10 @@ impl cosmic::Application for KdeConnectApplet {
                 );
             }
             Message::PairingRequestReceived(device_id, device_name, _device_type) => {
-                info!("Pairing request received from {} ({})", device_name, device_id);
+                info!(
+                    "Pairing request received from {} ({})",
+                    device_name, device_id
+                );
                 self.pairing_requests.insert(device_id, device_name.clone());
 
                 // Show a system notification so the user is alerted even if they
@@ -335,7 +346,9 @@ impl cosmic::Application for KdeConnectApplet {
             Message::RequestRunCommands(ref device_id) => {
                 let id = device_id.clone();
                 return Task::perform(
-                    async move { backend::request_run_commands(id).await.ok(); },
+                    async move {
+                        backend::request_run_commands(id).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
@@ -354,14 +367,18 @@ impl cosmic::Application for KdeConnectApplet {
                     device.run_commands = commands;
                     let d = device.clone();
                     let did = device_id.clone();
-                    tokio::spawn(async move { backend::update_device(did, d).await; });
+                    tokio::spawn(async move {
+                        backend::update_device(did, d).await;
+                    });
                 }
             }
             Message::ExecuteRunCommand(ref device_id, ref key) => {
                 let id = device_id.clone();
                 let k = key.clone();
                 return Task::perform(
-                    async move { backend::execute_run_command(id, k).await.ok(); },
+                    async move {
+                        backend::execute_run_command(id, k).await.ok();
+                    },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }

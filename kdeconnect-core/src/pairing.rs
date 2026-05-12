@@ -74,7 +74,10 @@ impl PairingManager {
             .update_pair_state(&id, PairState::Requested)
             .await;
 
-        info!("Pair request received from {} — awaiting user decision", name);
+        info!(
+            "Pair request received from {} — awaiting user decision",
+            name
+        );
         Ok(true)
     }
 

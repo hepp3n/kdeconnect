@@ -1,9 +1,9 @@
 //! UI view implementations for the SMS window.
 
-use cosmic::widget::button::Catalog;
 use cosmic::Element;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget;
+use cosmic::widget::button::Catalog;
 
 use super::app::{SmsMessage, SmsWindow};
 use super::models::Conversation;
@@ -58,7 +58,11 @@ pub fn view_new_chat_dialog(app: &SmsWindow) -> Element<'_, SmsMessage> {
     let right = widget::Column::new()
         .spacing(spacing.space_s)
         .padding(spacing.space_l)
-        .push(widget::text(fl!("sms-new-chat-contacts")).size(16).font(cosmic::font::bold()))
+        .push(
+            widget::text(fl!("sms-new-chat-contacts"))
+                .size(16)
+                .font(cosmic::font::bold()),
+        )
         .push(view_contacts_list(app, &spacing))
         .width(Length::Fill);
 
@@ -82,7 +86,10 @@ fn view_new_chat_actions<'a>(
 
     widget::Row::new()
         .spacing(spacing.space_xs)
-        .push(widget::button::standard(fl!("sms-new-chat-cancel")).on_press(SmsMessage::CloseNewChatDialog))
+        .push(
+            widget::button::standard(fl!("sms-new-chat-cancel"))
+                .on_press(SmsMessage::CloseNewChatDialog),
+        )
         .push(widget::space::horizontal())
         .push(if start_button_enabled {
             widget::button::suggested(fl!("sms-new-chat-start")).on_press(SmsMessage::CreateNewChat)
@@ -97,7 +104,9 @@ fn view_contacts_list<'a>(
     spacing: &cosmic::cosmic_theme::Spacing,
 ) -> Element<'a, SmsMessage> {
     if app.contacts.is_empty() {
-        return widget::text(fl!("sms-new-chat-no-contacts")).size(12).into();
+        return widget::text(fl!("sms-new-chat-no-contacts"))
+            .size(12)
+            .into();
     }
 
     let mut contacts_list = widget::Column::new().spacing(spacing.space_xxs);
@@ -118,7 +127,10 @@ fn view_contacts_list<'a>(
         }
         contacts_list = contacts_list.push(
             widget::container(
-                widget::text(fl!("sms-new-chat-showing", count = (filtered_contacts.len() as i64)))
+                widget::text(fl!(
+                    "sms-new-chat-showing",
+                    count = (filtered_contacts.len() as i64)
+                ))
                 .size(11),
             )
             .padding([spacing.space_xs, 0, 0, 0]),
@@ -369,10 +381,7 @@ fn view_messages_list<'a>(
             widget::container(
                 widget::Column::new()
                     .push(widget::text(fl!("sms-waiting-for-messages")).size(14))
-                    .push(
-                        widget::text(fl!("sms-messages-will-appear"))
-                            .size(12),
-                    )
+                    .push(widget::text(fl!("sms-messages-will-appear")).size(12))
                     .spacing(spacing.space_xs)
                     .align_x(Alignment::Center),
             )

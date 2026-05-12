@@ -23,7 +23,10 @@ fn main() -> cosmic::iced::Result {
         .cloned()
         .unwrap_or_else(|| "Unknown Device".to_string());
 
-    info!("KDE Connect SMS window starting: {} ({})", device_name, device_id);
+    info!(
+        "KDE Connect SMS window starting: {} ({})",
+        device_name, device_id
+    );
 
     cosmic_ext_connect_applet::plugins::sms::run(device_id, device_name)
 }

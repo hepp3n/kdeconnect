@@ -40,13 +40,14 @@ impl KeyStore {
         // Prefer the standard KDE Connect/GSConnect filenames when present.
         // This preserves existing pairings when migrating from another desktop
         // implementation; Android pins the desktop certificate for a device ID.
-        let (cert_path, keys_path) = if standard_cert_path.exists() && kde_standard_keys_path.exists() {
-            (standard_cert_path, kde_standard_keys_path)
-        } else if standard_cert_path.exists() && gsconnect_standard_keys_path.exists() {
-            (standard_cert_path, gsconnect_standard_keys_path)
-        } else {
-            (device_cert_path, device_keys_path)
-        };
+        let (cert_path, keys_path) =
+            if standard_cert_path.exists() && kde_standard_keys_path.exists() {
+                (standard_cert_path, kde_standard_keys_path)
+            } else if standard_cert_path.exists() && gsconnect_standard_keys_path.exists() {
+                (standard_cert_path, gsconnect_standard_keys_path)
+            } else {
+                (device_cert_path, device_keys_path)
+            };
 
         if !keys_path.exists() || !cert_path.exists() {
             let key = KeyPair::generate()?.serialize_pem();

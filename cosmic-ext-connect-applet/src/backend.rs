@@ -65,7 +65,10 @@ pub async fn fetch_devices() -> Vec<Device> {
                         has_presenter: false,
                         has_lockdevice: false,
                         has_virtualmonitor: false,
-                        run_commands: existing.as_ref().map(|e| e.run_commands.clone()).unwrap_or_default(),
+                        run_commands: existing
+                            .as_ref()
+                            .map(|e| e.run_commands.clone())
+                            .unwrap_or_default(),
                     };
                     cache.insert(d.id.clone(), device.clone());
                     device
@@ -179,7 +182,9 @@ pub async fn set_plugin_enabled(device_id: String, plugin_id: String, enabled: b
     let Some(client) = client_guard.as_ref() else {
         return Err(anyhow::anyhow!("D-Bus client not initialized"));
     };
-    client.set_plugin_enabled(&device_id, &plugin_id, enabled).await
+    client
+        .set_plugin_enabled(&device_id, &plugin_id, enabled)
+        .await
 }
 
 /// Return the list of disabled plugin IDs for a device

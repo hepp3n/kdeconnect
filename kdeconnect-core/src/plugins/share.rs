@@ -48,7 +48,10 @@ impl ShareRequest {
                 .and_then(|name| name.to_str())
                 .map(ToOwned::to_owned)
             else {
-                warn!("[share] skipping path without valid UTF-8 filename: {}", pathbuf.display());
+                warn!(
+                    "[share] skipping path without valid UTF-8 filename: {}",
+                    pathbuf.display()
+                );
                 continue;
             };
 

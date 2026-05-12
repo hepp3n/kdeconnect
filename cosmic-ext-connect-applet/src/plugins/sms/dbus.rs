@@ -46,7 +46,10 @@ pub async fn fetch_conversations(device_id: &str) {
 }
 
 pub async fn request_conversation_messages(device_id: &str, thread_id: &str) {
-    debug!("request_conversation device={} thread={}", device_id, thread_id);
+    debug!(
+        "request_conversation device={} thread={}",
+        device_id, thread_id
+    );
     let Some(client) = get_client().await else {
         return;
     };

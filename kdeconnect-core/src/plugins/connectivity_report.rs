@@ -77,10 +77,7 @@ impl ConnectivityReport {
         self.signal_strengths.values().for_each(|v| {
             let _ = event.send(ConnectionEvent::StateUpdated((
                 device_id.clone(),
-                DeviceState::Connectivity((
-                    v.network_type.to_string(),
-                    v.signal_strength,
-                )),
+                DeviceState::Connectivity((v.network_type.to_string(), v.signal_strength)),
             )));
         });
     }

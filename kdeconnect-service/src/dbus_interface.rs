@@ -278,7 +278,9 @@ impl DaemonInterface {
     async fn accept_pairing(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: AcceptPairing called for {}", device_id);
         self.event_sender
-            .send(AppEvent::AcceptPairing(kdeconnect_core::device::DeviceId(device_id)))
+            .send(AppEvent::AcceptPairing(kdeconnect_core::device::DeviceId(
+                device_id,
+            )))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
@@ -287,7 +289,9 @@ impl DaemonInterface {
     async fn reject_pairing(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RejectPairing called for {}", device_id);
         self.event_sender
-            .send(AppEvent::RejectPairing(kdeconnect_core::device::DeviceId(device_id)))
+            .send(AppEvent::RejectPairing(kdeconnect_core::device::DeviceId(
+                device_id,
+            )))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
@@ -356,10 +360,7 @@ impl DaemonInterface {
     /// Execute a remote command on a device by key
     async fn run_command(&self, device_id: String, key: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: RunCommand called for {} key={}", device_id, key);
-        let packet = ProtocolPacket::new(
-            PacketType::RunCommandRequest,
-            json!({ "key": key }),
-        );
+        let packet = ProtocolPacket::new(PacketType::RunCommandRequest, json!({ "key": key }));
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
@@ -681,7 +682,9 @@ impl KdeConnectService {
         tokio::spawn(async move {
             match core_handle.await {
                 Ok(_) => error!("Core event loop exited unexpectedly - connections will fail"),
-                Err(e) if e.is_panic() => error!("Core event loop PANICKED - connections will fail: {:?}", e),
+                Err(e) if e.is_panic() => {
+                    error!("Core event loop PANICKED - connections will fail: {:?}", e)
+                }
                 Err(e) => error!("Core event loop cancelled: {:?}", e),
             }
         });
@@ -834,7 +837,10 @@ impl KdeConnectService {
                 debug!("Device disconnected signal emitted");
             }
             ConnectionEvent::PairStateChanged((device_id, pair_state)) => {
-                info!("Event: PairStateChanged - {} → {:?}", device_id.0, pair_state);
+                info!(
+                    "Event: PairStateChanged - {} → {:?}",
+                    device_id.0, pair_state
+                );
                 let is_paired = matches!(pair_state, PairState::Paired);
 
                 {
@@ -942,8 +948,7 @@ impl KdeConnectService {
                     .object_server()
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
                     .await?;
-                DaemonInterface::clipboard_received(iface_ref.signal_emitter(), content)
-                    .await?;
+                DaemonInterface::clipboard_received(iface_ref.signal_emitter(), content).await?;
                 debug!("ClipboardReceived D-Bus signal emitted");
             }
             ConnectionEvent::StateUpdated((device_id, state)) => {

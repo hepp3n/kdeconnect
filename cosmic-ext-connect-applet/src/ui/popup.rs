@@ -104,7 +104,11 @@ pub fn create_popup_view<'a>(
                 .center_x(Length::Fill),
         );
     } else {
-        content = content.push(widget::text(fl!("devices-header")).size(14).font(cosmic::font::bold()));
+        content = content.push(
+            widget::text(fl!("devices-header"))
+                .size(14)
+                .font(cosmic::font::bold()),
+        );
 
         for device in paired_devices {
             content = content.push(create_device_card(device, &spacing, expanded_device));
@@ -225,7 +229,9 @@ fn create_device_card<'a>(
                         .class(cosmic::theme::Button::Text),
                 );
                 menu_items = menu_items.push_maybe(if let Some(progress) = device.share_progress {
-                    Some(widget::progress_bar::determinate_linear(progress as f32 / 100.0))
+                    Some(widget::progress_bar::determinate_linear(
+                        progress as f32 / 100.0,
+                    ))
                 } else {
                     None
                 });

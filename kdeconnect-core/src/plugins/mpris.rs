@@ -226,7 +226,10 @@ pub fn get_all_mpris_player_names() -> Vec<String> {
         Err(_) => return vec![],
     };
     match finder.find_all() {
-        Ok(players) => players.into_iter().map(|p| p.identity().to_string()).collect(),
+        Ok(players) => players
+            .into_iter()
+            .map(|p| p.identity().to_string())
+            .collect(),
         Err(_) => vec![],
     }
 }
@@ -397,7 +400,7 @@ pub fn monitor_mpris(
     let ctx_sup = core_tx.clone();
 
     tokio::task::spawn_blocking(move || {
-       let (call_tx, call_rx) = std::sync::mpsc::sync_channel::<bool>(1);
+        let (call_tx, call_rx) = std::sync::mpsc::sync_channel::<bool>(1);
         TELEPHONY_CALL_TX.set(call_tx).ok();
 
         // Holds Player objects paused for an active call — keeping them alive
@@ -594,7 +597,10 @@ impl PhoneMprisPlayer {
         self.send_request(request).await;
     }
 
-    async fn play_pause(&self, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) {
+    async fn play_pause(
+        &self,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) {
         let mut state = self.player_state.write().await;
         let is_playing = state.is_playing.unwrap_or(false);
         state.is_playing = Some(!is_playing);

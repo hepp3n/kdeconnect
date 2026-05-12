@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use base64::{engine::general_purpose, Engine as _};
 use crate::plugins::mpris;
+use base64::{Engine as _, engine::general_purpose};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::info;
 

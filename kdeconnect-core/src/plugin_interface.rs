@@ -12,7 +12,7 @@ use crate::{
     GLOBAL_CONFIG,
     device::Device,
     event::{ConnectionEvent, CoreEvent},
-    filetransfer::{send_progress, TransferAdapter},
+    filetransfer::{TransferAdapter, send_progress},
     plugins::{
         self,
         battery::Battery,
@@ -60,9 +60,9 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::SmsAttachmentFile
         | PacketType::SmsRequestAttachment => Some("sms"),
         PacketType::SystemVolume | PacketType::SystemVolumeRequest => Some("systemvolume"),
-        PacketType::MousePadEcho | PacketType::MousePadKeyboardState | PacketType::MousePadRequest => {
-            Some("mousepad")
-        }
+        PacketType::MousePadEcho
+        | PacketType::MousePadKeyboardState
+        | PacketType::MousePadRequest => Some("mousepad"),
         PacketType::Presenter => Some("presenter"),
         PacketType::Telephony | PacketType::TelephonyRequestMute => Some("telephony"),
         // Core / unmanaged packets are never gated
@@ -122,10 +122,7 @@ impl PluginRegistry {
     ) {
         // Gate on plugin enabled state before doing any work.
         if let Some(plugin_id) = packet_plugin_id(&packet.packet_type) {
-            if !self
-                .is_plugin_enabled(&device.device_id.0, plugin_id)
-                .await
-            {
+            if !self.is_plugin_enabled(&device.device_id.0, plugin_id).await {
                 debug!(
                     "[plugin_registry] packet {:?} skipped — plugin '{}' disabled for {}",
                     packet.packet_type, plugin_id, device.device_id
@@ -234,7 +231,9 @@ impl PluginRegistry {
                 }
             }
             PacketType::ConnectivityReportRequest => {
-                debug!("ConnectivityReportRequest received — desktop has no cellular modem state to publish");
+                debug!(
+                    "ConnectivityReportRequest received — desktop has no cellular modem state to publish"
+                );
             }
             PacketType::ClipboardConnect => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
@@ -252,7 +251,9 @@ impl PluginRegistry {
                 }
             }
             PacketType::MousePadRequest => {
-                if let Ok(request) = serde_json::from_value::<plugins::mousepad::MousepadRequest>(body) {
+                if let Ok(request) =
+                    serde_json::from_value::<plugins::mousepad::MousepadRequest>(body)
+                {
                     request.received_packet(&device, core_tx).await;
                 }
             }
@@ -260,7 +261,9 @@ impl PluginRegistry {
                 debug!("MousePadEcho received");
             }
             PacketType::Presenter => {
-                if let Ok(request) = serde_json::from_value::<plugins::mousepad::PresenterRequest>(body) {
+                if let Ok(request) =
+                    serde_json::from_value::<plugins::mousepad::PresenterRequest>(body)
+                {
                     request.received_packet().await;
                 }
             }

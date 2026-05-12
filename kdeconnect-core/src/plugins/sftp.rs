@@ -1,6 +1,6 @@
 use std::process::Stdio;
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{debug, info, warn};

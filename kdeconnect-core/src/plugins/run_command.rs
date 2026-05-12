@@ -112,10 +112,7 @@ impl RunCommandRequest {
             // Phone is asking us to execute a local command by its UUID key.
             let commands = load_local_commands();
             if let Some(cmd) = commands.iter().find(|c| c.id == *key) {
-                info!(
-                    "[runcommand] executing '{}': {}",
-                    cmd.name, cmd.command
-                );
+                info!("[runcommand] executing '{}': {}", cmd.name, cmd.command);
                 if let Err(e) = std::process::Command::new("sh")
                     .arg("-c")
                     .arg(&cmd.command)
@@ -160,8 +157,8 @@ pub async fn send_command_list(
             serde_json::json!({ "name": cmd.name, "command": cmd.command }),
         );
     }
-    let command_list_str = serde_json::to_string(&serde_json::Value::Object(map))
-        .unwrap_or_else(|_| "{}".to_string());
+    let command_list_str =
+        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".to_string());
 
     info!(
         "[runcommand] sending {} command(s) to {}",

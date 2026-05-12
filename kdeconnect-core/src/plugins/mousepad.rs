@@ -213,7 +213,8 @@ fn ydotool<const N: usize>(args: [&str; N]) -> anyhow::Result<()> {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let message = stderr.trim();
-            if message.contains("ydotoold is running") || message.contains("failed to connect socket")
+            if message.contains("ydotoold is running")
+                || message.contains("failed to connect socket")
             {
                 if !YDOTOOL_DAEMON_WARNED.swap(true, Ordering::Relaxed) {
                     warn!(
