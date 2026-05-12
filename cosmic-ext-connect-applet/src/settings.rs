@@ -260,7 +260,10 @@ impl Application for SettingsApp {
 
         let title_task = app.set_window_title(
             fl!("settings-title").to_string(),
-            app.core.main_window_id().unwrap(),
+            app.core.main_window_id().unwrap_or_else(|| {
+                eprintln!("[settings] main_window_id not available yet");
+                cosmic::iced::window::Id::unique()
+            }),
         );
 
         let load_task = Task::perform(
@@ -385,7 +388,9 @@ impl Application for SettingsApp {
                 let id = device_id;
                 return Task::perform(
                     async move {
-                        backend::pair_device(id).await.ok();
+                        if let Err(e) = backend::pair_device(id).await {
+                            eprintln!("[settings] Failed to pair device: {:?}", e);
+                        }
                         backend::fetch_devices().await
                     },
                     |devices| Action::App(Message::DevicesLoaded(devices)),
@@ -400,7 +405,9 @@ impl Application for SettingsApp {
                 let id = device_id;
                 return Task::perform(
                     async move {
-                        backend::unpair_device(id).await.ok();
+                        if let Err(e) = backend::unpair_device(id).await {
+                            eprintln!("[settings] Failed to unpair device: {:?}", e);
+                        }
                         backend::fetch_devices().await
                     },
                     |devices| Action::App(Message::DevicesLoaded(devices)),

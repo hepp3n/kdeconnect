@@ -114,15 +114,16 @@ impl Notification {
             };
 
             if !key.is_empty() {
-                NOTIFICATION_IDS
-                    .lock()
-                    .unwrap()
-                    .insert(key.clone(), handle.id());
+                if let Ok(mut ids) = NOTIFICATION_IDS.lock() {
+                    ids.insert(key.clone(), handle.id());
+                }
             }
 
             handle.wait_for_action(|action| {
                 if !key.is_empty() {
-                    NOTIFICATION_IDS.lock().unwrap().remove(&key);
+                    if let Ok(mut ids) = NOTIFICATION_IDS.lock() {
+                        ids.remove(&key);
+                    }
                 }
 
                 match action {
@@ -235,7 +236,11 @@ fn prompt_reply(notification: &Notification) -> Option<String> {
 }
 
 async fn close_notification(key: &str) {
-    let Some(id) = NOTIFICATION_IDS.lock().unwrap().remove(key) else {
+    let Some(id) = NOTIFICATION_IDS
+        .lock()
+        .ok()
+        .and_then(|mut ids| ids.remove(key))
+    else {
         return;
     };
 

@@ -284,8 +284,9 @@ impl ProtocolPacket {
     }
 
     pub fn as_raw(&self) -> anyhow::Result<Vec<u8>> {
-        let str = serde_json::to_string(self)?;
-        Ok(format!("{}\n", str).as_bytes().to_vec())
+        let mut buf = serde_json::to_vec(self)?;
+        buf.push(b'\n');
+        Ok(buf)
     }
 }
 

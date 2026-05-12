@@ -1,11 +1,13 @@
 use crate::{device::Device, event::CoreEvent, plugin_interface::Plugin, protocol::ProtocolPacket};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::warn;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Ping {
     pub message: Option<String>,
+    #[serde(default)]
+    pub heartbeat: Option<bool>,
 }
 
 impl Plugin for Ping {
@@ -16,45 +18,27 @@ impl Plugin for Ping {
 impl Ping {
     pub async fn received_packet(
         &self,
-        device: &Device,
-        core_event: mpsc::UnboundedSender<CoreEvent>,
+        _device: &Device,
+        _core_event: mpsc::UnboundedSender<CoreEvent>,
     ) {
-        let device_id = device.device_id.clone();
-        let event = core_event.clone();
-
-        let packet = ProtocolPacket::new(
-            crate::protocol::PacketType::Ping,
-            serde_json::to_value(Self {
-                message: Some("Pong!".into()),
-            })
-            .unwrap_or_default(),
-        );
+        // Heartbeat pings should not trigger desktop notifications.
+        if self.heartbeat.unwrap_or(false) {
+            return;
+        }
 
         let summary = self.message.clone().unwrap_or_else(|| "Ping!".into());
 
         let _ = tokio::task::spawn_blocking(move || {
-            let mut reply = false;
-
-            notify_rust::Notification::new()
+            match notify_rust::Notification::new()
                 .summary("KDE Connect")
                 .body(&summary)
-                .action("clicked", "Click to reply")
                 .hint(notify_rust::Hint::Resident(true))
                 .show()
-                .unwrap()
-                .wait_for_action(|action| match action {
-                    "clicked" => {
-                        reply = true;
-                    }
-                    "__closed" => debug!("ping notification closed"),
-                    _ => (),
-                });
-
-            if reply {
-                let _ = event.send(CoreEvent::SendPacket {
-                    device: device_id,
-                    packet,
-                });
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("[ping] failed to show notification: {}", e);
+                }
             }
         })
         .await;
@@ -70,5 +54,46 @@ impl Ping {
             device: device.device_id.clone(),
             packet,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ping_serialization_round_trips() {
+        let ping = Ping {
+            message: Some("Hello".into()),
+            heartbeat: None,
+        };
+        let json = serde_json::to_value(&ping).unwrap();
+        let parsed: Ping = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.message, Some("Hello".into()));
+        assert_eq!(parsed.heartbeat, None);
+    }
+
+    #[test]
+    fn heartbeat_ping_has_characteristic_shape() {
+        let ping = Ping {
+            message: None,
+            heartbeat: Some(true),
+        };
+        let json = serde_json::to_value(&ping).unwrap();
+        let parsed: Ping = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.heartbeat, Some(true));
+        assert_eq!(parsed.message, None);
+    }
+
+    #[test]
+    fn empty_object_defaults_to_no_heartbeat() {
+        let parsed: Ping = serde_json::from_str("{}").unwrap();
+        assert!(parsed.message.is_none());
+        assert!(parsed.heartbeat.is_none());
+    }
+
+    #[test]
+    fn ping_plugin_has_correct_id() {
+        assert_eq!(Ping::default().id(), "kdeconnect.ping");
     }
 }

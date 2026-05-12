@@ -383,9 +383,16 @@ impl MprisRequest {
 }
 
 /// Telephony plugin sends true (call active) / false (call ended) here.
-/// Initialised when monitor_mpris starts.
+/// Initiaised at service start time so telephony signals are never dropped
+/// before monitor_mpris has finished its first setup iteration.
 static TELEPHONY_CALL_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<bool>> =
     std::sync::OnceLock::new();
+
+/// Ensures the telephony signal channel is set up. Safe to call multiple times.
+pub fn init_telephony_signal() {
+    let (call_tx, _call_rx) = std::sync::mpsc::sync_channel::<bool>(1);
+    TELEPHONY_CALL_TX.set(call_tx).ok();
+}
 
 /// Called by the telephony plugin to signal call state changes.
 pub fn telephony_call_signal() -> Option<&'static std::sync::mpsc::SyncSender<bool>> {
@@ -400,6 +407,7 @@ pub fn monitor_mpris(
     let ctx_sup = core_tx.clone();
 
     tokio::task::spawn_blocking(move || {
+        // Ensure telephony signal channel exists before we start the loop.
         let (call_tx, call_rx) = std::sync::mpsc::sync_channel::<bool>(1);
         TELEPHONY_CALL_TX.set(call_tx).ok();
 
@@ -921,6 +929,10 @@ pub fn expose_phone_mpris(
                     }
                 }
                 _ = interval.tick() => {
+                    // Skip polling when no players are actively registered.
+                    if active_players.is_empty() {
+                        continue;
+                    }
                     // Ask each phone to refresh now-playing for all its players.
                     for player_conn in active_players.values() {
                         let player_name = player_conn.player_state.read().await.player.clone();

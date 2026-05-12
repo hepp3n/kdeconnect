@@ -287,6 +287,7 @@ pub struct UdpTransport {
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     identity: Arc<Identity>,
     server_config: Arc<rustls::ServerConfig>,
+    broadcast_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl UdpTransport {
@@ -337,6 +338,7 @@ impl UdpTransport {
             event_tx,
             identity,
             server_config,
+            broadcast_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -344,6 +346,15 @@ impl UdpTransport {
         if std::env::var("KDECONNECT_DISABLE_UDP_BROADCAST").is_ok() {
             warn!("UDP broadcast disabled by environment variable");
             return Ok(());
+        }
+
+        // Cancel any previously-spawned broadcast task so we never accumulate
+        // orphaned broadcast loops.
+        {
+            let mut guard = self.broadcast_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
         }
 
         debug!("Broadcasting UDP identity packet");
@@ -357,7 +368,7 @@ impl UdpTransport {
         .as_raw()
         .expect("Failed to serialize identity packet");
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let mut interval = tokio::time::interval(Duration::from_secs(interval.as_secs()));
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -373,16 +384,18 @@ impl UdpTransport {
             }
         });
 
+        *self.broadcast_handle.lock().await = Some(handle);
+
         Ok(())
     }
 
     pub async fn listen(&self) -> anyhow::Result<()> {
         let event_tx = self.event_tx.clone();
         let this_identity = self.identity.clone();
+        let mut buf = vec![0u8; 8192];
 
         loop {
             let this_identity = this_identity.clone();
-            let mut buf = vec![0u8; 8192];
 
             match self.socket.recv_from(&mut buf).await {
                 Ok((len, mut peer)) => {
@@ -428,8 +441,14 @@ impl UdpTransport {
                         .as_raw()
                         .expect("Failed to serialize identity packet");
 
-                        let _ = stream.write_all(pre_tls_identity.as_slice()).await;
-                        let _ = stream.flush().await;
+                        if let Err(e) = stream.write_all(pre_tls_identity.as_slice()).await {
+                            warn!(peer = ?peer, "[udp] failed to send pre-TLS identity: {}", e);
+                            continue;
+                        }
+                        if let Err(e) = stream.flush().await {
+                            warn!(peer = ?peer, "[udp] failed to flush pre-TLS identity: {}", e);
+                            continue;
+                        }
 
                         let acceptor = TlsAcceptor::from(self.server_config.clone());
 
@@ -454,8 +473,14 @@ impl UdpTransport {
                         .as_raw()
                         .expect("Failed to serialize identity packet");
 
-                        let _ = tls_stream.write_all(post_tls_identity.as_slice()).await;
-                        let _ = tls_stream.flush().await;
+                        if let Err(e) = tls_stream.write_all(post_tls_identity.as_slice()).await {
+                            warn!(peer = ?peer, "[udp] failed to send post-TLS identity: {}", e);
+                            continue;
+                        }
+                        if let Err(e) = tls_stream.flush().await {
+                            warn!(peer = ?peer, "[udp] failed to flush post-TLS identity: {}", e);
+                            continue;
+                        }
 
                         let (reader, writer) = split(tls_stream);
 
@@ -571,7 +596,7 @@ async fn handle_connection<R, W>(
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
                     let heartbeat = ProtocolPacket::new(
                         PacketType::Ping,
-                        serde_json::json!({"message": ""}),
+                        serde_json::json!({"heartbeat": true}),
                     );
                     let raw = heartbeat
                         .as_raw()

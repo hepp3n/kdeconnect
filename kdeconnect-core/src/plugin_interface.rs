@@ -453,8 +453,14 @@ impl PluginRegistry {
             };
 
             debug!("[payload] TLS accepted, copying payload");
-            let _ = tokio::io::copy(&mut payload, &mut stream).await;
-            let _ = stream.flush().await;
+            if let Err(e) = tokio::io::copy(&mut payload, &mut stream).await {
+                warn!("[payload] copy failed: {}", e);
+                return;
+            }
+            if let Err(e) = stream.flush().await {
+                warn!("[payload] flush failed: {}", e);
+                return;
+            }
             let _ = stream.shutdown().await;
             // Guarantee a final 100% progress event so the UI always clears
             // regardless of file size or interval timing.

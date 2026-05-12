@@ -6,7 +6,7 @@ use tokio::{
     select,
     sync::{Mutex, mpsc},
 };
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager},
@@ -53,7 +53,6 @@ pub struct KdeConnectCore {
     in_rx: mpsc::UnboundedReceiver<AppEvent>,
     conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
     mpris_conn_tx: mpsc::UnboundedSender<ConnectionEvent>,
-    pending_pair: Arc<Mutex<std::collections::HashSet<DeviceId>>>,
 }
 
 impl KdeConnectCore {
@@ -90,7 +89,9 @@ impl KdeConnectCore {
 
         let udp = Arc::clone(&udp_transport);
         tokio::spawn(async move {
-            let _ = udp.listen().await;
+            if let Err(e) = udp.listen().await {
+                error!("UDP listener failed: {}", e);
+            }
         });
 
         let run_command_plugin = plugins::run_command::RunCommandRequest::default();
@@ -106,6 +107,7 @@ impl KdeConnectCore {
         };
         plugin_registry.register(Arc::new(sms_plugin)).await;
 
+        plugins::mpris::init_telephony_signal();
         plugins::mpris::expose_phone_mpris(mpris_conn_rx, event_tx.clone());
 
         Ok((
@@ -123,7 +125,6 @@ impl KdeConnectCore {
                 in_rx,
                 conn_tx,
                 mpris_conn_tx,
-                pending_pair: Arc::new(Mutex::new(std::collections::HashSet::new())),
             },
             conn_rx,
         ))
@@ -140,7 +141,8 @@ impl KdeConnectCore {
                     match maybe {
                         Some(event) => self.core_events(event).await,
                         None => {
-                            let _ = self.event_tx.send(CoreEvent::Error("CoreEvent channel closed".to_string()));
+                            error!("CoreEvent channel closed — aborting event loop");
+                            break;
                         }
                     }
                 }
@@ -148,7 +150,8 @@ impl KdeConnectCore {
                     match maybe_event {
                         Some(event) => self.transport_events(event).await,
                         None => {
-                            let _ = self.event_tx.send(CoreEvent::Error("Transport channel closed".to_string()));
+                            error!("Transport channel closed — aborting event loop");
+                            break;
                         }
                     }
                 }
@@ -156,7 +159,8 @@ impl KdeConnectCore {
                     match maybe_kde {
                         Some(event) => self.kde_events(event).await,
                         None => {
-                            let _ = self.event_tx.send(CoreEvent::Error("KdeEvent channel closed".to_string()));
+                            error!("KdeEvent channel closed — aborting event loop");
+                            break;
                         }
                     }
                 }
@@ -310,8 +314,6 @@ impl KdeConnectCore {
                 // the old writer task's recv() to return None, ending that task cleanly.
                 self.writer_map.lock().await.insert(id.clone(), write_tx);
 
-                self.pending_pair.lock().await.remove(&id);
-
                 if device.pair_state == crate::device::PairState::Paired {
                     if self
                         .plugin_registry
@@ -419,7 +421,6 @@ impl KdeConnectCore {
                                     // Only clean up and notify if we considered it paired; fresh
                                     // discovery announcements should be ignored silently so the
                                     // user can still initiate pairing normally from the settings app.
-                                    self.pending_pair.lock().await.remove(&id);
                                     if device.pair_state == crate::device::PairState::Paired {
                                         info!(
                                             "[core] Phone unpairing from us — cleaning up {}",
@@ -532,14 +533,10 @@ impl KdeConnectCore {
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
-                let value = serde_json::to_value(Ping { message: Some(msg) })
+                let value = serde_json::to_value(Ping { message: Some(msg), ..Default::default() })
                     .expect("fail serializing packet body");
                 let pkt = ProtocolPacket::new(PacketType::Ping, value);
-                if let Some(device) = self.device_manager.get_device(&device_id).await {
-                    self.plugin_registry
-                        .send(device.clone(), pkt, self.event_tx.clone())
-                        .await;
-                };
+                let _ = self.queue_packet(&device_id, pkt).await;
             }
             AppEvent::SendPacket(device_id, packet) => {
                 info!("Sending packet to device: {}", device_id);

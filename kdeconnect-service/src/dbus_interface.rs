@@ -185,9 +185,8 @@ impl DaemonInterface {
             "D-Bus: SendPing called for {} with message: {}",
             device_id, message
         );
-        let packet = ProtocolPacket::new(PacketType::Ping, json!({ "message": message }));
         self.event_sender
-            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
+            .send(AppEvent::Ping((DeviceId(device_id), message)))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(())
     }
