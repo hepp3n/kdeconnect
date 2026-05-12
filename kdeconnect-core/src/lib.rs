@@ -355,12 +355,24 @@ impl KdeConnectCore {
                             );
                             let _ = sender.send(connectivity_pkt);
                         }
+
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "mousepad")
+                            .await
+                        {
+                            let keyboard_state_pkt = ProtocolPacket::new(
+                                PacketType::MousePadKeyboardState,
+                                serde_json::json!({ "state": true }),
+                            );
+                            let _ = sender.send(keyboard_state_pkt);
+                        }
                     }
                     drop(guard);
                     // Send our local command list so the Android app shows
                     // the Run Command option (requires canAddCommand: true).
                     plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
-                    
+
                     if self.plugin_registry.is_plugin_enabled(&id.0, "systemvolume").await {
                         plugins::systemvolume::on_device_connect(id.clone(), self.event_tx.clone());
                     }

@@ -58,6 +58,11 @@ install-systemd-service:
     install -Dm644 kdeconnect-service/kdeconnect.service {{XDG_CONFIG}}/systemd/user/kdeconnect.service
     systemctl --user daemon-reload
 
+# Install ydotoold user service for remote input
+install-ydotoold-service:
+    install -Dm644 resources/ydotoold.service {{XDG_CONFIG}}/systemd/user/ydotoold.service
+    systemctl --user daemon-reload
+
 # Install with systemd service instead of dbus service
 install-systemd: install-bins install-applet-desktop install-systemd-service
     @echo ""
@@ -75,6 +80,12 @@ enable-service:
     @echo ""
     @echo "To add the applet:"
     @echo "  COSMIC Settings → Desktop → Panel → Configure Panel Applets → Add KDE Connect"
+
+# Enable and start remote input support
+enable-remote-input:
+    systemctl --user daemon-reload
+    systemctl --user enable --now ydotoold.service
+    @echo "Remote input service now enabled and started"
 
 
 # Debug install — full logging for both service and panel applet
@@ -126,12 +137,15 @@ clean:
 uninstall:
     -systemctl --user stop kdeconnect.service 2>/dev/null || true
     -systemctl --user disable kdeconnect.service 2>/dev/null || true
+    -systemctl --user stop ydotoold.service 2>/dev/null || true
+    -systemctl --user disable ydotoold.service 2>/dev/null || true
     rm -vf {{PREFIX}}/bin/kdeconnect-service
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-applet
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-settings
     rm -vf {{PREFIX}}/bin/cosmic-ext-connect-sms
     rm -vf {{XDG_CONFIG}}/kdeconnect/*
     rm -vf {{XDG_CONFIG}}/systemd/user/kdeconnect.service
+    rm -vf {{XDG_CONFIG}}/systemd/user/ydotoold.service
     rm -vf {{XDG_CONFIG}}/autostart/{{APPID}}.daemon.desktop
     rm -rvf {{PREFIX}}/share/kdeconnect/*
     rm -vf {{PREFIX}}/share/applications/{{APPID}}.desktop

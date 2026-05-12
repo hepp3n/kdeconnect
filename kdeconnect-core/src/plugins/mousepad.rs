@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    process::Command,
+    process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::mpsc;
@@ -25,6 +25,7 @@ impl Plugin for KeyboardState {
 }
 
 static YDOTOOL_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
+static YDOTOOL_DAEMON_WARNED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +87,11 @@ impl MousepadRequest {
 impl PresenterRequest {
     pub async fn received_packet(&self) {
         let request = self.clone();
-        let _ = tokio::task::spawn_blocking(move || run_presenter_request(&request)).await;
+        match tokio::task::spawn_blocking(move || run_presenter_request(&request)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!("[mousepad] failed to handle presenter request: {error}"),
+            Err(error) => warn!("[mousepad] presenter handler task failed: {error}"),
+        }
     }
 }
 
@@ -96,7 +101,12 @@ fn run_presenter_request(request: &PresenterRequest) -> anyhow::Result<()> {
     }
 
     if let (Some(dx), Some(dy)) = (request.dx, request.dy) {
-        return ydotool(["mousemove", "--", &(dx * 1000.0).round().to_string(), &(dy * 1000.0).round().to_string()]);
+        return ydotool([
+            "mousemove",
+            "--",
+            &(dx * 1000.0).round().to_string(),
+            &(dy * 1000.0).round().to_string(),
+        ]);
     }
 
     Ok(())
@@ -104,15 +114,26 @@ fn run_presenter_request(request: &PresenterRequest) -> anyhow::Result<()> {
 
 fn run_mousepad_request(request: &MousepadRequest) -> anyhow::Result<()> {
     if let Some(scroll) = request.scroll {
+        let dx = request.dx.unwrap_or_default();
         let dy = request.dy.unwrap_or_default();
-        if scroll && dy != 0.0 {
-            let button = if dy > 0.0 { "0xC5" } else { "0xC4" };
-            return ydotool(["click", button]);
+        if scroll && (dx != 0.0 || dy != 0.0) {
+            return ydotool([
+                "mousemove",
+                "-w",
+                "--",
+                &dx.round().to_string(),
+                &dy.round().to_string(),
+            ]);
         }
     }
 
     if let (Some(dx), Some(dy)) = (request.dx, request.dy) {
-        return ydotool(["mousemove", "--", &dx.round().to_string(), &dy.round().to_string()]);
+        return ydotool([
+            "mousemove",
+            "--",
+            &dx.round().to_string(),
+            &dy.round().to_string(),
+        ]);
     }
 
     if request.singleclick.unwrap_or(false) {
@@ -140,7 +161,7 @@ fn run_mousepad_request(request: &MousepadRequest) -> anyhow::Result<()> {
             return Ok(());
         }
         if !text.is_empty() {
-            return ydotool(["type", text]);
+            return ydotool(["type", "--", text]);
         }
     }
 
@@ -181,19 +202,41 @@ fn ydotool_key_with_modifiers(code: u16, request: &MousepadRequest) -> anyhow::R
 }
 
 fn ydotool<const N: usize>(args: [&str; N]) -> anyhow::Result<()> {
-    let status = Command::new("ydotool").args(args).status();
+    let output = Command::new("ydotool")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
 
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => {
-            warn!("[mousepad] ydotool exited with status {}", status);
-            Ok(())
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let message = stderr.trim();
+            if message.contains("ydotoold is running") || message.contains("failed to connect socket")
+            {
+                if !YDOTOOL_DAEMON_WARNED.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "[mousepad] ydotoold is not running or its socket is unavailable; remote input is unavailable"
+                    );
+                }
+            } else {
+                if message.is_empty() {
+                    warn!("[mousepad] ydotool exited with status {}", output.status);
+                } else {
+                    warn!(
+                        "[mousepad] ydotool exited with status {}: {message}",
+                        output.status
+                    );
+                }
+            }
+            anyhow::bail!("ydotool exited with status {}", output.status)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !YDOTOOL_MISSING_WARNED.swap(true, Ordering::Relaxed) {
                 warn!("[mousepad] ydotool is not installed; remote input is unavailable");
             }
-            Ok(())
+            Err(e.into())
         }
         Err(e) => Err(e.into()),
     }

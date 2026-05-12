@@ -1,0 +1,11 @@
+[Unit]
+Description=ydotool daemon for COSMIC KDE Connect remote input
+Documentation=man:ydotool(1)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ydotoold --socket-path=%t/.ydotool_socket --socket-perm=0600
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
