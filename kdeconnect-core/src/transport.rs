@@ -28,6 +28,11 @@ use crate::{
 
 pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Application-level heartbeat interval — keeps the TCP connection from going
+/// idle long enough to trigger OS keepalive probes (which Android Doze often
+/// ignores, causing spurious disconnects).
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
 pub const DEFAULT_LISTEN_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
     Ipv4Addr::UNSPECIFIED,
@@ -64,12 +69,12 @@ pub enum TransportEvent {
     Disconnected { id: DeviceId, conn_id: u64 },
 }
 
-/// Enable TCP keepalive so the OS detects a dead connection within ~60s
-/// (30s idle + 3 × 10s probes) rather than waiting indefinitely.
+/// Enable TCP keepalive so the OS detects a dead connection within ~25s
+/// (10s idle + 3 × 5s probes) rather than waiting indefinitely.
 fn apply_keepalive(stream: &TcpStream) {
     let keepalive = TcpKeepalive::new()
-        .with_time(Duration::from_secs(30))
-        .with_interval(Duration::from_secs(10))
+        .with_time(Duration::from_secs(10))
+        .with_interval(Duration::from_secs(5))
         .with_retries(3);
     let sock_ref = socket2::SockRef::from(stream);
     if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive) {
@@ -540,18 +545,50 @@ async fn handle_connection<R, W>(
         });
     });
 
-    // Writer task — drains the write channel and sends packets to the peer.
+    // Writer task — drains the write channel and sends periodic heartbeats
+    // to prevent the connection from going idle long enough for the OS-level
+    // TCP keepalive to kick in (Android Doze drops keepalive probes, causing
+    // spurious disconnects ~30s after the last packet).
     tokio::spawn(async move {
-        while let Some(msg) = write_rx.lock().await.recv().await {
-            debug!(peer = ?peer, packet_type = ?msg.packet_type, "writing");
+        loop {
+            let msg = tokio::select! {
+                msg = async {
+                    let mut rx = write_rx.lock().await;
+                    rx.recv().await
+                } => msg,
+                _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
+                    let heartbeat = ProtocolPacket::new(
+                        PacketType::Ping,
+                        serde_json::json!({"message": ""}),
+                    );
+                    let raw = heartbeat
+                        .as_raw()
+                        .expect("Failed to serialize heartbeat");
+                    if let Err(e) = writer.write_all(&raw).await {
+                        error!(peer = ?peer, "Error writing heartbeat: {}", e);
+                        break;
+                    }
+                    if let Err(e) = writer.flush().await {
+                        error!(peer = ?peer, "Error flushing heartbeat: {}", e);
+                        break;
+                    }
+                    continue;
+                }
+            };
+            match msg {
+                Some(msg) => {
+                    debug!(peer = ?peer, packet_type = ?msg.packet_type, "writing");
 
-            if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
-                error!(peer = ?peer, "Error writing: {}", e);
-                break;
-            }
-            if let Err(e) = writer.flush().await {
-                error!(peer = ?peer, "Error flushing: {}", e);
-                break;
+                    if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
+                        error!(peer = ?peer, "Error writing: {}", e);
+                        break;
+                    }
+                    if let Err(e) = writer.flush().await {
+                        error!(peer = ?peer, "Error flushing: {}", e);
+                        break;
+                    }
+                }
+                None => break,
             }
         }
         let _ = writer.shutdown().await;
@@ -589,10 +626,10 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                                                                                               "kdeconnect.mousepad.request"]),
         ("mpris",               &["kdeconnect.mpris", "kdeconnect.mpris.request"],                          &["kdeconnect.mpris", "kdeconnect.mpris.request"]),
         ("notification",        &["kdeconnect.notification",
-                                   "kdeconnect.notification.request"],                                       &["kdeconnect.notification",
-                                                                                                              "kdeconnect.notification.action",
-                                                                                                              "kdeconnect.notification.reply",
-                                                                                                              "kdeconnect.notification.request"]),
+                                    "kdeconnect.notification.action",
+                                    "kdeconnect.notification.reply",
+                                    "kdeconnect.notification.request"],                                       &["kdeconnect.notification",
+                                                                                                               "kdeconnect.notification.request"]),
         ("ping",                &["kdeconnect.ping"],                                                       &["kdeconnect.ping"]),
         ("presenter",           &["kdeconnect.presenter"],                                                  &[]),
         ("runcommand",          &["kdeconnect.runcommand",

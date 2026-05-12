@@ -24,13 +24,11 @@ pub struct KeyStore {
 impl KeyStore {
     pub async fn load(device_uuid: &str) -> anyhow::Result<Self> {
         let config_dir = dirs::config_dir()
-            .expect("cant find config directory")
+            .ok_or_else(|| anyhow::anyhow!("cannot find config directory"))?
             .join(CONFIG_DIR);
 
         if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)
-                .await
-                .expect("failed to create config directory");
+            fs::create_dir_all(&config_dir).await?;
         }
 
         let standard_cert_path = config_dir.join("certificate.pem");
@@ -78,8 +76,7 @@ impl KeyStore {
         let server_config = Arc::new(
             rustls::ServerConfig::builder()
                 .with_client_cert_verifier(verifier.clone())
-                .with_single_cert(vec![cert], keys)
-                .expect("building server config"),
+                .with_single_cert(vec![cert], keys)?,
         );
 
         Ok(Self {

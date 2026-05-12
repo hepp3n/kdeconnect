@@ -64,7 +64,9 @@ impl Default for Device {
 impl Device {
     pub async fn new(id: String, name: String, address: SocketAddr) -> anyhow::Result<Self> {
         let device_id = DeviceId(id);
-        let config_dir = dirs::config_dir().unwrap().join(CONFIG_DIR);
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("cannot find config dir"))?
+            .join(CONFIG_DIR);
         let file_path = config_dir.join(format!("{}.ron", &device_id));
 
         if file_path.exists() {
@@ -88,7 +90,9 @@ impl Device {
         data.pair_state = pair_state;
 
         if let Ok(file_content) = ron::ser::to_string_pretty(&data, PrettyConfig::new()) {
-            let config_dir = dirs::config_dir().unwrap().join(CONFIG_DIR);
+            let config_dir = dirs::config_dir()
+                .ok_or_else(|| anyhow::anyhow!("cannot find config dir"))?
+                .join(CONFIG_DIR);
             let file_path = config_dir.join(format!("{}.ron", self.device_id));
 
             if file_path.exists() {

@@ -31,8 +31,8 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.mousepad.keyboardstate",
     "kdeconnect.mousepad.request",
     "kdeconnect.mpris",
-    "kdeconnect.mpris.request",
     "kdeconnect.notification",
+    "kdeconnect.notification.request",
     "kdeconnect.ping",
     "kdeconnect.presenter",
     "kdeconnect.runcommand",
@@ -59,8 +59,6 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.mpris.request",
     "kdeconnect.notification.request",
     "kdeconnect.notification",
-    "kdeconnect.notification.action",
-    "kdeconnect.notification.reply",
     "kdeconnect.ping",
     "kdeconnect.runcommand",
     "kdeconnect.runcommand.request",
@@ -70,6 +68,7 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.request_conversations",
     "kdeconnect.sms.request_conversation",
     "kdeconnect.systemvolume",
+    "kdeconnect.telephony.request_mute",
 ];
 
 #[derive(Debug)]
@@ -84,13 +83,11 @@ pub struct Config {
 impl Config {
     pub async fn load(_out_caps: Vec<String>) -> anyhow::Result<Self> {
         let config_dir = dirs::config_dir()
-            .expect("cannot find config dir")
+            .ok_or_else(|| anyhow::anyhow!("cannot find config dir"))?
             .join(CONFIG_DIR);
 
         if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)
-                .await
-                .expect("cannot create config dir");
+            fs::create_dir_all(&config_dir).await?;
         }
 
         let id_file = config_dir.join(DEVICE_ID_STORE);
@@ -124,9 +121,7 @@ impl Config {
                 .to_string(),
             listen_addr: DEFAULT_LISTEN_ADDR,
             discovery_interval: DEFAULT_DISCOVERY_INTERVAL,
-            key_store: KeyStore::load(&identity.device_id)
-                .await
-                .expect("failed to create keystore"),
+            key_store: KeyStore::load(&identity.device_id).await?,
             identity,
         })
     }

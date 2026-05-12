@@ -171,7 +171,9 @@ impl PluginRegistry {
                         "Successfully parsed {} SMS messages",
                         sms_messages.messages.len()
                     );
-                    sms_messages.received_packet(connection_tx).await;
+                    sms_messages
+                        .received_packet(device.device_id.0.clone(), connection_tx)
+                        .await;
                 } else {
                     warn!("Failed to parse SMS messages packet: {:?}", body);
                 }

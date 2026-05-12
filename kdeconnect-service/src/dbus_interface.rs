@@ -41,7 +41,9 @@ pub struct DbusDevice {
 // --- Per-device cache helpers ------------------------------------------------
 
 fn device_cache_dir(device_id: &str) -> std::path::PathBuf {
-    let base = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"));
+    let base = dirs::data_local_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
     base.join("kdeconnect").join(device_id)
 }
 
@@ -257,14 +259,10 @@ impl DaemonInterface {
 
     /// Return the list of disabled plugin IDs for a device.
     async fn get_disabled_plugins(&self, device_id: String) -> Vec<String> {
-        let path = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
-            .join("kdeconnect")
-            .join(format!("{}_plugins.json", device_id));
-        match tokio::fs::read_to_string(&path).await {
-            Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
-            Err(_) => vec![],
-        }
+        kdeconnect_core::plugin_config::load_disabled_plugins(&device_id)
+            .await
+            .into_iter()
+            .collect()
     }
 
     /// Trigger a UDP identity broadcast to discover nearby devices.
@@ -873,7 +871,9 @@ impl KdeConnectService {
 
                 *sms_cache.lock().await = Some(messages_json.clone());
 
-                if let Some(did) = current_device_id.lock().await.as_deref() {
+                if let Some(did) = sms_data.device_id.as_deref() {
+                    save_sms_cache(did, &messages_json).await;
+                } else if let Some(did) = current_device_id.lock().await.as_deref() {
                     save_sms_cache(did, &messages_json).await;
                 }
 

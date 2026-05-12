@@ -9,6 +9,8 @@ use crate::plugin_interface::Plugin;
 pub struct SmsMessages {
     pub messages: Vec<SmsMessage>,
     pub version: Option<i32>,
+    #[serde(skip)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,13 +46,19 @@ pub struct SmsAttachment {
 }
 
 impl SmsMessages {
-    pub async fn received_packet(&self, tx: mpsc::UnboundedSender<ConnectionEvent>) {
+    pub async fn received_packet(
+        &self,
+        device_id: String,
+        tx: mpsc::UnboundedSender<ConnectionEvent>,
+    ) {
         info!(
             "Received SMS messages packet with {} messages",
             self.messages.len()
         );
 
-        let event = ConnectionEvent::SmsMessages(self.clone());
+        let mut event_data = self.clone();
+        event_data.device_id = Some(device_id);
+        let event = ConnectionEvent::SmsMessages(event_data);
         let _ = tx.send(event);
     }
 }
