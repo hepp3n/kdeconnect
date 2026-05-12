@@ -16,7 +16,7 @@ use tokio::{
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
 };
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -81,6 +81,7 @@ pub struct TcpTransport {
     listen_addr: SocketAddr,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     identity: Arc<Identity>,
+    client_config: Arc<rustls::ClientConfig>,
     server_config: Arc<rustls::ServerConfig>,
 }
 
@@ -90,12 +91,14 @@ impl TcpTransport {
         let listen_addr = config.listen_addr;
         let event_tx = event_tx.clone();
         let identity = Arc::new(config.identity.clone());
+        let client_config = config.key_store.client_config.clone();
         let server_config = config.key_store.server_config.clone();
 
         Self {
             listen_addr,
             event_tx,
             identity,
+            client_config,
             server_config,
         }
     }
@@ -192,39 +195,32 @@ impl TcpTransport {
                         continue;
                     }
 
-                    // Step 2: send our identity back pre-TLS
-                    debug!(peer = ?peer, "[tcp] step 2: sending our pre-TLS identity");
-                    let our_identity = ProtocolPacket::new(
-                        PacketType::Identity,
-                        serde_json::to_value(&*self.identity).unwrap(),
-                    )
-                    .as_raw()
-                    .expect("Failed to serialize identity packet");
-                    if let Err(e) = stream.write_all(our_identity.as_slice()).await {
-                        warn!(peer = ?peer, "[tcp] failed to send pre-TLS identity: {}", e);
-                        continue;
-                    }
-                    let _ = stream.flush().await;
-                    debug!(peer = ?peer, "[tcp] step 2: pre-TLS identity sent");
-
-                    // Step 3: TLS handshake — we are the server (phone connected to us)
-                    debug!(peer = ?peer, "[tcp] step 3: starting TLS accept (we are server)");
-                    let mut tls_stream = match TlsAcceptor::from(self.server_config.clone())
-                        .accept(stream)
+                    // Step 2: TLS handshake. KDE Connect's LAN protocol makes the
+                    // side accepting the TCP connection act as the TLS client.
+                    debug!(peer = ?peer, "[tcp] step 2: starting TLS connect (we are client)");
+                    let server_name = match ServerName::try_from(id.as_str()).map(|name| name.to_owned()) {
+                        Ok(name) => name,
+                        Err(e) => {
+                            warn!(peer = ?peer, device_id = ?id, "[tcp] invalid TLS server name: {}", e);
+                            continue;
+                        }
+                    };
+                    let mut tls_stream = match TlsConnector::from(self.client_config.clone())
+                        .connect(server_name, stream)
                         .await
                     {
                         Ok(s) => s,
                         Err(e) => {
-                            warn!(peer = ?peer, "[tcp] TLS accept failed: {}", e);
+                            warn!(peer = ?peer, "[tcp] TLS connect failed: {}", e);
                             continue;
                         }
                     };
-                    info!(peer = ?peer, device_id = ?id, "[tcp] step 3: TLS established");
+                    info!(peer = ?peer, device_id = ?id, "[tcp] step 2: TLS established");
 
-                    // Step 4: send our identity post-TLS for plugin negotiation.
+                    // Step 3: send our identity post-TLS for plugin negotiation.
                     // Filter capabilities based on per-device disabled plugins so
                     // the phone immediately knows which packet types to stop sending.
-                    debug!(peer = ?peer, "[tcp] step 4: sending post-TLS identity");
+                    debug!(peer = ?peer, "[tcp] step 3: sending post-TLS identity");
                     let filtered = filtered_identity_for_device(&id).await;
                     let post_tls_identity = ProtocolPacket::new(
                         PacketType::Identity,
@@ -237,7 +233,7 @@ impl TcpTransport {
                         continue;
                     }
                     let _ = tls_stream.flush().await;
-                    debug!(peer = ?peer, "[tcp] step 4: post-TLS identity sent");
+                    debug!(peer = ?peer, "[tcp] step 3: post-TLS identity sent");
 
                     let (reader, writer) = split(tls_stream);
 
@@ -584,9 +580,15 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                    "kdeconnect.contacts.response_vcards"],                                  &["kdeconnect.contacts.request_all_uids_timestamps",
                                                                                                               "kdeconnect.contacts.request_vcards_by_uid"]),
         ("findmyphone",         &[],                                                                        &["kdeconnect.findmyphone.request"]),
+        ("mousepad",            &["kdeconnect.mousepad.echo",
+                                   "kdeconnect.mousepad.keyboardstate",
+                                   "kdeconnect.mousepad.request"],                                           &["kdeconnect.mousepad.echo",
+                                                                                                              "kdeconnect.mousepad.keyboardstate",
+                                                                                                              "kdeconnect.mousepad.request"]),
         ("mpris",               &["kdeconnect.mpris", "kdeconnect.mpris.request"],                          &["kdeconnect.mpris", "kdeconnect.mpris.request"]),
         ("notification",        &["kdeconnect.notification"],                                               &["kdeconnect.notification.request"]),
         ("ping",                &["kdeconnect.ping"],                                                       &["kdeconnect.ping"]),
+        ("presenter",           &["kdeconnect.presenter"],                                                  &[]),
         ("runcommand",          &["kdeconnect.runcommand.request"],                                         &["kdeconnect.runcommand"]),
         ("share",               &["kdeconnect.share.request"],                                              &["kdeconnect.share.request", "kdeconnect.share.request.update"]),
         ("sms",                 &["kdeconnect.sms.messages", "kdeconnect.sms.attachment_file"],             &["kdeconnect.sms.request",

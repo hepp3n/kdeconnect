@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::plugin_interface::Plugin;
 
@@ -80,11 +81,13 @@ impl Notification {
                 notify.action(action, action);
             }
 
-            notify
+            if let Err(e) = notify
                 // .action("clicked", "Click to reply")
                 .hint(notify_rust::Hint::Resident(true))
                 .show()
-                .unwrap();
+            {
+                warn!("[notification] failed to show notification: {}", e);
+            }
             // .wait_for_action(|action| {
             //     notify_action = Some(action.to_string());
             // });

@@ -5,6 +5,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 use tracing::debug;
+use x509_parser::prelude::*;
 
 use crate::{
     crypto::KeyStore,
@@ -24,11 +25,14 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.connectivity_report",
     "kdeconnect.contacts.response_uids_timestamps",
     "kdeconnect.contacts.response_vcards",
+    "kdeconnect.mousepad.echo",
     "kdeconnect.mousepad.keyboardstate",
+    "kdeconnect.mousepad.request",
     "kdeconnect.mpris",
     "kdeconnect.mpris.request",
     "kdeconnect.notification",
     "kdeconnect.ping",
+    "kdeconnect.presenter",
     "kdeconnect.runcommand.request",
     "kdeconnect.share.request",
     "kdeconnect.sms.messages",
@@ -43,6 +47,7 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.contacts.request_all_uids_timestamps",
     "kdeconnect.contacts.request_vcards_by_uid",
     "kdeconnect.findmyphone.request",
+    "kdeconnect.mousepad.echo",
     "kdeconnect.mousepad.keyboardstate",
     "kdeconnect.mousepad.request",
     "kdeconnect.mpris",
@@ -81,32 +86,26 @@ impl Config {
         }
 
         let id_file = config_dir.join(DEVICE_ID_STORE);
-
-        let identity = match id_file.exists() {
-            true => {
-                let mut buffer = String::new();
-                let mut file = fs::File::open(&id_file).await.expect("cannot open file");
-
-                file.read_to_string(&mut buffer)
-                    .await
-                    .expect("fail reading file content");
-
-                let device_id = buffer.trim().to_string();
-                make_identity(device_id, Some(DEFAULT_LISTEN_PORT)).await
-            }
-            false => {
-                let device_id = uuid::Uuid::new_v4().to_string();
-
-                let mut file = fs::File::create(&id_file)
-                    .await
-                    .expect("cannot create file");
-                file.write_all(device_id.as_bytes())
-                    .await
-                    .expect("fail writing device id to file");
-
-                make_identity(device_id, Some(DEFAULT_LISTEN_PORT)).await
-            }
+        let stored_device_id = if id_file.exists() {
+            let mut buffer = String::new();
+            let mut file = fs::File::open(&id_file).await?;
+            file.read_to_string(&mut buffer).await?;
+            Some(buffer.trim().to_string())
+        } else {
+            None
         };
+
+        let cert_device_id = certificate_common_name(&config_dir.join("certificate.pem")).await;
+        let device_id = cert_device_id
+            .or(stored_device_id)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        if fs::read_to_string(&id_file).await.ok().as_deref().map(str::trim) != Some(device_id.as_str()) {
+            let mut file = fs::File::create(&id_file).await?;
+            file.write_all(device_id.as_bytes()).await?;
+        }
+
+        let identity = make_identity(device_id, Some(DEFAULT_LISTEN_PORT)).await;
 
         debug!("CONFIG initialized.");
 
@@ -123,6 +122,18 @@ impl Config {
             identity,
         })
     }
+}
+
+async fn certificate_common_name(path: &std::path::Path) -> Option<String> {
+    let bytes = fs::read(path).await.ok()?;
+    let (_, pem) = parse_x509_pem(&bytes).ok()?;
+    let cert = pem.parse_x509().ok()?;
+    cert.subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
 }
 
 async fn make_identity(device_id: String, tcp_port: Option<u16>) -> Identity {

@@ -48,11 +48,9 @@ impl Plugin for Battery {
 
 impl Battery {
     pub async fn received_packet(&self, event: mpsc::UnboundedSender<ConnectionEvent>) {
-        event
-            .send(ConnectionEvent::StateUpdated(DeviceState::Battery {
-                level: self.charge,
-                charging: self.is_charging,
-            }))
-            .unwrap();
+        let _ = event.send(ConnectionEvent::StateUpdated(DeviceState::Battery {
+            level: self.charge,
+            charging: self.is_charging,
+        }));
     }
 }

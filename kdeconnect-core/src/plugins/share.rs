@@ -39,22 +39,30 @@ impl ShareRequest {
             let pathbuf = PathBuf::from_str(file)?;
 
             if !pathbuf.exists() {
+                warn!("[share] skipping missing path: {}", pathbuf.display());
                 continue;
             }
 
-            let filename = pathbuf
+            let Some(filename) = pathbuf
                 .file_name()
-                .unwrap()
-                .to_str()
-                .expect("OsString conversion")
-                .to_string();
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+            else {
+                warn!("[share] skipping path without valid UTF-8 filename: {}", pathbuf.display());
+                continue;
+            };
+
+            let Some(path) = pathbuf.to_str().map(ToOwned::to_owned) else {
+                warn!("[share] skipping non-UTF-8 path: {}", pathbuf.display());
+                continue;
+            };
 
             let body = ShareRequestFile {
                 filename,
                 open: Some(false),
             };
 
-            requests.push((Self::File(body), pathbuf.to_str().unwrap().to_string()));
+            requests.push((Self::File(body), path));
         }
 
         Ok(requests)

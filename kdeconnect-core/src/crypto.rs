@@ -33,10 +33,24 @@ impl KeyStore {
                 .expect("failed to create config directory");
         }
 
-        let cert_path = config_dir.join(format!("device_cert@{}.pem", device_uuid));
-        let keys_path = config_dir.join(format!("device_key@{}.pem", device_uuid));
+        let standard_cert_path = config_dir.join("certificate.pem");
+        let kde_standard_keys_path = config_dir.join("privateKey.pem");
+        let gsconnect_standard_keys_path = config_dir.join("private.pem");
+        let device_cert_path = config_dir.join(format!("device_cert@{}.pem", device_uuid));
+        let device_keys_path = config_dir.join(format!("device_key@{}.pem", device_uuid));
 
-        if !keys_path.exists() && !cert_path.exists() {
+        // Prefer the standard KDE Connect/GSConnect filenames when present.
+        // This preserves existing pairings when migrating from another desktop
+        // implementation; Android pins the desktop certificate for a device ID.
+        let (cert_path, keys_path) = if standard_cert_path.exists() && kde_standard_keys_path.exists() {
+            (standard_cert_path, kde_standard_keys_path)
+        } else if standard_cert_path.exists() && gsconnect_standard_keys_path.exists() {
+            (standard_cert_path, gsconnect_standard_keys_path)
+        } else {
+            (device_cert_path, device_keys_path)
+        };
+
+        if !keys_path.exists() || !cert_path.exists() {
             let key = KeyPair::generate()?.serialize_pem();
             let mut key_file = fs::File::create(&keys_path).await?;
             key_file.write_all(key.as_bytes()).await?;
@@ -48,16 +62,11 @@ impl KeyStore {
 
         let verifier = Arc::new(NoCertificateVerification::new(default_provider()));
 
-        // Read files asynchronously
-        let cert_bytes = fs::read(&cert_path)
-            .await
-            .expect("reading certificate file");
-        let keys_bytes = fs::read(&keys_path)
-            .await
-            .expect("reading private key file");
+        let cert_bytes = fs::read(&cert_path).await?;
+        let keys_bytes = fs::read(&keys_path).await?;
 
-        let cert = CertificateDer::from_pem_slice(&cert_bytes).expect("decoding certfificate");
-        let keys = PrivateKeyDer::from_pem_slice(&keys_bytes).expect("decoding private key");
+        let cert = CertificateDer::from_pem_slice(&cert_bytes)?;
+        let keys = PrivateKeyDer::from_pem_slice(&keys_bytes)?;
 
         let client_config = Arc::new(
             rustls::ClientConfig::builder()

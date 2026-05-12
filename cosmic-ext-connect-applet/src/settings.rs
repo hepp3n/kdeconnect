@@ -87,6 +87,12 @@ fn implemented_plugins() -> Vec<PluginInfo> {
         icon: "media-playback-start-symbolic",
     },
     PluginInfo {
+        id: "mousepad",
+        name: fl!("plugin-mousepad-name"),
+        description: fl!("plugin-mousepad-desc"),
+        icon: "input-mouse-symbolic",
+    },
+    PluginInfo {
         id: "notification",
         name: fl!("plugin-notifications-name"),
         description: fl!("plugin-notifications-desc"),
@@ -97,6 +103,12 @@ fn implemented_plugins() -> Vec<PluginInfo> {
         name: fl!("plugin-ping-name"),
         description: fl!("plugin-ping-desc"),
         icon: "network-transmit-receive-symbolic",
+    },
+    PluginInfo {
+        id: "presenter",
+        name: fl!("plugin-presenter-name"),
+        description: fl!("plugin-presenter-desc"),
+        icon: "x-office-presentation-symbolic",
     },
     PluginInfo {
         id: "runcommand",

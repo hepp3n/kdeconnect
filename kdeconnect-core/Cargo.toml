@@ -28,3 +28,4 @@ zbus = { workspace = true }
 libpulse-binding = { workspace = true }
 base64 = "0.22"
 tempfile = "3"
+x509-parser = "0.18"

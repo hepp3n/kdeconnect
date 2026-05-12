@@ -59,16 +59,16 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::SmsAttachmentFile
         | PacketType::SmsRequestAttachment => Some("sms"),
         PacketType::SystemVolume | PacketType::SystemVolumeRequest => Some("systemvolume"),
+        PacketType::MousePadEcho | PacketType::MousePadKeyboardState | PacketType::MousePadRequest => {
+            Some("mousepad")
+        }
+        PacketType::Presenter => Some("presenter"),
         PacketType::Telephony | PacketType::TelephonyRequestMute => Some("telephony"),
         // Core / unmanaged packets are never gated
         PacketType::Identity
         | PacketType::Pair
         | PacketType::Lock
         | PacketType::LockRequest
-        | PacketType::MousePadEcho
-        | PacketType::MousePadKeyboardState
-        | PacketType::MousePadRequest
-        | PacketType::Presenter
         | PacketType::Sftp
         | PacketType::SftpRequest
         | PacketType::Unknown(_) => None,
@@ -249,6 +249,19 @@ impl PluginRegistry {
                     serde_json::from_value::<plugins::mousepad::KeyboardState>(body)
                 {
                     debug!("{:?}", keyboard_state);
+                }
+            }
+            PacketType::MousePadRequest => {
+                if let Ok(request) = serde_json::from_value::<plugins::mousepad::MousepadRequest>(body) {
+                    request.received_packet(&device, core_tx).await;
+                }
+            }
+            PacketType::MousePadEcho => {
+                debug!("MousePadEcho received");
+            }
+            PacketType::Presenter => {
+                if let Ok(request) = serde_json::from_value::<plugins::mousepad::PresenterRequest>(body) {
+                    request.received_packet().await;
                 }
             }
             PacketType::Mpris => {

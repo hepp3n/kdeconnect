@@ -246,7 +246,9 @@ impl KdeConnectCore {
             CoreEvent::SendPacket { device, packet } => {
                 info!("[core] sending packet");
                 if let Some(sender) = guard.get(&device) {
-                    sender.send(packet).unwrap();
+                    if let Err(e) = sender.send(packet) {
+                        tracing::warn!("[core] failed to queue packet for {}: {}", device, e);
+                    }
                 }
             }
             CoreEvent::SendPaylod {
@@ -483,15 +485,25 @@ impl KdeConnectCore {
 
                 if let Some(sender) = sender {
                     debug!("sender available.");
-                    let pkts = ShareRequest::share_files(files_list)
-                        .await
-                        .expect("creating share request");
+                    let pkts = match ShareRequest::share_files(files_list).await {
+                        Ok(pkts) => pkts,
+                        Err(e) => {
+                            tracing::warn!("[share] failed to prepare share request: {}", e);
+                            return;
+                        }
+                    };
                     for (pkt_body, path) in pkts {
                         let packet = ProtocolPacket::new(
                             PacketType::ShareRequest,
                             serde_json::to_value(pkt_body).expect("serializing packet body"),
                         );
-                        let file = DeviceFile::open(path).await.expect("opening file");
+                        let file = match DeviceFile::open(&path).await {
+                            Ok(file) => file,
+                            Err(e) => {
+                                tracing::warn!("[share] failed to open '{}': {}", path, e);
+                                continue;
+                            }
+                        };
                         let payload = DevicePayload::from(file);
                         //
                         // crate transfer adapter to get file transfer progress
