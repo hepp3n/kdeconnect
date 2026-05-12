@@ -582,12 +582,6 @@ impl KdeConnectService {
     pub async fn new() -> Result<Self> {
         info!("Initializing KDE Connect D-Bus service");
 
-        let connection = Connection::session().await?;
-        info!("D-Bus session connection established");
-
-        connection.request_name(SERVICE_NAME).await?;
-        info!("D-Bus service name '{}' registered", SERVICE_NAME);
-
         info!("Initializing kdeconnect-core");
         let (mut core, mut event_receiver) = KdeConnectCore::new().await?;
         let event_sender = core.take_events();
@@ -633,11 +627,6 @@ impl KdeConnectService {
             event_sender: event_sender.clone(),
             devices: devices.clone(),
         };
-        connection
-            .object_server()
-            .at(DAEMON_PATH, daemon_interface)
-            .await?;
-        info!("Daemon interface registered at {}", DAEMON_PATH);
 
         let sms_cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let current_device_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -647,24 +636,26 @@ impl KdeConnectService {
             sms_cache: sms_cache.clone(),
             current_device_id: current_device_id.clone(),
         };
-        connection
-            .object_server()
-            .at(SMS_PATH, sms_interface)
-            .await?;
-        info!("SMS interface registered at {}", SMS_PATH);
 
         let contacts_interface = ContactsInterface {
             event_sender: event_sender.clone(),
         };
-        connection
-            .object_server()
-            .at(CONTACTS_PATH, contacts_interface)
+
+        let connection = zbus::connection::Builder::session()?
+            .serve_at(DAEMON_PATH, daemon_interface)?
+            .serve_at(SMS_PATH, sms_interface)?
+            .serve_at(CONTACTS_PATH, contacts_interface)?
+            .name(SERVICE_NAME)?
+            .build()
             .await?;
+        info!("D-Bus session connection established");
+        info!("D-Bus service name '{}' registered", SERVICE_NAME);
+        info!("Daemon interface registered at {}", DAEMON_PATH);
+        info!("SMS interface registered at {}", SMS_PATH);
         info!("Contacts interface registered at {}", CONTACTS_PATH);
 
         let conn_clone = connection.clone();
         let devices_clone = devices.clone();
-        let event_sender_clone = event_sender.clone();
         let sms_synced: SmsSyncedSet = Arc::new(Mutex::new(std::collections::HashSet::new()));
 
         tokio::spawn(async move {
@@ -674,7 +665,6 @@ impl KdeConnectService {
                     &conn_clone,
                     event,
                     &devices_clone,
-                    &event_sender_clone,
                     &sms_cache,
                     &current_device_id,
                     &sms_synced,
@@ -709,7 +699,6 @@ impl KdeConnectService {
         connection: &Connection,
         event: ConnectionEvent,
         devices: &Arc<Mutex<HashMap<String, DbusDevice>>>,
-        event_sender: &Arc<mpsc::UnboundedSender<AppEvent>>,
         sms_cache: &Arc<Mutex<Option<String>>>,
         current_device_id: &Arc<Mutex<Option<String>>>,
         sms_synced: &SmsSyncedSet,
@@ -815,23 +804,8 @@ impl KdeConnectService {
                 .await?;
                 debug!("Device paired signal emitted");
 
-                let sender = event_sender.clone();
-                let did = device_id.0.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    let sms_packet =
-                        ProtocolPacket::new(PacketType::SmsRequestConversations, json!({}));
-                    let _ = sender.send(AppEvent::SendPacket(DeviceId(did.clone()), sms_packet));
-                    debug!("Auto-requested SMS conversations after pairing");
-
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let contacts_packet = ProtocolPacket::new(
-                        PacketType::ContactsRequestAllUidsTimestamps,
-                        json!({}),
-                    );
-                    let _ = sender.send(AppEvent::SendPacket(DeviceId(did), contacts_packet));
-                    debug!("Auto-requested contacts after pairing");
-                });
+                // Initial plugin sync is handled in kdeconnect-core, where it can
+                // respect per-device plugin enablement before sending packets.
             }
             ConnectionEvent::Disconnected(device_id) => {
                 info!("Device disconnected: {}", device_id.0);
@@ -972,14 +946,7 @@ impl KdeConnectService {
                     .await?;
                 debug!("ClipboardReceived D-Bus signal emitted");
             }
-            ConnectionEvent::StateUpdated(state) => {
-                let device_id = match current_device_id.lock().await.clone() {
-                    Some(id) => id,
-                    None => {
-                        debug!("StateUpdated but no current device id");
-                        return Ok(());
-                    }
-                };
+            ConnectionEvent::StateUpdated((device_id, state)) => {
                 let iface_ref = connection
                     .object_server()
                     .interface::<_, DaemonInterface>(DAEMON_PATH)
@@ -988,7 +955,7 @@ impl KdeConnectService {
                     DeviceState::Battery { level, charging } => {
                         DaemonInterface::battery_received(
                             iface_ref.signal_emitter(),
-                            device_id,
+                            device_id.0,
                             level as i32,
                             charging,
                         )
@@ -998,7 +965,7 @@ impl KdeConnectService {
                     DeviceState::Connectivity((_, signal_strength)) => {
                         DaemonInterface::connectivity_received(
                             iface_ref.signal_emitter(),
-                            device_id,
+                            device_id.0,
                             signal_strength,
                         )
                         .await?;

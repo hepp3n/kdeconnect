@@ -573,7 +573,9 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
     // Map plugin IDs to the capability strings they own.
     // (incoming_caps, outgoing_caps)
     let cap_map: &[(&str, &[&str], &[&str])] = &[
-        ("battery",             &["kdeconnect.battery"],                                                    &["kdeconnect.battery.request"]),
+        ("battery",             &["kdeconnect.battery",
+                                   "kdeconnect.battery.request"],                                            &["kdeconnect.battery",
+                                                                                                              "kdeconnect.battery.request"]),
         ("clipboard",           &["kdeconnect.clipboard", "kdeconnect.clipboard.connect"],                  &["kdeconnect.clipboard"]),
         ("connectivity_report", &["kdeconnect.connectivity_report"],                                        &["kdeconnect.connectivity_report.request"]),
         ("contacts",            &["kdeconnect.contacts.response_uids_timestamps",
@@ -593,13 +595,14 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
                                                                                                               "kdeconnect.notification.request"]),
         ("ping",                &["kdeconnect.ping"],                                                       &["kdeconnect.ping"]),
         ("presenter",           &["kdeconnect.presenter"],                                                  &[]),
-        ("runcommand",          &["kdeconnect.runcommand.request"],                                         &["kdeconnect.runcommand"]),
-        ("share",               &["kdeconnect.share.request"],                                              &["kdeconnect.share.request", "kdeconnect.share.request.update"]),
+        ("runcommand",          &["kdeconnect.runcommand",
+                                   "kdeconnect.runcommand.request"],                                         &["kdeconnect.runcommand",
+                                                                                                              "kdeconnect.runcommand.request"]),
+        ("share",               &["kdeconnect.share.request"],                                              &["kdeconnect.share.request"]),
         ("sftp",                &["kdeconnect.sftp"],                                                       &["kdeconnect.sftp.request"]),
-        ("sms",                 &["kdeconnect.sms.messages", "kdeconnect.sms.attachment_file"],             &["kdeconnect.sms.request",
+        ("sms",                 &["kdeconnect.sms.messages"],                                               &["kdeconnect.sms.request",
                                                                                                               "kdeconnect.sms.request_conversations",
-                                                                                                              "kdeconnect.sms.request_conversation",
-                                                                                                              "kdeconnect.sms.request_attachment"]),
+                                                                                                              "kdeconnect.sms.request_conversation"]),
         ("systemvolume",        &["kdeconnect.systemvolume.request"],                                        &["kdeconnect.systemvolume"]),
         ("telephony",           &["kdeconnect.telephony"],                                                  &["kdeconnect.telephony.request_mute"]),                                                                                                      
     ];
@@ -660,11 +663,14 @@ pub(crate) async fn receive_payload(
 
     debug!("connected");
 
-    if let Ok(mut save_path) = tokio::fs::File::create(&temp_file).await {
-        let _ = tokio::io::copy(&mut stream, &mut save_path).await;
-        let _ = stream.flush().await;
-        let _ = stream.shutdown().await;
+    if let Some(parent) = temp_file.parent() {
+        tokio::fs::create_dir_all(parent).await?;
     }
+
+    let mut save_path = tokio::fs::File::create(temp_file).await?;
+    tokio::io::copy(&mut stream, &mut save_path).await?;
+    save_path.flush().await?;
+    stream.shutdown().await?;
 
     info!("successfully received payload");
 

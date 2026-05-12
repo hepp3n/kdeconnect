@@ -150,7 +150,9 @@ impl PluginRegistry {
             }
             PacketType::Battery => {
                 if let Ok(battery) = serde_json::from_value::<Battery>(body) {
-                    battery.received_packet(connection_tx).await;
+                    battery
+                        .received_packet(device.device_id.clone(), connection_tx)
+                        .await;
                 }
             }
             PacketType::BatteryRequest => {
@@ -224,26 +226,20 @@ impl PluginRegistry {
             }
             PacketType::ConnectivityReport => {
                 if let Ok(connectivity_rep) = serde_json::from_value::<ConnectivityReport>(body) {
-                    connectivity_rep.received_packet(connection_tx).await;
+                    connectivity_rep
+                        .received_packet(device.device_id.clone(), connection_tx)
+                        .await;
                 }
             }
             PacketType::ConnectivityReportRequest => {
                 debug!("ConnectivityReportRequest received — desktop has no cellular modem state to publish");
             }
             PacketType::ClipboardConnect => {
-                if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
-                    && let Some(timestamp) = clipboard.timestamp
-                {
-                    let local_ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    if timestamp > 0 && timestamp >= local_ts {
-                        info!("Clipboard sync on connect accepted (ts={} local={})", timestamp, local_ts);
-                        clipboard.received_packet(connection_tx).await;
-                    } else {
-                        info!("Clipboard sync on connect ignored — stale timestamp (ts={} local={})", timestamp, local_ts);
+                if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body) {
+                    if let Some(timestamp) = clipboard.timestamp {
+                        debug!("Clipboard sync on connect accepted (ts={})", timestamp);
                     }
+                    clipboard.received_packet(connection_tx).await;
                 }
             }
             PacketType::MousePadKeyboardState => {

@@ -204,6 +204,20 @@ impl KdeConnectCore {
                     }
                 }
 
+                if self
+                    .plugin_registry
+                    .is_plugin_enabled(&device_id.0, "sms")
+                    .await
+                {
+                    if let Some(sender) = guard.get(&device_id) {
+                        let sms_pkt = ProtocolPacket::new(
+                            PacketType::SmsRequestConversations,
+                            serde_json::json!({}),
+                        );
+                        let _ = sender.send(sms_pkt);
+                    }
+                }
+
                 // Bootstrap MPRIS: request the phone's player list so
                 // expose_phone_mpris can register D-Bus proxies for them.
                 if self
@@ -309,11 +323,17 @@ impl KdeConnectCore {
                 if device.pair_state == crate::device::PairState::Paired {
                     let guard = self.writer_map.lock().await;
                     if let Some(sender) = guard.get(&id) {
-                        let contacts_pkt = ProtocolPacket::new(
-                            PacketType::ContactsRequestAllUidsTimestamps,
-                            serde_json::json!({}),
-                        );
-                        let _ = sender.send(contacts_pkt);
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "contacts")
+                            .await
+                        {
+                            let contacts_pkt = ProtocolPacket::new(
+                                PacketType::ContactsRequestAllUidsTimestamps,
+                                serde_json::json!({}),
+                            );
+                            let _ = sender.send(contacts_pkt);
+                        }
 
                         if self
                             .plugin_registry
@@ -325,6 +345,18 @@ impl KdeConnectCore {
                                 serde_json::json!({ "request": true }),
                             );
                             let _ = sender.send(notification_pkt);
+                        }
+
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "sms")
+                            .await
+                        {
+                            let sms_pkt = ProtocolPacket::new(
+                                PacketType::SmsRequestConversations,
+                                serde_json::json!({}),
+                            );
+                            let _ = sender.send(sms_pkt);
                         }
 
                         if self
@@ -371,7 +403,13 @@ impl KdeConnectCore {
                     drop(guard);
                     // Send our local command list so the Android app shows
                     // the Run Command option (requires canAddCommand: true).
-                    plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
+                    if self
+                        .plugin_registry
+                        .is_plugin_enabled(&id.0, "runcommand")
+                        .await
+                    {
+                        plugins::run_command::send_command_list(&id, self.event_tx.clone()).await;
+                    }
 
                     if self.plugin_registry.is_plugin_enabled(&id.0, "systemvolume").await {
                         plugins::systemvolume::on_device_connect(id.clone(), self.event_tx.clone());

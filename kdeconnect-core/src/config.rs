@@ -20,6 +20,7 @@ pub const DEVICE_ID_STORE: &str = "device_id";
 /// The phone checks this list before sending unsolicited data (battery, SMS messages, etc.).
 const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.battery",
+    "kdeconnect.battery.request",
     "kdeconnect.clipboard",
     "kdeconnect.clipboard.connect",
     "kdeconnect.connectivity_report",
@@ -34,16 +35,17 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.notification",
     "kdeconnect.ping",
     "kdeconnect.presenter",
+    "kdeconnect.runcommand",
     "kdeconnect.runcommand.request",
     "kdeconnect.share.request",
     "kdeconnect.sftp",
     "kdeconnect.sms.messages",
-    "kdeconnect.sms.attachment_file",
     "kdeconnect.systemvolume.request",
     "kdeconnect.telephony",
 ];
 
 const OUTGOING_CAPABILITIES: &[&str] = &[
+    "kdeconnect.battery",
     "kdeconnect.battery.request",
     "kdeconnect.clipboard",
     "kdeconnect.contacts.request_all_uids_timestamps",
@@ -61,13 +63,12 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.notification.reply",
     "kdeconnect.ping",
     "kdeconnect.runcommand",
+    "kdeconnect.runcommand.request",
     "kdeconnect.share.request",
-    "kdeconnect.share.request.update",
     "kdeconnect.sftp.request",
     "kdeconnect.sms.request",
     "kdeconnect.sms.request_conversations",
     "kdeconnect.sms.request_conversation",
-    "kdeconnect.sms.request_attachment",
     "kdeconnect.systemvolume",
 ];
 

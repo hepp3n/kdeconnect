@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::device::DeviceId;
+use crate::event::{ConnectionEvent, RemoteCommand};
 use crate::plugin_interface::Plugin;
 use crate::protocol::{PacketType, ProtocolPacket};
 
@@ -79,17 +81,23 @@ impl Plugin for RunCommandRequest {
 
 impl RunCommand {
     /// Desktop received a command list from the phone (bidirectional support).
-    /// Not the primary use case — log and ignore for now.
     pub async fn received_packet(
         &self,
         device: &crate::device::Device,
-        _connection_tx: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
+        connection_tx: mpsc::UnboundedSender<crate::event::ConnectionEvent>,
         _core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
     ) {
+        let commands = parse_remote_commands(&self.command_list);
         info!(
-            "[runcommand] received command list from {} (canAddCommand={})",
-            device.device_id, self.can_add_command
+            "[runcommand] received {} remote command(s) from {} (canAddCommand={})",
+            commands.len(),
+            device.device_id,
+            self.can_add_command
         );
+        let _ = connection_tx.send(ConnectionEvent::RunCommandListReceived((
+            device.device_id.clone(),
+            commands,
+        )));
     }
 }
 
@@ -138,7 +146,7 @@ impl RunCommandRequest {
 /// Called on device connect (kdeconnect-core/src/lib.rs) and when the phone
 /// requests the list via `requestCommandList: true`.
 pub async fn send_command_list(
-    device_id: &crate::device::DeviceId,
+    device_id: &DeviceId,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) {
     let commands = load_local_commands();
@@ -173,4 +181,55 @@ pub async fn send_command_list(
         device: device_id.clone(),
         packet,
     });
+}
+
+fn parse_remote_commands(command_list: &str) -> Vec<RemoteCommand> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(command_list) else {
+        warn!("[runcommand] received invalid commandList JSON");
+        return Vec::new();
+    };
+
+    let Some(map) = value.as_object() else {
+        warn!("[runcommand] commandList is not a JSON object");
+        return Vec::new();
+    };
+
+    map.iter()
+        .filter_map(|(key, value)| {
+            let name = value.get("name")?.as_str()?.to_string();
+            let command = value
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Some(RemoteCommand {
+                key: key.clone(),
+                name,
+                command,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_commands;
+
+    #[test]
+    fn parses_remote_command_list_json_string() {
+        let commands = parse_remote_commands(
+            r#"{"abc":{"name":"Lock screen","command":"loginctl lock-session"}}"#,
+        );
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].key, "abc");
+        assert_eq!(commands[0].name, "Lock screen");
+        assert_eq!(commands[0].command, "loginctl lock-session");
+    }
+
+    #[test]
+    fn invalid_remote_command_list_is_empty() {
+        assert!(parse_remote_commands("not json").is_empty());
+        assert!(parse_remote_commands("[]").is_empty());
+    }
 }

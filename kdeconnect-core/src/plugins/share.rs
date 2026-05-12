@@ -146,6 +146,20 @@ impl ShareRequest {
 
         info!("[share] saved '{}' to {:?}", request.filename, dest);
 
+        if request.open.unwrap_or(false) {
+            let open_path = dest.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(open_path)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            })
+            .await
+            .ok();
+        }
+
         let dest_display = dest.display().to_string();
         let filename = request.filename.clone();
         tokio::task::spawn_blocking(move || {

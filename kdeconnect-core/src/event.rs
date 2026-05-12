@@ -64,7 +64,7 @@ pub enum ConnectionEvent {
     Connected((DeviceId, Device)),
     DevicePaired((DeviceId, Device)),
     Disconnected(DeviceId),
-    StateUpdated(DeviceState),
+    StateUpdated((DeviceId, DeviceState)),
     PairStateChanged((DeviceId, PairState)),
     Mpris((DeviceId, Mpris)),
     SmsMessages(SmsMessages),

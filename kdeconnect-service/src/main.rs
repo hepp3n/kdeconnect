@@ -16,33 +16,19 @@ async fn main() -> Result<()> {
 
     info!("KDE Connect service starting");
 
-    // Single-instance guard: request the well-known D-Bus name before touching
-    // any sockets or config files. DoNotQueue means a second instance exits
-    // immediately rather than racing on port binding or cert/key generation.
-    // The connection is scoped so it drops (releasing the name) before
-    // KdeConnectService::new() acquires it on its own connection — otherwise
-    // the two request_name calls on different connections would deadlock.
+    // Single-instance guard: check the bus name before touching sockets or
+    // config files. The service connection below owns the name after its D-Bus
+    // objects are registered, which avoids zbus' request-before-serve warning.
     {
         let guard_conn = zbus::Connection::session().await?;
-        match guard_conn
-            .request_name_with_flags(
-                "io.github.hepp3n.kdeconnect",
-                zbus::fdo::RequestNameFlags::DoNotQueue.into(),
-            )
-            .await
-        {
-            Ok(zbus::fdo::RequestNameReply::PrimaryOwner) => {
-                info!("Single-instance guard passed");
-            }
-            Ok(_) => {
-                info!("Another instance is already running — exiting");
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(e.into());
-            }
+        let dbus = zbus::fdo::DBusProxy::new(&guard_conn).await?;
+        let service_name = zbus::names::BusName::try_from("io.github.hepp3n.kdeconnect")?;
+        if dbus.name_has_owner(service_name).await? {
+            info!("Another instance is already running — exiting");
+            return Ok(());
         }
-    } // guard_conn drops here, name is released for KdeConnectService::new()
+        info!("Single-instance guard passed");
+    }
 
     let service = dbus_interface::KdeConnectService::new().await?;
     info!("D-Bus service started on io.github.hepp3n.kdeconnect");
