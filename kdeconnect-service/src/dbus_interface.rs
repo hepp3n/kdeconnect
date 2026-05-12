@@ -223,6 +223,16 @@ impl DaemonInterface {
         Ok(())
     }
 
+    /// Request the remote filesystem over SFTP.
+    async fn browse_device_filesystem(&self, device_id: String) -> zbus::fdo::Result<()> {
+        info!("D-Bus: BrowseDeviceFilesystem called for {}", device_id);
+        let packet = ProtocolPacket::new(PacketType::SftpRequest, json!({}));
+        self.event_sender
+            .send(AppEvent::SendPacket(DeviceId(device_id), packet))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        Ok(())
+    }
+
     /// Enable or disable a plugin for a device.
     /// Changes take effect immediately and are persisted across restarts.
     async fn set_plugin_enabled(

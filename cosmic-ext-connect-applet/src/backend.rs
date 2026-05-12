@@ -59,7 +59,7 @@ pub async fn fetch_devices() -> Vec<Device> {
                         has_findmyphone: true,
                         has_share: true,
                         share_progress: existing.as_ref().and_then(|e| e.share_progress),
-                        has_sftp: false,
+                        has_sftp: true,
                         has_mpris: false,
                         has_remote_keyboard: false,
                         has_presenter: false,
@@ -137,9 +137,12 @@ pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
 }
 
 /// Browse device filesystem (via SFTP)
-pub async fn browse_device_filesystem(_device_id: String) -> Result<()> {
-    warn!("Browse filesystem not yet implemented via D-Bus");
-    Ok(())
+pub async fn browse_device_filesystem(device_id: String) -> Result<()> {
+    let client_guard = CLIENT.lock().await;
+    let Some(client) = client_guard.as_ref() else {
+        return Err(anyhow::anyhow!("D-Bus client not initialized"));
+    };
+    client.browse_device_filesystem(&device_id).await
 }
 
 /// Accept an incoming pairing request from a device

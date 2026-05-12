@@ -52,6 +52,7 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         PacketType::Ping => Some("ping"),
         PacketType::RunCommand | PacketType::RunCommandRequest => Some("runcommand"),
         PacketType::ShareRequest | PacketType::ShareRequestUpdate => Some("share"),
+        PacketType::Sftp | PacketType::SftpRequest => Some("sftp"),
         PacketType::SmsMessages
         | PacketType::SmsRequest
         | PacketType::SmsRequestConversations
@@ -69,8 +70,6 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::Pair
         | PacketType::Lock
         | PacketType::LockRequest
-        | PacketType::Sftp
-        | PacketType::SftpRequest
         | PacketType::Unknown(_) => None,
     }
 }
@@ -287,6 +286,9 @@ impl PluginRegistry {
                     notification.received_packet(&device, core_tx).await;
                 }
             }
+            PacketType::FindMyPhoneRequest => {
+                plugins::findmyphone::handle_request(&device).await;
+            }
             PacketType::Ping => {
                 if let Ok(ping) = serde_json::from_value::<plugins::ping::Ping>(body) {
                     ping.received_packet(&device, core_tx).await;
@@ -322,6 +324,11 @@ impl PluginRegistry {
                             warn!("[share] receive_share failed: {}", e);
                         }
                     });
+                }
+            }
+            PacketType::Sftp => {
+                if let Ok(packet) = serde_json::from_value::<plugins::sftp::Sftp>(body) {
+                    packet.received_packet(&device).await;
                 }
             }
             PacketType::SystemVolumeRequest => {

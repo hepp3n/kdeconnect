@@ -83,6 +83,8 @@ plugin-runcommand-name = Spouštění příkazů
 plugin-runcommand-desc = Spouští předdefinované příkazy na počítači z telefonu.
 plugin-share-name = Sdílení souborů
 plugin-share-desc = Odesílá a přijímá soubory a odkazy mezi zařízeními.
+plugin-sftp-name = Souborový systém zařízení
+plugin-sftp-desc = Procházet soubory v telefonu přes SFTP.
 plugin-sms-name = SMS zprávy
 plugin-sms-desc = Odesílá a přijímá SMS zprávy z počítače.
 

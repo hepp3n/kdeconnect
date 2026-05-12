@@ -2793,6 +2793,7 @@ dependencies = [
  "mpris",
  "notify-rust",
  "once_cell",
+ "percent-encoding",
  "pin-project",
  "rcgen",
  "ron",

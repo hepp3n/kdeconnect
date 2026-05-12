@@ -123,6 +123,12 @@ fn implemented_plugins() -> Vec<PluginInfo> {
         icon: "document-send-symbolic",
     },
     PluginInfo {
+        id: "sftp",
+        name: fl!("plugin-sftp-name"),
+        description: fl!("plugin-sftp-desc"),
+        icon: "folder-remote-symbolic",
+    },
+    PluginInfo {
         id: "sms",
         name: fl!("plugin-sms-name"),
         description: fl!("plugin-sms-desc"),

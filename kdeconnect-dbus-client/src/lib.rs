@@ -54,6 +54,7 @@ trait Daemon {
     async fn send_files(&self, device_id: &str, files: Vec<String>) -> zbus::Result<()>;
     async fn send_clipboard(&self, device_id: &str, content: &str) -> zbus::Result<()>;
     async fn ring_device(&self, device_id: &str) -> zbus::Result<()>;
+    async fn browse_device_filesystem(&self, device_id: &str) -> zbus::Result<()>;
     async fn set_plugin_enabled(
         &self,
         device_id: &str,
@@ -199,6 +200,14 @@ impl KdeConnectClient {
     /// Ring a device (findmyphone)
     pub async fn ring_device(&self, device_id: &str) -> Result<()> {
         Ok(self.daemon_proxy.ring_device(device_id).await?)
+    }
+
+    /// Request the remote filesystem over SFTP.
+    pub async fn browse_device_filesystem(&self, device_id: &str) -> Result<()> {
+        Ok(self
+            .daemon_proxy
+            .browse_device_filesystem(device_id)
+            .await?)
     }
 
     /// Enable or disable a plugin for a device
