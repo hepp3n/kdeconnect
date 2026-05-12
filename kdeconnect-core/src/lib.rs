@@ -314,6 +314,47 @@ impl KdeConnectCore {
                             serde_json::json!({}),
                         );
                         let _ = sender.send(contacts_pkt);
+
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "notification")
+                            .await
+                        {
+                            let notification_pkt = ProtocolPacket::new(
+                                PacketType::NotificationRequest,
+                                serde_json::json!({ "request": true }),
+                            );
+                            let _ = sender.send(notification_pkt);
+                        }
+
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "battery")
+                            .await
+                        {
+                            let battery_pkt = ProtocolPacket::new(
+                                PacketType::BatteryRequest,
+                                serde_json::json!({ "request": true }),
+                            );
+                            let _ = sender.send(battery_pkt);
+                            plugins::battery::send_local_state(
+                                id.clone(),
+                                self.event_tx.clone(),
+                            )
+                            .await;
+                        }
+
+                        if self
+                            .plugin_registry
+                            .is_plugin_enabled(&id.0, "connectivity_report")
+                            .await
+                        {
+                            let connectivity_pkt = ProtocolPacket::new(
+                                PacketType::ConnectivityReportRequest,
+                                serde_json::json!({ "request": true }),
+                            );
+                            let _ = sender.send(connectivity_pkt);
+                        }
                     }
                     drop(guard);
                     // Send our local command list so the Android app shows

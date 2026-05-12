@@ -154,7 +154,7 @@ impl PluginRegistry {
                 }
             }
             PacketType::BatteryRequest => {
-                debug!("BatteryRequest received — not implemented, ignoring");
+                plugins::battery::send_local_state(device.device_id.clone(), core_tx).await;
             }
             PacketType::SmsMessages => {
                 debug!("Received SmsMessages packet");
@@ -227,6 +227,9 @@ impl PluginRegistry {
                     connectivity_rep.received_packet(connection_tx).await;
                 }
             }
+            PacketType::ConnectivityReportRequest => {
+                debug!("ConnectivityReportRequest received — desktop has no cellular modem state to publish");
+            }
             PacketType::ClipboardConnect => {
                 if let Ok(clipboard) = serde_json::from_value::<Clipboard>(body)
                     && let Some(timestamp) = clipboard.timestamp
@@ -284,6 +287,13 @@ impl PluginRegistry {
                     serde_json::from_value::<plugins::notification::Notification>(body)
                 {
                     notification.received_packet(&device, core_tx).await;
+                }
+            }
+            PacketType::NotificationRequest => {
+                if let Ok(request) =
+                    serde_json::from_value::<plugins::notification::NotificationRequest>(body)
+                {
+                    request.received_packet().await;
                 }
             }
             PacketType::FindMyPhoneRequest => {
