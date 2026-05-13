@@ -29,7 +29,7 @@ impl Display for DeviceId {
 
 #[derive(Debug, Clone)]
 pub enum DeviceState {
-    Battery { level: u8, charging: bool },
+    Battery { level: i32, charging: bool },
     Connectivity((String, i32)),
 }
 
@@ -60,6 +60,10 @@ pub struct Device {
     /// used for clock-sync validation per the KDE Connect protocol v8+.
     #[serde(default)]
     pub pairing_timestamp: u64,
+    /// DER-encoded TLS certificate presented by the peer when pairing.
+    /// Paired LAN devices must keep presenting this certificate on reconnect.
+    #[serde(default)]
+    pub remote_certificate: Vec<u8>,
 }
 
 fn default_protocol_version() -> usize {
@@ -82,6 +86,7 @@ impl Default for Device {
             pair_state: PairState::default(),
             protocol_version: default_protocol_version(),
             pairing_timestamp: 0,
+            remote_certificate: Vec::new(),
         }
     }
 }
@@ -126,12 +131,16 @@ impl Device {
             pair_state: PairState::NotPaired,
             protocol_version: 0,
             pairing_timestamp: 0,
+            remote_certificate: Vec::new(),
         })
     }
 
     pub async fn store_device_identity(&self, pair_state: PairState) -> anyhow::Result<()> {
         let mut data = self.clone();
         data.pair_state = pair_state;
+        if pair_state == PairState::NotPaired {
+            data.remote_certificate.clear();
+        }
 
         if let Ok(file_content) = ron::ser::to_string_pretty(&data, PrettyConfig::new()) {
             let config_dir = dirs::config_dir()
@@ -197,6 +206,7 @@ impl DeviceManager {
                 let _ = device.update_pair_state(PairState::Paired).await;
             } else {
                 device.pair_state = PairState::NotPaired;
+                device.remote_certificate.clear();
                 let _ = self
                     .event_tx
                     .send(CoreEvent::DevicePairCancelled(device.device_id.clone()));
@@ -210,6 +220,9 @@ impl DeviceManager {
 
         if let Some(device) = guard.get_mut(id) {
             device.pair_state = state;
+            if state == PairState::NotPaired {
+                device.remote_certificate.clear();
+            }
             let _ = self
                 .event_tx
                 .send(CoreEvent::DevicePairStateChanged((id.clone(), state)));

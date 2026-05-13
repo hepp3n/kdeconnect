@@ -36,7 +36,7 @@ where
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Battery {
     #[serde(rename = "currentCharge")]
-    pub charge: u8,
+    pub charge: i32,
     #[serde(rename = "isCharging")]
     pub is_charging: bool,
     #[serde(
@@ -94,7 +94,7 @@ async fn read_local_battery() -> Option<Battery> {
 
         let charge = read_trimmed(path.join("capacity"))
             .await
-            .and_then(|value| value.parse::<u8>().ok())
+            .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(100);
         let status = read_trimmed(path.join("status")).await.unwrap_or_default();
         let is_charging = matches!(status.as_str(), "Charging" | "Full");
@@ -115,4 +115,22 @@ async fn read_trimmed(path: PathBuf) -> Option<String> {
         .await
         .ok()
         .map(|value| value.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Battery;
+
+    #[test]
+    fn accepts_protocol_no_battery_sentinel() {
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": -1,
+            "isCharging": false,
+            "thresholdEvent": 0
+        }))
+        .unwrap();
+
+        assert_eq!(battery.charge, -1);
+        assert!(!battery.is_charging);
+    }
 }

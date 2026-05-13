@@ -21,16 +21,17 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     GLOBAL_CONFIG,
-    device::DeviceId,
+    device::{Device, DeviceId, PairState},
     plugin_config,
     protocol::{Identity, PacketType, ProtocolPacket},
 };
 
 pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Application-level heartbeat interval — keeps the TCP connection from going
-/// idle long enough to trigger OS keepalive probes (which Android Doze often
-/// ignores, causing spurious disconnects).
+/// Application-level identity heartbeat interval — keeps the TCP connection
+/// from going idle long enough to trigger OS keepalive probes (which Android
+/// Doze often ignores, causing spurious disconnects). Do not use
+/// `kdeconnect.ping` here: peers such as GSConnect surface pings to users.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
@@ -65,10 +66,15 @@ pub enum TransportEvent {
         protocol_version: usize,
         /// Pairing timestamp from the peer's identity (used for clock-sync validation).
         pairing_timestamp: u64,
+        /// DER-encoded TLS certificate presented by the peer.
+        peer_certificate: Vec<u8>,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
         /// Unique ID for this connection instance.
         conn_id: u64,
     },
+    /// A paired device presented a different TLS certificate than the one
+    /// pinned at pairing time.
+    PairTrustFailed { id: DeviceId },
     /// Emitted when the reader loop ends (peer closed / broken pipe).
     /// `conn_id` must match the stored value for this device before core
     /// removes the writer_map entry; a mismatch means a newer connection
@@ -240,6 +246,30 @@ impl TcpTransport {
                         }
                     };
                     info!(peer = ?peer, device_id = ?id, "[tcp] step 2: TLS established");
+                    let peer_certificate =
+                        peer_certificate_der(tls_stream.get_ref().1.peer_certificates());
+                    if paired_certificate_mismatch(
+                        &DeviceId(id.clone()),
+                        &name,
+                        peer_identity.device_type.to_string(),
+                        peer_identity.incoming_capabilities.clone(),
+                        peer_identity.outgoing_capabilities.clone(),
+                        peer,
+                        &peer_certificate,
+                    )
+                    .await
+                    {
+                        warn!(
+                            peer = ?peer,
+                            device_id = ?id,
+                            "[tcp] paired device presented a different TLS certificate"
+                        );
+                        let _ = event_tx.send(TransportEvent::PairTrustFailed {
+                            id: DeviceId(id.clone()),
+                        });
+                        let _ = tls_stream.shutdown().await;
+                        continue;
+                    }
 
                     // Step 3: send our identity post-TLS for plugin negotiation.
                     // Filter capabilities based on per-device disabled plugins so
@@ -286,6 +316,7 @@ impl TcpTransport {
                         outgoing_capabilities: peer_identity.outgoing_capabilities,
                         protocol_version: peer_protocol_version,
                         pairing_timestamp: 0,
+                        peer_certificate,
                         write_tx,
                         conn_id,
                     }) {
@@ -489,6 +520,28 @@ impl UdpTransport {
                         };
 
                         info!(peer = ?peer, device_id = ?id, device_name = name, "[udp] Established TLS connection");
+                        let peer_certificate =
+                            peer_certificate_der(tls_stream.get_ref().1.peer_certificates());
+                        if paired_certificate_mismatch(
+                            &id,
+                            &name,
+                            peer_identity.device_type.to_string(),
+                            peer_identity.incoming_capabilities.clone(),
+                            peer_identity.outgoing_capabilities.clone(),
+                            peer,
+                            &peer_certificate,
+                        )
+                        .await
+                        {
+                            warn!(
+                                peer = ?peer,
+                                device_id = ?id,
+                                "[udp] paired device presented a different TLS certificate"
+                            );
+                            let _ = event_tx.send(TransportEvent::PairTrustFailed { id });
+                            let _ = tls_stream.shutdown().await;
+                            continue;
+                        }
 
                         // Send identity post-TLS — phone uses this for plugin negotiation.
                         // Filter capabilities based on per-device disabled plugins so
@@ -537,6 +590,7 @@ impl UdpTransport {
                             outgoing_capabilities: peer_identity.outgoing_capabilities,
                             protocol_version: peer_protocol_version,
                             pairing_timestamp: 0,
+                            peer_certificate,
                             write_tx,
                             conn_id,
                         }) {
@@ -550,6 +604,50 @@ impl UdpTransport {
             }
         }
     }
+}
+
+fn peer_certificate_der(certs: Option<&[rustls::pki_types::CertificateDer<'static>]>) -> Vec<u8> {
+    certs
+        .and_then(|certs| certs.first())
+        .map(|cert| cert.as_ref().to_vec())
+        .unwrap_or_default()
+}
+
+async fn paired_certificate_mismatch(
+    id: &DeviceId,
+    name: &str,
+    device_type: String,
+    incoming_capabilities: Vec<String>,
+    outgoing_capabilities: Vec<String>,
+    addr: SocketAddr,
+    peer_certificate: &[u8],
+) -> bool {
+    if peer_certificate.is_empty() {
+        return false;
+    }
+
+    let Ok(device) = Device::new(
+        id.0.clone(),
+        name.to_string(),
+        device_type,
+        incoming_capabilities,
+        outgoing_capabilities,
+        addr,
+    )
+    .await
+    else {
+        return false;
+    };
+
+    let mismatch = device.pair_state == PairState::Paired
+        && !device.remote_certificate.is_empty()
+        && device.remote_certificate != peer_certificate;
+
+    if mismatch {
+        let _ = device.update_pair_state(PairState::NotPaired).await;
+    }
+
+    mismatch
 }
 
 async fn handle_connection<R, W>(
@@ -613,10 +711,9 @@ async fn handle_connection<R, W>(
         });
     });
 
-    // Writer task — drains the write channel and sends periodic heartbeats
-    // to prevent the connection from going idle long enough for the OS-level
-    // TCP keepalive to kick in (Android Doze drops keepalive probes, causing
-    // spurious disconnects ~30s after the last packet).
+    // Writer task — drains the write channel and sends periodic identity
+    // heartbeats to prevent the connection from going idle long enough for
+    // OS-level TCP keepalive to kick in.
     let event_tx_writer = event_tx.clone();
     let id_writer = id.clone();
     tokio::spawn(async move {
@@ -628,8 +725,9 @@ async fn handle_connection<R, W>(
                 } => msg,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
                     let heartbeat = ProtocolPacket::new(
-                        PacketType::Ping,
-                        serde_json::json!({"heartbeat": true}),
+                        PacketType::Identity,
+                        serde_json::to_value(&GLOBAL_CONFIG.get().unwrap().identity)
+                            .expect("Failed to serialize heartbeat identity"),
                     );
                     let raw = heartbeat
                         .as_raw()
@@ -692,7 +790,7 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
         (
             "clipboard",
             &["kdeconnect.clipboard", "kdeconnect.clipboard.connect"],
-            &["kdeconnect.clipboard"],
+            &["kdeconnect.clipboard", "kdeconnect.clipboard.connect"],
         ),
         (
             "connectivity_report",
@@ -735,13 +833,13 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
         ),
         (
             "notification",
+            &["kdeconnect.notification", "kdeconnect.notification.request"],
             &[
                 "kdeconnect.notification",
                 "kdeconnect.notification.action",
                 "kdeconnect.notification.reply",
                 "kdeconnect.notification.request",
             ],
-            &["kdeconnect.notification", "kdeconnect.notification.request"],
         ),
         ("ping", &["kdeconnect.ping"], &["kdeconnect.ping"]),
         ("presenter", &["kdeconnect.presenter"], &[]),

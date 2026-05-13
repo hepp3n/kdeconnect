@@ -299,12 +299,13 @@ impl KdeConnectCore {
                 outgoing_capabilities,
                 protocol_version,
                 pairing_timestamp,
+                peer_certificate,
                 write_tx,
                 conn_id,
             } => {
                 debug!("[core] new connection from: {}", addr);
 
-                let device = match Device::new(
+                let mut device = match Device::new(
                     id.0.clone(),
                     name,
                     device_type,
@@ -320,6 +321,47 @@ impl KdeConnectCore {
                         return;
                     }
                 };
+
+                let stored_remote_certificate = device.remote_certificate.clone();
+                if device.pair_state == crate::device::PairState::Paired
+                    && !stored_remote_certificate.is_empty()
+                    && stored_remote_certificate != peer_certificate
+                {
+                    warn!(
+                        "[core] TLS certificate changed for paired device {}; unpairing",
+                        id
+                    );
+                    device.remote_certificate.clear();
+                    self.device_manager
+                        .add_or_update_device(id.clone(), device.clone())
+                        .await;
+                    self.device_manager
+                        .update_pair_state(&id, crate::device::PairState::NotPaired)
+                        .await;
+                    cleanup_device_data(&id.0).await;
+                    let conn_event = ConnectionEvent::PairStateChanged((
+                        id,
+                        crate::device::PairState::NotPaired,
+                    ));
+                    let _ = self.conn_tx.send(conn_event.clone());
+                    let _ = self.mpris_conn_tx.send(conn_event);
+                    return;
+                }
+
+                let should_backfill_certificate = device.pair_state
+                    == crate::device::PairState::Paired
+                    && stored_remote_certificate.is_empty()
+                    && !peer_certificate.is_empty();
+
+                if !peer_certificate.is_empty() {
+                    device.remote_certificate = peer_certificate;
+                }
+
+                if should_backfill_certificate {
+                    let _ = device
+                        .update_pair_state(crate::device::PairState::Paired)
+                        .await;
+                }
 
                 self.device_manager
                     .add_or_update_device(id.clone(), device.clone())
@@ -398,7 +440,7 @@ impl KdeConnectCore {
                     {
                         let connectivity_pkt = ProtocolPacket::new(
                             PacketType::ConnectivityReportRequest,
-                            serde_json::json!({ "request": true }),
+                            serde_json::json!({}),
                         );
                         let _ = self.queue_packet(&id, connectivity_pkt).await;
                     }
@@ -598,6 +640,26 @@ impl KdeConnectCore {
                 self.conn_id_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
+                let _ = self.conn_tx.send(conn_event.clone());
+                let _ = self.mpris_conn_tx.send(conn_event);
+            }
+            TransportEvent::PairTrustFailed { id } => {
+                warn!(
+                    "[core] certificate trust failed for paired device {}; unpairing",
+                    id
+                );
+                if let Some(mut device) = self.device_manager.get_device(&id).await {
+                    device.remote_certificate.clear();
+                    self.device_manager
+                        .add_or_update_device(id.clone(), device)
+                        .await;
+                }
+                self.device_manager
+                    .update_pair_state(&id, crate::device::PairState::NotPaired)
+                    .await;
+                cleanup_device_data(&id.0).await;
+                let conn_event =
+                    ConnectionEvent::PairStateChanged((id, crate::device::PairState::NotPaired));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }

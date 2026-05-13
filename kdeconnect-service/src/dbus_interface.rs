@@ -127,10 +127,7 @@ mod tests {
 
     #[test]
     fn sms_conversation_request_uses_gsconnect_thread_id_shape() {
-        assert_eq!(
-            sms_conversation_request_body(42),
-            json!({ "threadID": "42" })
-        );
+        assert_eq!(sms_conversation_request_body(42), json!({ "threadID": 42 }));
     }
 
     #[test]
@@ -400,7 +397,7 @@ pub struct SmsInterface {
 }
 
 fn sms_conversation_request_body(thread_id: i64) -> serde_json::Value {
-    json!({ "threadID": thread_id.to_string() })
+    json!({ "threadID": thread_id })
 }
 
 fn sms_send_request_body(phone_number: &str, message: &str) -> serde_json::Value {
@@ -996,7 +993,7 @@ impl KdeConnectService {
                         DaemonInterface::battery_received(
                             iface_ref.signal_emitter(),
                             device_id.0,
-                            level as i32,
+                            level,
                             charging,
                         )
                         .await?;

@@ -48,6 +48,7 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.battery",
     "kdeconnect.battery.request",
     "kdeconnect.clipboard",
+    "kdeconnect.clipboard.connect",
     "kdeconnect.contacts.request_all_uids_timestamps",
     "kdeconnect.contacts.request_vcards_by_uid",
     "kdeconnect.connectivity_report.request",
@@ -59,6 +60,8 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.mpris.request",
     "kdeconnect.notification.request",
     "kdeconnect.notification",
+    "kdeconnect.notification.action",
+    "kdeconnect.notification.reply",
     "kdeconnect.ping",
     "kdeconnect.runcommand",
     "kdeconnect.runcommand.request",
@@ -184,5 +187,21 @@ async fn identify_device_type() -> DeviceType {
         }
     } else {
         DeviceType::Desktop
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{INCOMING_CAPABILITIES, OUTGOING_CAPABILITIES};
+
+    #[test]
+    fn advertised_capabilities_cover_gsconnect_compatible_actions() {
+        assert!(OUTGOING_CAPABILITIES.contains(&"kdeconnect.clipboard.connect"));
+        assert!(OUTGOING_CAPABILITIES.contains(&"kdeconnect.notification.action"));
+        assert!(OUTGOING_CAPABILITIES.contains(&"kdeconnect.notification.reply"));
+
+        assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.clipboard.connect"));
+        assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.notification"));
+        assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.notification.request"));
     }
 }
