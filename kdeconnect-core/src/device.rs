@@ -16,11 +16,7 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{
-    config::CONFIG_DIR,
-    event::CoreEvent,
-    transport::DEFAULT_LISTEN_PORT,
-};
+use crate::{config::CONFIG_DIR, event::CoreEvent, transport::DEFAULT_LISTEN_PORT};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub String);
@@ -237,17 +233,19 @@ impl DeviceManager {
 
     pub async fn get_pairing_timestamp(&self, id: &DeviceId) -> u64 {
         let guard = self.devices.read().await;
-        guard
-            .get(id)
-            .map(|d| d.pairing_timestamp)
-            .unwrap_or(0)
+        guard.get(id).map(|d| d.pairing_timestamp).unwrap_or(0)
     }
 }
 
 /// Validate a device ID per the KDE Connect protocol.
 /// Must match `^[a-zA-Z0-9_-]{32,38}$` (32-38 alphanumeric chars, hyphens, underscores).
 pub fn validate_device_id(id: &str) -> anyhow::Result<String> {
-    if id.len() < 32 || id.len() > 38 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if id.len() < 32
+        || id.len() > 38
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(anyhow::anyhow!(
             "Invalid device ID '{}': must be 32-38 alphanumeric characters, underscores, or hyphens",
             id
@@ -262,7 +260,12 @@ pub fn validate_device_id(id: &str) -> anyhow::Result<String> {
 pub fn sanitize_device_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
-        .filter(|c| !matches!(c, '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>'))
+        .filter(|c| {
+            !matches!(
+                c,
+                '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>'
+            )
+        })
         .collect::<String>()
         .trim()
         .to_string();

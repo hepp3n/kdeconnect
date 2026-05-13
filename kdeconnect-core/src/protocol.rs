@@ -331,6 +331,21 @@ mod tests {
         assert!(matches!(decoded.packet_type, PacketType::Ping));
         assert_eq!(decoded.body["message"], "hello");
     }
+
+    #[test]
+    fn pair_packets_only_timestamp_new_requests() {
+        let request = Pair::request();
+        assert!(request.pair);
+        assert!(request.timestamp.is_some());
+
+        let accept = Pair::accept();
+        assert!(accept.pair);
+        assert!(accept.timestamp.is_none());
+
+        let reject = Pair::reject();
+        assert!(!reject.pair);
+        assert!(reject.timestamp.is_none());
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -353,21 +368,29 @@ pub struct Pair {
 }
 
 impl Pair {
-    pub fn new(response: bool) -> Self {
-        if response {
-            let timestamp = Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-            );
-            return Pair {
-                pair: true,
-                timestamp,
-            };
-        }
+    pub fn request() -> Self {
+        let timestamp = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        );
         Pair {
-            pair: response,
+            pair: true,
+            timestamp,
+        }
+    }
+
+    pub fn accept() -> Self {
+        Pair {
+            pair: true,
+            timestamp: None,
+        }
+    }
+
+    pub fn reject() -> Self {
+        Pair {
+            pair: false,
             timestamp: None,
         }
     }

@@ -1,13 +1,15 @@
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager, PairState},
     event::CoreEvent,
-    protocol::{Pair, PacketType, ProtocolPacket},
+    protocol::{PacketType, Pair, ProtocolPacket},
 };
+
+const ALLOWED_TIMESTAMP_DIFF_SECS: u64 = 1800;
 
 pub struct PairingManager {
     pub device_manager: DeviceManager,
@@ -51,10 +53,7 @@ impl PairingManager {
 
         // Ensure device is known and up to date.
         let existing = self.device_manager.get_device(&id).await;
-        let protocol_version = existing
-            .as_ref()
-            .map(|d| d.protocol_version)
-            .unwrap_or(0);
+        let protocol_version = existing.as_ref().map(|d| d.protocol_version).unwrap_or(0);
         let mut device = Device::new(
             id.0.clone(),
             name.clone(),
@@ -78,9 +77,7 @@ impl PairingManager {
         // Store the phone's pairing timestamp for later clock-sync validation.
         if let Some(ts) = pair_packet.timestamp {
             device.pairing_timestamp = ts;
-            self.device_manager
-                .set_pairing_timestamp(&id, ts)
-                .await;
+            self.device_manager.set_pairing_timestamp(&id, ts).await;
         }
 
         self.device_manager
@@ -101,35 +98,61 @@ impl PairingManager {
             return Ok(false);
         }
 
-        // Already paired — re-confirm by sending pair:true back.
-        // This handles the case where the phone's app data was reset or
-        // the user cleared app storage: the phone sends pair:true to
-        // re-establish trust, and we acknowledge it.
+        // Already paired. Upstream KDE intentionally does not auto-accept here:
+        // a timestamped pair:true is a fresh pair request and must go through
+        // the normal user-confirmed flow.
         if current_state == PairState::Paired {
-            info!("[pairing] {} is already paired — re-confirming", name);
+            warn!(
+                "[pairing] received fresh pair request from already paired device {}; treating as a new request",
+                name
+            );
+            self.device_manager
+                .update_pair_state(&id, PairState::NotPaired)
+                .await;
+        }
+
+        // Protocol v8 requires a timestamp on new pairing requests. The
+        // timestamp is checked before surfacing the request so the UI does not
+        // offer an action that KDE Connect peers will reject anyway.
+        if device.protocol_version >= 8 {
+            let Some(ts) = pair_packet.timestamp else {
+                warn!(
+                    "[pairing] rejecting pair request from {}: missing protocol v8 timestamp",
+                    name
+                );
+                let value = serde_json::to_value(Pair::reject()).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                let _ = self.event_tx.send(CoreEvent::SendPacket {
+                    device: id.clone(),
+                    packet: pkt,
+                });
+                self.device_manager
+                    .update_pair_state(&id, PairState::NotPaired)
+                    .await;
+                return Ok(false);
+            };
+
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let confirm = Pair {
-                pair: true,
-                timestamp: Some(now),
-            };
-            let value = serde_json::to_value(confirm).expect("fail serializing pair");
-            let pkt = ProtocolPacket::new(PacketType::Pair, value);
-
-            // Queue a re-confirmation packet via CoreEvent::SendPacket.
-            let _ = self.event_tx.send(CoreEvent::SendPacket {
-                device: id.clone(),
-                packet: pkt,
-            });
-
-            // Re-emit DevicePaired so the D-Bus service updates its state.
-            let _ = self.event_tx.send(CoreEvent::DevicePaired((
-                id.clone(),
-                device.clone(),
-            )));
-            return Ok(false);
+            let diff = ts.abs_diff(now);
+            if diff > ALLOWED_TIMESTAMP_DIFF_SECS {
+                warn!(
+                    "[pairing] rejecting pair request from {}: clocks out of sync (peer_ts={}, local_ts={}, diff={}s)",
+                    name, ts, now, diff
+                );
+                let value = serde_json::to_value(Pair::reject()).expect("fail serializing pair");
+                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                let _ = self.event_tx.send(CoreEvent::SendPacket {
+                    device: id.clone(),
+                    packet: pkt,
+                });
+                self.device_manager
+                    .update_pair_state(&id, PairState::NotPaired)
+                    .await;
+                return Ok(false);
+            }
         }
 
         // Incoming pair request — mark as Requested and signal the caller to

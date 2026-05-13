@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
-    time::{SystemTime, Duration, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     select,
@@ -449,32 +449,48 @@ impl KdeConnectCore {
                                 if !pair_body.pair {
                                     // Phone sent pair:false — either it's unpairing from us, or
                                     // it's a fresh device announcing it doesn't know us yet.
-                                    // Only clean up and notify if we considered it paired; fresh
-                                    // discovery announcements should be ignored silently so the
-                                    // user can still initiate pairing normally from the settings app.
-                                    if device.pair_state == crate::device::PairState::Paired {
-                                        info!(
-                                            "[core] Phone unpairing from us — cleaning up {}",
-                                            id
-                                        );
-                                        self.device_manager
-                                            .update_pair_state(
-                                                &id,
+                                    match device.pair_state {
+                                        crate::device::PairState::Paired => {
+                                            info!(
+                                                "[core] Phone unpairing from us — cleaning up {}",
+                                                id
+                                            );
+                                            self.device_manager
+                                                .update_pair_state(
+                                                    &id,
+                                                    crate::device::PairState::NotPaired,
+                                                )
+                                                .await;
+                                            cleanup_device_data(&id.0).await;
+                                            let conn_event = ConnectionEvent::PairStateChanged((
+                                                id.clone(),
                                                 crate::device::PairState::NotPaired,
-                                            )
-                                            .await;
-                                        cleanup_device_data(&id.0).await;
-                                        let conn_event = ConnectionEvent::PairStateChanged((
-                                            id.clone(),
-                                            crate::device::PairState::NotPaired,
-                                        ));
-                                        let _ = self.conn_tx.send(conn_event.clone());
-                                        let _ = self.mpris_conn_tx.send(conn_event);
-                                    } else {
-                                        info!(
-                                            "[core] pair:false from {} — device not paired, ignoring",
-                                            id
-                                        );
+                                            ));
+                                            let _ = self.conn_tx.send(conn_event.clone());
+                                            let _ = self.mpris_conn_tx.send(conn_event);
+                                        }
+                                        crate::device::PairState::Requesting
+                                        | crate::device::PairState::Requested => {
+                                            info!(
+                                                "[core] pairing with {} was rejected/cancelled by peer",
+                                                id
+                                            );
+                                            self.device_manager
+                                                .update_pair_state(
+                                                    &id,
+                                                    crate::device::PairState::NotPaired,
+                                                )
+                                                .await;
+                                            let ev = ConnectionEvent::PairingTimedOut(id.clone());
+                                            let _ = self.conn_tx.send(ev.clone());
+                                            let _ = self.mpris_conn_tx.send(ev);
+                                        }
+                                        crate::device::PairState::NotPaired => {
+                                            info!(
+                                                "[core] pair:false from {} — device not paired, ignoring",
+                                                id
+                                            );
+                                        }
                                     }
                                 } else {
                                     let device_name = device.name.clone();
@@ -500,15 +516,39 @@ impl KdeConnectCore {
                                         // 30-second auto-reject: if the user doesn't respond,
                                         // reject the pairing so neither side waits indefinitely.
                                         let dm = self.device_manager.clone();
+                                        let event_tx = self.event_tx.clone();
                                         let conn_tx = self.conn_tx.clone();
                                         let mpris_tx = self.mpris_conn_tx.clone();
                                         let did = id.clone();
                                         tokio::spawn(async move {
-                                            tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+                                            tokio::time::sleep(Duration::from_secs(
+                                                PAIRING_TIMEOUT_SECS,
+                                            ))
+                                            .await;
                                             if let Some(dev) = dm.get_device(&did).await {
-                                                if dev.pair_state == crate::device::PairState::Requested {
-                                                    info!("[core] incoming pair request from {} timed out after {}s", did, PAIRING_TIMEOUT_SECS);
-                                                    dm.update_pair_state(&did, crate::device::PairState::NotPaired).await;
+                                                if dev.pair_state
+                                                    == crate::device::PairState::Requested
+                                                {
+                                                    info!(
+                                                        "[core] incoming pair request from {} timed out after {}s",
+                                                        did, PAIRING_TIMEOUT_SECS
+                                                    );
+                                                    let pair = Pair::reject();
+                                                    let value = serde_json::to_value(pair)
+                                                        .expect("fail serializing pair");
+                                                    let pkt = ProtocolPacket::new(
+                                                        PacketType::Pair,
+                                                        value,
+                                                    );
+                                                    let _ = event_tx.send(CoreEvent::SendPacket {
+                                                        device: did.clone(),
+                                                        packet: pkt,
+                                                    });
+                                                    dm.update_pair_state(
+                                                        &did,
+                                                        crate::device::PairState::NotPaired,
+                                                    )
+                                                    .await;
                                                     let ev = ConnectionEvent::PairingTimedOut(did);
                                                     let _ = conn_tx.send(ev.clone());
                                                     let _ = mpris_tx.send(ev);
@@ -571,7 +611,7 @@ impl KdeConnectCore {
             }
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
-                let pair = Pair::new(true);
+                let pair = Pair::request();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
@@ -584,6 +624,7 @@ impl KdeConnectCore {
                 // 30-second auto-cancel: if the phone doesn't respond in time,
                 // revert to NotPaired so the user isn't stuck in the pairing state.
                 let dm = self.device_manager.clone();
+                let event_tx = self.event_tx.clone();
                 let conn_tx = self.conn_tx.clone();
                 let mpris_tx = self.mpris_conn_tx.clone();
                 let did = device_id.clone();
@@ -591,8 +632,19 @@ impl KdeConnectCore {
                     tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
                     if let Some(dev) = dm.get_device(&did).await {
                         if dev.pair_state == crate::device::PairState::Requesting {
-                            info!("[core] outgoing pair request to {} timed out after {}s", did, PAIRING_TIMEOUT_SECS);
-                            dm.update_pair_state(&did, crate::device::PairState::NotPaired).await;
+                            info!(
+                                "[core] outgoing pair request to {} timed out after {}s",
+                                did, PAIRING_TIMEOUT_SECS
+                            );
+                            let pair = Pair::reject();
+                            let value = serde_json::to_value(pair).expect("fail serializing pair");
+                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                            let _ = event_tx.send(CoreEvent::SendPacket {
+                                device: did.clone(),
+                                packet: pkt,
+                            });
+                            dm.update_pair_state(&did, crate::device::PairState::NotPaired)
+                                .await;
                             let ev = ConnectionEvent::PairingTimedOut(did);
                             let _ = conn_tx.send(ev.clone());
                             let _ = mpris_tx.send(ev);
@@ -695,7 +747,7 @@ impl KdeConnectCore {
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent unpair event to device: {}", device_id);
 
-                let pair = Pair::new(false);
+                let pair = Pair::reject();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
@@ -738,14 +790,21 @@ impl KdeConnectCore {
                                     device_id, phone_ts, now, diff
                                 );
                                 // Reject by sending pair:false and un-setting paired state.
-                                let pair = Pair::new(false);
-                                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                                let pair = Pair::reject();
+                                let value =
+                                    serde_json::to_value(pair).expect("fail serializing pair");
                                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                                 if self.queue_packet(&device_id, pkt).await {
-                                    info!("[core] sent pair:false to {} due to clock mismatch", device_id);
+                                    info!(
+                                        "[core] sent pair:false to {} due to clock mismatch",
+                                        device_id
+                                    );
                                 }
                                 self.device_manager
-                                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                                    .update_pair_state(
+                                        &device_id,
+                                        crate::device::PairState::NotPaired,
+                                    )
                                     .await;
                                 // Emit a timed-out event so the UI can show a message.
                                 let ev = ConnectionEvent::PairingTimedOut(device_id);
@@ -757,7 +816,7 @@ impl KdeConnectCore {
                     }
                 }
 
-                let pair = Pair::new(true);
+                let pair = Pair::accept();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
@@ -767,7 +826,7 @@ impl KdeConnectCore {
             }
             AppEvent::RejectPairing(device_id) => {
                 info!("User rejected pairing from {}", device_id);
-                let pair = Pair::new(false);
+                let pair = Pair::reject();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
