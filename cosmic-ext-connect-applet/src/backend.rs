@@ -292,7 +292,6 @@ pub async fn execute_run_command(device_id: String, key: String) -> Result<()> {
 
 /// Stream of service events. Reconnects automatically when the client is
 /// replaced (e.g. after session logout/login) or the stream ends.
-#[allow(dead_code)]
 pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent> {
     use tokio::sync::mpsc;
     use tokio::time::{Duration, sleep};
@@ -416,14 +415,16 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
 }
 
 /// Subscription for file transfer progress updates
-#[allow(dead_code)]
 pub fn filetransfer_subscription() -> Subscription<crate::messages::Message> {
     struct Worker;
 
     Subscription::run_with(TypeId::of::<Worker>(), |_| {
         async_stream::stream! {
-            let Ok(client) = KdeConnectClient::new().await else {
-                return;
+            let client = loop {
+                if let Some(c) = CLIENT.lock().await.clone() {
+                    break c;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             };
 
             let mut progress_stream = client.transfer_progress_stream().await;

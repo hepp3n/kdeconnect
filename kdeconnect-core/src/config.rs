@@ -42,6 +42,7 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.messages",
     "kdeconnect.systemvolume.request",
     "kdeconnect.telephony",
+    "kdeconnect.lock",
 ];
 
 const OUTGOING_CAPABILITIES: &[&str] = &[
@@ -72,6 +73,8 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.request_conversation",
     "kdeconnect.systemvolume",
     "kdeconnect.telephony.request_mute",
+    "kdeconnect.lock.request",
+    "kdeconnect.lock",
 ];
 
 #[derive(Debug)]

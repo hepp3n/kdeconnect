@@ -6,11 +6,12 @@ use std::{
 use tokio::{
     select,
     sync::{Mutex, mpsc},
+    time::MissedTickBehavior,
 };
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    device::{Device, DeviceId, DeviceManager},
+    device::{Device, DeviceId, DeviceManager, PairState},
     event::{AppEvent, ConnectionEvent, CoreEvent},
     filetransfer::TransferAdapter,
     pairing::PairingManager,
@@ -98,6 +99,78 @@ impl KdeConnectCore {
         tokio::spawn(async move {
             if let Err(e) = udp.listen().await {
                 error!("UDP listener failed: {}", e);
+            }
+        });
+
+        // Load previously paired devices from disk so list_devices() returns
+        // them immediately and we can actively try to reconnect them.
+        if let Some(config_dir) = dirs::config_dir() {
+            let kc_dir = config_dir.join(config::CONFIG_DIR);
+            if let Ok(mut entries) = tokio::fs::read_dir(&kc_dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("ron") {
+                        match tokio::fs::read_to_string(&path).await {
+                            Ok(raw) => {
+                                if let Ok(dev) = ron::de::from_str::<Device>(&raw) {
+                                    if dev.pair_state == PairState::Paired {
+                                        info!(
+                                            "Restored paired device: {} ({})",
+                                            dev.name, dev.device_id
+                                        );
+                                        device_manager
+                                            .add_or_update_device(
+                                                dev.device_id.clone(),
+                                                dev.clone(),
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to read device file {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Start broadcasting immediately so phones can discover us after restart.
+        let udp_bc = Arc::clone(&udp_transport);
+        tokio::spawn(async move {
+            if let Err(e) = udp_bc.send_identity().await {
+                error!("Initial UDP broadcast failed: {}", e);
+            }
+        });
+
+        // Periodic reconnect: broadcast identity every 60s so disconnected
+        // paired devices will see us and reconnect via UDP → TCP discovery.
+        let reconnect_udp = Arc::clone(&udp_transport);
+        let reconnect_dm = device_manager.clone();
+        let reconnect_wm = Arc::clone(&writer_map);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // Skip first tick — broadcast above already covers t=0.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let has_disconnected_paired = {
+                    let devices = reconnect_dm.get_devices().await;
+                    let writers = reconnect_wm.lock().await;
+                    devices.iter().any(|d| {
+                        d.pair_state == PairState::Paired && !writers.contains_key(&d.device_id)
+                    })
+                };
+                if has_disconnected_paired {
+                    debug!(
+                        "Reconnect timer: broadcasting identity for disconnected paired devices"
+                    );
+                    if let Err(e) = reconnect_udp.send_identity().await {
+                        error!("Reconnect broadcast failed: {}", e);
+                    }
+                }
             }
         });
 
