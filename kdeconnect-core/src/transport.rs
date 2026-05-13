@@ -61,6 +61,10 @@ pub enum TransportEvent {
         device_type: String,
         incoming_capabilities: Vec<String>,
         outgoing_capabilities: Vec<String>,
+        /// Protocol version announced by the peer in its identity packet.
+        protocol_version: usize,
+        /// Pairing timestamp from the peer's identity (used for clock-sync validation).
+        pairing_timestamp: u64,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
         /// Unique ID for this connection instance.
         conn_id: u64,
@@ -198,12 +202,20 @@ impl TcpTransport {
 
                     let name = peer_identity.device_name.clone();
                     let id = peer_identity.device_id.clone();
+                    let peer_protocol_version = peer_identity.protocol_version;
                     info!(peer = ?peer, device_id = ?id, device_name = name, "[tcp] identified peer");
 
                     if identity.device_id == peer_identity.device_id {
                         warn!(peer = ?peer, device_id = ?id, "skipping the same device");
                         continue;
                     }
+
+                    // Validate device ID and sanitize name early, before TLS.
+                    if !crate::device::validate_device_id(&id).is_ok() {
+                        warn!(peer = ?peer, device_id = ?id, "[tcp] invalid device ID, dropping");
+                        continue;
+                    }
+                    let name = crate::device::sanitize_device_name(&name);
 
                     // Step 2: TLS handshake. KDE Connect's LAN protocol makes the
                     // side accepting the TCP connection act as the TLS client.
@@ -272,6 +284,8 @@ impl TcpTransport {
                         device_type: peer_identity.device_type.to_string(),
                         incoming_capabilities: peer_identity.incoming_capabilities,
                         outgoing_capabilities: peer_identity.outgoing_capabilities,
+                        protocol_version: peer_protocol_version,
+                        pairing_timestamp: 0,
                         write_tx,
                         conn_id,
                     }) {
@@ -422,6 +436,14 @@ impl UdpTransport {
 
                         let id = DeviceId(peer_identity.device_id.clone());
                         let name = peer_identity.device_name.clone();
+                        let peer_protocol_version = peer_identity.protocol_version;
+
+                        // Validate device ID and sanitize name early.
+                        if crate::device::validate_device_id(&id.0).is_err() {
+                            warn!(peer = ?peer, device_id = ?id, "[udp] invalid device ID, dropping");
+                            continue;
+                        }
+                        let name = crate::device::sanitize_device_name(&name);
 
                         if let Some(new_port) = peer_identity.tcp_port {
                             peer.set_port(new_port);
@@ -513,6 +535,8 @@ impl UdpTransport {
                             device_type: peer_identity.device_type.to_string(),
                             incoming_capabilities: peer_identity.incoming_capabilities,
                             outgoing_capabilities: peer_identity.outgoing_capabilities,
+                            protocol_version: peer_protocol_version,
+                            pairing_timestamp: 0,
                             write_tx,
                             conn_id,
                         }) {

@@ -1,12 +1,13 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
+    time::{SystemTime, Duration, UNIX_EPOCH},
 };
 use tokio::{
     select,
     sync::{Mutex, mpsc},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager},
@@ -18,6 +19,12 @@ use crate::{
     protocol::{DeviceFile, DevicePayload, Pair},
     transport::{TcpTransport, TransportEvent, UdpTransport},
 };
+
+/// Maximum allowed difference between device clocks for pairing (30 minutes in seconds).
+const ALLOWED_TIMESTAMP_DIFF_SECS: u64 = 1800;
+
+/// Auto-reject incoming/outgoing pairing requests after this duration (30 seconds).
+const PAIRING_TIMEOUT_SECS: u64 = 30;
 
 pub mod config;
 pub(crate) mod crypto;
@@ -290,6 +297,8 @@ impl KdeConnectCore {
                 device_type,
                 incoming_capabilities,
                 outgoing_capabilities,
+                protocol_version,
+                pairing_timestamp,
                 write_tx,
                 conn_id,
             } => {
@@ -315,6 +324,16 @@ impl KdeConnectCore {
                 self.device_manager
                     .add_or_update_device(id.clone(), device.clone())
                     .await;
+
+                // Store the peer's protocol version and pairing timestamp.
+                self.device_manager
+                    .set_protocol_version(&id, protocol_version)
+                    .await;
+                if pairing_timestamp > 0 {
+                    self.device_manager
+                        .set_pairing_timestamp(&id, pairing_timestamp)
+                        .await;
+                }
 
                 // Record this connection's ID before inserting the writer so that
                 // any Disconnected event from a previous connection that arrives
@@ -477,6 +496,25 @@ impl KdeConnectCore {
                                         ));
                                         let _ = self.conn_tx.send(ev.clone());
                                         let _ = self.mpris_conn_tx.send(ev);
+
+                                        // 30-second auto-reject: if the user doesn't respond,
+                                        // reject the pairing so neither side waits indefinitely.
+                                        let dm = self.device_manager.clone();
+                                        let conn_tx = self.conn_tx.clone();
+                                        let mpris_tx = self.mpris_conn_tx.clone();
+                                        let did = id.clone();
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+                                            if let Some(dev) = dm.get_device(&did).await {
+                                                if dev.pair_state == crate::device::PairState::Requested {
+                                                    info!("[core] incoming pair request from {} timed out after {}s", did, PAIRING_TIMEOUT_SECS);
+                                                    dm.update_pair_state(&did, crate::device::PairState::NotPaired).await;
+                                                    let ev = ConnectionEvent::PairingTimedOut(did);
+                                                    let _ = conn_tx.send(ev.clone());
+                                                    let _ = mpris_tx.send(ev);
+                                                }
+                                            }
+                                        });
                                     }
                                 }
                             }
@@ -542,6 +580,25 @@ impl KdeConnectCore {
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::Requesting)
                     .await;
+
+                // 30-second auto-cancel: if the phone doesn't respond in time,
+                // revert to NotPaired so the user isn't stuck in the pairing state.
+                let dm = self.device_manager.clone();
+                let conn_tx = self.conn_tx.clone();
+                let mpris_tx = self.mpris_conn_tx.clone();
+                let did = device_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+                    if let Some(dev) = dm.get_device(&did).await {
+                        if dev.pair_state == crate::device::PairState::Requesting {
+                            info!("[core] outgoing pair request to {} timed out after {}s", did, PAIRING_TIMEOUT_SECS);
+                            dm.update_pair_state(&did, crate::device::PairState::NotPaired).await;
+                            let ev = ConnectionEvent::PairingTimedOut(did);
+                            let _ = conn_tx.send(ev.clone());
+                            let _ = mpris_tx.send(ev);
+                        }
+                    }
+                });
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
@@ -657,6 +714,49 @@ impl KdeConnectCore {
             }
             AppEvent::AcceptPairing(device_id) => {
                 info!("User accepted pairing from {}", device_id);
+
+                // Clock-sync validation per KDE Connect protocol v8+:
+                // if the phone's pairing timestamp and our current time differ
+                // by more than 30 minutes, reject the pairing to prevent
+                // security issues from clock skew.
+                if let Some(dev) = self.device_manager.get_device(&device_id).await {
+                    if dev.protocol_version >= 8 {
+                        let phone_ts = dev.pairing_timestamp;
+                        if phone_ts > 0 {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let diff = if phone_ts > now {
+                                phone_ts - now
+                            } else {
+                                now - phone_ts
+                            };
+                            if diff > ALLOWED_TIMESTAMP_DIFF_SECS {
+                                warn!(
+                                    "[core] pairing rejected for {}: clocks out of sync (phone_ts={}, local_ts={}, diff={}s)",
+                                    device_id, phone_ts, now, diff
+                                );
+                                // Reject by sending pair:false and un-setting paired state.
+                                let pair = Pair::new(false);
+                                let value = serde_json::to_value(pair).expect("fail serializing pair");
+                                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                                if self.queue_packet(&device_id, pkt).await {
+                                    info!("[core] sent pair:false to {} due to clock mismatch", device_id);
+                                }
+                                self.device_manager
+                                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                                    .await;
+                                // Emit a timed-out event so the UI can show a message.
+                                let ev = ConnectionEvent::PairingTimedOut(device_id);
+                                let _ = self.conn_tx.send(ev.clone());
+                                let _ = self.mpris_conn_tx.send(ev);
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 let pair = Pair::new(true);
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);

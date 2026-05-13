@@ -952,6 +952,30 @@ impl KdeConnectService {
                 // The D-Bus signal is the primary mechanism — the applet
                 // subscription delivers it immediately and opens the popup.
             }
+            ConnectionEvent::PairingTimedOut(device_id) => {
+                info!("Pairing timed out for {}", device_id.0);
+                // Update the device to reflect the unpaired state and emit a
+                // device_connected signal so the applet refreshes immediately.
+                {
+                    let mut map = devices.lock().await;
+                    if let Some(dev) = map.get_mut(&device_id.0) {
+                        dev.is_paired = false;
+                    }
+                }
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+                if let Some(dev) = devices.lock().await.get(&device_id.0).cloned() {
+                    DaemonInterface::device_connected(
+                        iface_ref.signal_emitter(),
+                        device_id.0.clone(),
+                        dev,
+                    )
+                    .await?;
+                }
+                debug!("PairingTimedOut signal emitted for {}", device_id.0);
+            }
             ConnectionEvent::ClipboardReceived(content) => {
                 info!("Clipboard received ({} bytes)", content.len());
 

@@ -16,7 +16,11 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{config::CONFIG_DIR, event::CoreEvent, transport::DEFAULT_LISTEN_PORT};
+use crate::{
+    config::CONFIG_DIR,
+    event::CoreEvent,
+    transport::DEFAULT_LISTEN_PORT,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub String);
@@ -54,6 +58,16 @@ pub struct Device {
     pub outgoing_capabilities: Vec<String>,
     pub address: SocketAddr,
     pub pair_state: PairState,
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version: usize,
+    /// UNIX timestamp (seconds) from the most recent pairing handshake,
+    /// used for clock-sync validation per the KDE Connect protocol v8+.
+    #[serde(default)]
+    pub pairing_timestamp: u64,
+}
+
+fn default_protocol_version() -> usize {
+    0
 }
 
 fn default_device_type() -> String {
@@ -70,6 +84,8 @@ impl Default for Device {
             outgoing_capabilities: Vec::new(),
             address: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, DEFAULT_LISTEN_PORT)),
             pair_state: PairState::default(),
+            protocol_version: default_protocol_version(),
+            pairing_timestamp: 0,
         }
     }
 }
@@ -83,7 +99,8 @@ impl Device {
         outgoing_capabilities: Vec<String>,
         address: SocketAddr,
     ) -> anyhow::Result<Self> {
-        let device_id = DeviceId(id);
+        let device_id = DeviceId(validate_device_id(&id)?);
+        let name = sanitize_device_name(&name);
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("cannot find config dir"))?
             .join(CONFIG_DIR);
@@ -111,6 +128,8 @@ impl Device {
             outgoing_capabilities,
             address,
             pair_state: PairState::NotPaired,
+            protocol_version: 0,
+            pairing_timestamp: 0,
         })
     }
 
@@ -142,7 +161,7 @@ impl Device {
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
     devices: Arc<RwLock<HashMap<DeviceId, Device>>>,
-    event_tx: mpsc::UnboundedSender<CoreEvent>,
+    pub(crate) event_tx: mpsc::UnboundedSender<CoreEvent>,
 }
 
 impl DeviceManager {
@@ -200,5 +219,59 @@ impl DeviceManager {
                 .send(CoreEvent::DevicePairStateChanged((id.clone(), state)));
             let _ = device.update_pair_state(state).await;
         }
+    }
+
+    pub async fn set_protocol_version(&self, id: &DeviceId, version: usize) {
+        let mut guard = self.devices.write().await;
+        if let Some(device) = guard.get_mut(id) {
+            device.protocol_version = version;
+        }
+    }
+
+    pub async fn set_pairing_timestamp(&self, id: &DeviceId, timestamp: u64) {
+        let mut guard = self.devices.write().await;
+        if let Some(device) = guard.get_mut(id) {
+            device.pairing_timestamp = timestamp;
+        }
+    }
+
+    pub async fn get_pairing_timestamp(&self, id: &DeviceId) -> u64 {
+        let guard = self.devices.read().await;
+        guard
+            .get(id)
+            .map(|d| d.pairing_timestamp)
+            .unwrap_or(0)
+    }
+}
+
+/// Validate a device ID per the KDE Connect protocol.
+/// Must match `^[a-zA-Z0-9_-]{32,38}$` (32-38 alphanumeric chars, hyphens, underscores).
+pub fn validate_device_id(id: &str) -> anyhow::Result<String> {
+    if id.len() < 32 || id.len() > 38 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(anyhow::anyhow!(
+            "Invalid device ID '{}': must be 32-38 alphanumeric characters, underscores, or hyphens",
+            id
+        ));
+    }
+    Ok(id.to_string())
+}
+
+/// Sanitize a device name by removing forbidden characters.
+/// Valid names contain only characters that are NOT in the set: `"',;:.!?()[]<>`
+/// and must be 1-32 characters after trimming.
+pub fn sanitize_device_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>'))
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if sanitized.is_empty() {
+        "Unknown Device".to_string()
+    } else if sanitized.len() > 32 {
+        sanitized[..32].to_string()
+    } else {
+        sanitized
     }
 }

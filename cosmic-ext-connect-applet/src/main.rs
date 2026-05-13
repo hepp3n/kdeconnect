@@ -103,6 +103,10 @@ impl cosmic::Application for KdeConnectApplet {
                 for device in devices {
                     self.devices.insert(device.id.clone(), device);
                 }
+                // Clear any stale pairing requests for devices that are no
+                // longer in Requested state (e.g. timed out or rejected).
+                self.pairing_requests
+                    .retain(|id, _| self.devices.contains_key(id));
             }
             Message::DelayedRefresh => {
                 return Task::perform(backend::fetch_devices(), |devices| {

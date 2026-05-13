@@ -1,19 +1,26 @@
 use std::net::SocketAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, info};
 
 use crate::{
     device::{Device, DeviceId, DeviceManager, PairState},
-    protocol::{Pair, ProtocolPacket},
+    event::CoreEvent,
+    protocol::{Pair, PacketType, ProtocolPacket},
 };
 
 pub struct PairingManager {
     pub device_manager: DeviceManager,
+    event_tx: tokio::sync::mpsc::UnboundedSender<CoreEvent>,
 }
 
 impl PairingManager {
     pub fn new(device_manager: DeviceManager) -> Self {
-        Self { device_manager }
+        let event_tx = device_manager.event_tx.clone();
+        Self {
+            device_manager,
+            event_tx,
+        }
     }
 
     /// Handle an incoming pair packet from the phone.
@@ -44,7 +51,11 @@ impl PairingManager {
 
         // Ensure device is known and up to date.
         let existing = self.device_manager.get_device(&id).await;
-        let device = Device::new(
+        let protocol_version = existing
+            .as_ref()
+            .map(|d| d.protocol_version)
+            .unwrap_or(0);
+        let mut device = Device::new(
             id.0.clone(),
             name.clone(),
             existing
@@ -62,6 +73,16 @@ impl PairingManager {
             addr,
         )
         .await?;
+        device.protocol_version = protocol_version;
+
+        // Store the phone's pairing timestamp for later clock-sync validation.
+        if let Some(ts) = pair_packet.timestamp {
+            device.pairing_timestamp = ts;
+            self.device_manager
+                .set_pairing_timestamp(&id, ts)
+                .await;
+        }
+
         self.device_manager
             .add_or_update_device(id.clone(), device.clone())
             .await;
@@ -80,9 +101,34 @@ impl PairingManager {
             return Ok(false);
         }
 
-        // Already paired — nothing to do.
+        // Already paired — re-confirm by sending pair:true back.
+        // This handles the case where the phone's app data was reset or
+        // the user cleared app storage: the phone sends pair:true to
+        // re-establish trust, and we acknowledge it.
         if current_state == PairState::Paired {
-            debug!("Already paired with {}", name);
+            info!("[pairing] {} is already paired — re-confirming", name);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let confirm = Pair {
+                pair: true,
+                timestamp: Some(now),
+            };
+            let value = serde_json::to_value(confirm).expect("fail serializing pair");
+            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+
+            // Queue a re-confirmation packet via CoreEvent::SendPacket.
+            let _ = self.event_tx.send(CoreEvent::SendPacket {
+                device: id.clone(),
+                packet: pkt,
+            });
+
+            // Re-emit DevicePaired so the D-Bus service updates its state.
+            let _ = self.event_tx.send(CoreEvent::DevicePaired((
+                id.clone(),
+                device.clone(),
+            )));
             return Ok(false);
         }
 
