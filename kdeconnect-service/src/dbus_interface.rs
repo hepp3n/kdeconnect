@@ -34,6 +34,8 @@ pub struct DbusDevice {
     pub id: String,
     pub name: String,
     pub device_type: String,
+    pub incoming_capabilities: Vec<String>,
+    pub outgoing_capabilities: Vec<String>,
     pub is_paired: bool,
     pub is_reachable: bool,
 }
@@ -227,7 +229,7 @@ impl DaemonInterface {
     /// Request the remote filesystem over SFTP.
     async fn browse_device_filesystem(&self, device_id: String) -> zbus::fdo::Result<()> {
         info!("D-Bus: BrowseDeviceFilesystem called for {}", device_id);
-        let packet = ProtocolPacket::new(PacketType::SftpRequest, json!({}));
+        let packet = ProtocolPacket::new(PacketType::SftpRequest, json!({ "startBrowsing": true }));
         self.event_sender
             .send(AppEvent::SendPacket(DeviceId(device_id), packet))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
@@ -607,7 +609,13 @@ impl KdeConnectService {
                                             DbusDevice {
                                                 id: dev.device_id.0.clone(),
                                                 name: dev.name.clone(),
-                                                device_type: "phone".to_string(),
+                                                device_type: dev.device_type.clone(),
+                                                incoming_capabilities: dev
+                                                    .incoming_capabilities
+                                                    .clone(),
+                                                outgoing_capabilities: dev
+                                                    .outgoing_capabilities
+                                                    .clone(),
                                                 is_paired: true,
                                                 is_reachable: false,
                                             },
@@ -713,7 +721,9 @@ impl KdeConnectService {
                 let dbus_device = DbusDevice {
                     id: device_id.0.clone(),
                     name: device.name.clone(),
-                    device_type: "phone".to_string(),
+                    device_type: device.device_type.clone(),
+                    incoming_capabilities: device.incoming_capabilities.clone(),
+                    outgoing_capabilities: device.outgoing_capabilities.clone(),
                     is_paired,
                     is_reachable: true,
                 };
@@ -781,7 +791,9 @@ impl KdeConnectService {
                 let dbus_device = DbusDevice {
                     id: device_id.0.clone(),
                     name: device.name.clone(),
-                    device_type: "phone".to_string(),
+                    device_type: device.device_type.clone(),
+                    incoming_capabilities: device.incoming_capabilities.clone(),
+                    outgoing_capabilities: device.outgoing_capabilities.clone(),
                     is_paired: true,
                     is_reachable: true,
                 };

@@ -58,6 +58,9 @@ pub enum TransportEvent {
         addr: SocketAddr,
         id: DeviceId,
         name: String,
+        device_type: String,
+        incoming_capabilities: Vec<String>,
+        outgoing_capabilities: Vec<String>,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
         /// Unique ID for this connection instance.
         conn_id: u64,
@@ -266,6 +269,9 @@ impl TcpTransport {
                         addr: peer,
                         id: DeviceId(peer_identity.device_id),
                         name: name.clone(),
+                        device_type: peer_identity.device_type.to_string(),
+                        incoming_capabilities: peer_identity.incoming_capabilities,
+                        outgoing_capabilities: peer_identity.outgoing_capabilities,
                         write_tx,
                         conn_id,
                     }) {
@@ -504,6 +510,9 @@ impl UdpTransport {
                             addr: peer,
                             id: DeviceId(peer_identity.device_id),
                             name: name.clone(),
+                            device_type: peer_identity.device_type.to_string(),
+                            incoming_capabilities: peer_identity.incoming_capabilities,
+                            outgoing_capabilities: peer_identity.outgoing_capabilities,
                             write_tx,
                             conn_id,
                         }) {

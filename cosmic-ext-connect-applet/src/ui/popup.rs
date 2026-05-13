@@ -181,12 +181,14 @@ fn create_device_card<'a>(
                 .size(12)
                 .font(cosmic::font::bold()),
         );
-        menu_items = menu_items.push(
-            widget::button::text(fl!("quick-actions-ping"))
-                .on_press(Message::PingDevice(device.id.clone()))
-                .width(Length::Fill)
-                .class(cosmic::theme::Button::Text),
-        );
+        if device.has_ping {
+            menu_items = menu_items.push(
+                widget::button::text(fl!("quick-actions-ping"))
+                    .on_press(Message::PingDevice(device.id.clone()))
+                    .width(Length::Fill)
+                    .class(cosmic::theme::Button::Text),
+            );
+        }
 
         if device.has_findmyphone {
             menu_items = menu_items.push(
@@ -206,12 +208,14 @@ fn create_device_card<'a>(
             );
         }
 
-        menu_items = menu_items.push(
-            widget::button::text(fl!("quick-actions-sms"))
-                .on_press(Message::SendSMS(device.id.clone()))
-                .width(Length::Fill)
-                .class(cosmic::theme::Button::Text),
-        );
+        if device.has_sms {
+            menu_items = menu_items.push(
+                widget::button::text(fl!("quick-actions-sms"))
+                    .on_press(Message::SendSMS(device.id.clone()))
+                    .width(Length::Fill)
+                    .class(cosmic::theme::Button::Text),
+            );
+        }
 
         if device.has_share || device.has_sftp {
             menu_items = menu_items.push(widget::divider::horizontal::light());

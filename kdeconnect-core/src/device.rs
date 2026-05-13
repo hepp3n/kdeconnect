@@ -46,8 +46,18 @@ pub enum PairState {
 pub struct Device {
     pub name: String,
     pub device_id: DeviceId,
+    #[serde(default = "default_device_type")]
+    pub device_type: String,
+    #[serde(default)]
+    pub incoming_capabilities: Vec<String>,
+    #[serde(default)]
+    pub outgoing_capabilities: Vec<String>,
     pub address: SocketAddr,
     pub pair_state: PairState,
+}
+
+fn default_device_type() -> String {
+    "phone".to_string()
 }
 
 impl Default for Device {
@@ -55,6 +65,9 @@ impl Default for Device {
         Self {
             name: String::new(),
             device_id: DeviceId(String::new()),
+            device_type: default_device_type(),
+            incoming_capabilities: Vec::new(),
+            outgoing_capabilities: Vec::new(),
             address: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, DEFAULT_LISTEN_PORT)),
             pair_state: PairState::default(),
         }
@@ -62,7 +75,14 @@ impl Default for Device {
 }
 
 impl Device {
-    pub async fn new(id: String, name: String, address: SocketAddr) -> anyhow::Result<Self> {
+    pub async fn new(
+        id: String,
+        name: String,
+        device_type: String,
+        incoming_capabilities: Vec<String>,
+        outgoing_capabilities: Vec<String>,
+        address: SocketAddr,
+    ) -> anyhow::Result<Self> {
         let device_id = DeviceId(id);
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("cannot find config dir"))?
@@ -74,12 +94,21 @@ impl Device {
             let mut file = fs::File::open(file_path).await?;
             file.read_to_string(&mut buffer).await?;
 
-            return Ok(ron::de::from_str::<Self>(&buffer)?);
+            let mut device = ron::de::from_str::<Self>(&buffer)?;
+            device.name = name;
+            device.address = address;
+            device.device_type = device_type;
+            device.incoming_capabilities = incoming_capabilities;
+            device.outgoing_capabilities = outgoing_capabilities;
+            return Ok(device);
         }
 
         Ok(Self {
             name,
             device_id,
+            device_type,
+            incoming_capabilities,
+            outgoing_capabilities,
             address,
             pair_state: PairState::NotPaired,
         })

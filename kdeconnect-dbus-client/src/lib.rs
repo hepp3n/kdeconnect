@@ -21,6 +21,8 @@ pub struct Device {
     pub id: String,
     pub name: String,
     pub device_type: String,
+    pub incoming_capabilities: Vec<String>,
+    pub outgoing_capabilities: Vec<String>,
     pub is_paired: bool,
     pub is_reachable: bool,
 }
@@ -357,9 +359,9 @@ impl KdeConnectClient {
             .map(|s| {
                 s.filter_map(|signal| async move {
                     match signal.args() {
-                        Ok(args) => {
-                            Some(ServiceEvent::SmsMessagesReceived(args.messages_json.clone()))
-                        }
+                        Ok(args) => Some(ServiceEvent::SmsMessagesReceived(
+                            args.messages_json.clone(),
+                        )),
                         Err(e) => {
                             error!("Failed to parse SMS signal: {:?}", e);
                             None
@@ -511,18 +513,15 @@ impl KdeConnectClient {
     }
 
     pub async fn transfer_progress_stream(&self) -> impl futures::stream::Stream<Item = u8> {
-        let daemon_update_transfer_progress = match self
-            .daemon_proxy
-            .receive_update_transfer_progress()
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to subscribe to transfer progress: {:?}", e);
-                return Box::pin(futures::stream::empty())
-                    as futures::stream::BoxStream<'static, u8>;
-            }
-        };
+        let daemon_update_transfer_progress =
+            match self.daemon_proxy.receive_update_transfer_progress().await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to subscribe to transfer progress: {:?}", e);
+                    return Box::pin(futures::stream::empty())
+                        as futures::stream::BoxStream<'static, u8>;
+                }
+            };
 
         let update_transfer_stream =
             daemon_update_transfer_progress.filter_map(|signal| async move {

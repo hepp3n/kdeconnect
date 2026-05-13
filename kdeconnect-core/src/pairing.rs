@@ -43,7 +43,25 @@ impl PairingManager {
         };
 
         // Ensure device is known and up to date.
-        let device = Device::new(id.0.clone(), name.clone(), addr).await?;
+        let existing = self.device_manager.get_device(&id).await;
+        let device = Device::new(
+            id.0.clone(),
+            name.clone(),
+            existing
+                .as_ref()
+                .map(|device| device.device_type.clone())
+                .unwrap_or_else(|| "phone".to_string()),
+            existing
+                .as_ref()
+                .map(|device| device.incoming_capabilities.clone())
+                .unwrap_or_default(),
+            existing
+                .as_ref()
+                .map(|device| device.outgoing_capabilities.clone())
+                .unwrap_or_default(),
+            addr,
+        )
+        .await?;
         self.device_manager
             .add_or_update_device(id.clone(), device.clone())
             .await;

@@ -287,12 +287,24 @@ impl KdeConnectCore {
                 addr,
                 id,
                 name,
+                device_type,
+                incoming_capabilities,
+                outgoing_capabilities,
                 write_tx,
                 conn_id,
             } => {
                 debug!("[core] new connection from: {}", addr);
 
-                let device = match Device::new(id.0.clone(), name, addr).await {
+                let device = match Device::new(
+                    id.0.clone(),
+                    name,
+                    device_type,
+                    incoming_capabilities,
+                    outgoing_capabilities,
+                    addr,
+                )
+                .await
+                {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::error!("Failed to create device from metadata: {}", e);
@@ -533,8 +545,11 @@ impl KdeConnectCore {
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
-                let value = serde_json::to_value(Ping { message: Some(msg), ..Default::default() })
-                    .expect("fail serializing packet body");
+                let value = serde_json::to_value(Ping {
+                    message: Some(msg),
+                    ..Default::default()
+                })
+                .expect("fail serializing packet body");
                 let pkt = ProtocolPacket::new(PacketType::Ping, value);
                 let _ = self.queue_packet(&device_id, pkt).await;
             }

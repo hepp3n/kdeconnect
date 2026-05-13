@@ -40,10 +40,21 @@ pub async fn fetch_devices() -> Vec<Device> {
                 .into_iter()
                 .map(|d| {
                     let existing = cache.get(&d.id).cloned();
+                    let remote_accepts = |capability: &str| {
+                        d.incoming_capabilities.iter().any(|cap| cap == capability)
+                    };
+                    let remote_sends = |capability: &str| {
+                        d.outgoing_capabilities.iter().any(|cap| cap == capability)
+                    };
+                    let remote_accepts_any = |capabilities: &[&str]| {
+                        capabilities
+                            .iter()
+                            .any(|capability| remote_accepts(capability))
+                    };
                     let device = Device {
                         id: d.id.clone(),
                         name: d.name.clone(),
-                        device_type: "phone".to_string(),
+                        device_type: d.device_type.clone(),
                         is_paired: d.is_paired,
                         is_reachable: d.is_reachable,
                         battery_level: existing.as_ref().and_then(|e| e.battery_level),
@@ -51,20 +62,37 @@ pub async fn fetch_devices() -> Vec<Device> {
                         network_type: existing.as_ref().and_then(|e| e.network_type.clone()),
                         signal_strength: existing.as_ref().and_then(|e| e.signal_strength),
                         pairing_requests: 0,
-                        has_battery: false,
-                        has_ping: true,
-                        has_sms: true,
-                        has_contacts: false,
-                        has_clipboard: true,
-                        has_findmyphone: true,
-                        has_share: true,
+                        has_battery: remote_sends("kdeconnect.battery"),
+                        has_ping: remote_accepts("kdeconnect.ping"),
+                        has_sms: remote_accepts_any(&[
+                            "kdeconnect.sms.request",
+                            "kdeconnect.sms.request_conversations",
+                            "kdeconnect.sms.request_conversation",
+                        ]),
+                        has_contacts: remote_accepts_any(&[
+                            "kdeconnect.contacts.request_all_uids_timestamps",
+                            "kdeconnect.contacts.request_vcards_by_uid",
+                        ]),
+                        has_clipboard: remote_accepts("kdeconnect.clipboard"),
+                        has_findmyphone: remote_accepts("kdeconnect.findmyphone.request"),
+                        has_share: remote_accepts("kdeconnect.share.request"),
                         share_progress: existing.as_ref().and_then(|e| e.share_progress),
-                        has_sftp: true,
-                        has_mpris: false,
-                        has_remote_keyboard: false,
-                        has_presenter: false,
-                        has_lockdevice: false,
-                        has_virtualmonitor: false,
+                        has_sftp: remote_accepts("kdeconnect.sftp.request"),
+                        has_mpris: remote_accepts_any(&[
+                            "kdeconnect.mpris",
+                            "kdeconnect.mpris.request",
+                        ]),
+                        has_remote_keyboard: remote_accepts_any(&[
+                            "kdeconnect.mousepad.echo",
+                            "kdeconnect.mousepad.request",
+                            "kdeconnect.mousepad.keyboardstate",
+                        ]),
+                        has_presenter: remote_accepts("kdeconnect.presenter"),
+                        has_lockdevice: remote_accepts_any(&[
+                            "kdeconnect.lock",
+                            "kdeconnect.lock.request",
+                        ]),
+                        has_virtualmonitor: remote_accepts("kdeconnect.virtualmonitor"),
                         run_commands: existing
                             .as_ref()
                             .map(|e| e.run_commands.clone())
