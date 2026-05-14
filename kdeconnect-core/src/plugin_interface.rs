@@ -215,7 +215,10 @@ impl PluginRegistry {
                 }
                 debug!("Parsed {} phone->name contact entries", contacts.len());
                 if !contacts.is_empty() {
-                    let _ = connection_tx.send(ConnectionEvent::ContactsReceived(contacts));
+                    let _ = connection_tx.send(ConnectionEvent::ContactsReceived(
+                        device.device_id.clone(),
+                        contacts,
+                    ));
                 }
             }
             PacketType::Clipboard => {
@@ -283,7 +286,6 @@ impl PluginRegistry {
             }
             PacketType::Notification => {
                 debug!("Received notification packet");
-                info!("Notification body: {:?}", body);
                 if let Ok(notification) =
                     serde_json::from_value::<plugins::notification::Notification>(body)
                 {

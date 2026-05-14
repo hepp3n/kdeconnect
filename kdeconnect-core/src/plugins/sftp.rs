@@ -1,15 +1,27 @@
 use std::process::Stdio;
 
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use crate::device::Device;
 
+const SFTP_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'#')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}');
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Sftp {
+    pub ip: Option<String>,
     pub port: Option<u16>,
     pub user: Option<String>,
     pub password: Option<String>,
@@ -45,11 +57,18 @@ impl Sftp {
             debug!("[sftp] response includes user '{}'", user);
         }
 
+        let host = self
+            .ip
+            .as_deref()
+            .filter(|ip| !ip.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| device.address.ip().to_string());
         let uri = sftp_uri(
-            &device.address.ip().to_string(),
+            &host,
             port,
             self.user.as_deref(),
             self.password.as_deref(),
+            self.path.as_deref(),
         );
         info!("[sftp] opening {}", uri_without_password(&uri));
 
@@ -71,7 +90,13 @@ impl Sftp {
     }
 }
 
-fn sftp_uri(host: &str, port: u16, user: Option<&str>, password: Option<&str>) -> String {
+fn sftp_uri(
+    host: &str,
+    port: u16,
+    user: Option<&str>,
+    password: Option<&str>,
+    path: Option<&str>,
+) -> String {
     let auth = match (user, password) {
         (Some(user), Some(password)) if !user.is_empty() => format!(
             "{}:{}@",
@@ -84,7 +109,28 @@ fn sftp_uri(host: &str, port: u16, user: Option<&str>, password: Option<&str>) -
         _ => String::new(),
     };
 
-    format!("sftp://{}{}:{}/", auth, host, port)
+    let path = path
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{path}")
+            }
+        })
+        .unwrap_or_else(|| "/".to_string());
+    let path = utf8_percent_encode(&path, SFTP_PATH_ENCODE_SET);
+
+    let host = bracket_ipv6_host(host);
+    format!("sftp://{}{}:{}{}", auth, host, port, path)
+}
+
+fn bracket_ipv6_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
 }
 
 fn uri_without_password(uri: &str) -> String {
@@ -143,8 +189,36 @@ mod tests {
     #[test]
     fn builds_sftp_uri_with_escaped_credentials() {
         assert_eq!(
-            sftp_uri("192.168.1.10", 1740, Some("kde connect"), Some("pa:ss")),
-            "sftp://kde%20connect:pa%3Ass@192.168.1.10:1740/"
+            sftp_uri(
+                "192.168.1.10",
+                1740,
+                Some("kde connect"),
+                Some("pa:ss"),
+                Some("/storage/emulated/0")
+            ),
+            "sftp://kde%20connect:pa%3Ass@192.168.1.10:1740/storage/emulated/0"
+        );
+    }
+
+    #[test]
+    fn builds_sftp_uri_with_relative_path_and_ipv6_host() {
+        assert_eq!(
+            sftp_uri("2001:db8::1", 1740, Some("kdeconnect"), None, Some("DCIM")),
+            "sftp://kdeconnect@[2001:db8::1]:1740/DCIM"
+        );
+    }
+
+    #[test]
+    fn builds_sftp_uri_with_encoded_path() {
+        assert_eq!(
+            sftp_uri(
+                "192.168.1.10",
+                1740,
+                Some("kdeconnect"),
+                None,
+                Some("/Camera Pictures")
+            ),
+            "sftp://kdeconnect@192.168.1.10:1740/Camera%20Pictures"
         );
     }
 

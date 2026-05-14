@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::event::ConnectionEvent;
+use crate::{device::DeviceId, event::ConnectionEvent};
 
 /// Parses a vCard string and returns (Option<name>, Vec<phone_numbers>)
 pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
@@ -53,7 +53,11 @@ pub fn parse_uids_timestamps(body: &Value) -> Vec<String> {
 
 /// Parses a `kdeconnect.contacts.response_vcards` packet body and emits
 /// a `ConnectionEvent::ContactsReceived` with a phone → name map.
-pub fn parse_vcards_and_emit(body: &Value, tx: &mpsc::UnboundedSender<ConnectionEvent>) {
+pub fn parse_vcards_and_emit(
+    device_id: DeviceId,
+    body: &Value,
+    tx: &mpsc::UnboundedSender<ConnectionEvent>,
+) {
     let uids: Vec<String> = match body.get("uids").and_then(|v| v.as_array()) {
         Some(arr) => arr
             .iter()
@@ -83,7 +87,7 @@ pub fn parse_vcards_and_emit(body: &Value, tx: &mpsc::UnboundedSender<Connection
         contacts.len(),
         uids.len()
     );
-    let _ = tx.send(ConnectionEvent::ContactsReceived(contacts));
+    let _ = tx.send(ConnectionEvent::ContactsReceived(device_id, contacts));
 }
 
 /// Builds the body for a `kdeconnect.contacts.request_vcards_by_uid` packet.

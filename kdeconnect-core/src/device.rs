@@ -285,9 +285,23 @@ pub fn sanitize_device_name(name: &str) -> String {
 
     if sanitized.is_empty() {
         "Unknown Device".to_string()
-    } else if sanitized.len() > 32 {
-        sanitized[..32].to_string()
+    } else if sanitized.chars().count() > 32 {
+        sanitized.chars().take(32).collect()
     } else {
         sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_device_name;
+
+    #[test]
+    fn sanitizes_long_unicode_device_names_without_panicking() {
+        let name = sanitize_device_name(
+            "電話電話電話電話電話電話電話電話電話電話電話電話電話電話電話電話電話",
+        );
+
+        assert_eq!(name.chars().count(), 32);
     }
 }

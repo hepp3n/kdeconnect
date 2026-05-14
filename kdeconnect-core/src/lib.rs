@@ -667,11 +667,24 @@ impl KdeConnectCore {
                                     }
                                 }
                             }
-                        } else {
+                        } else if matches!(pkt.packet_type, PacketType::Identity) {
+                            debug!("[core] identity packet from {}; ignoring in event loop", id);
+                        } else if self
+                            .device_manager
+                            .get_device(&id)
+                            .await
+                            .map(|device| device.pair_state == crate::device::PairState::Paired)
+                            .unwrap_or(false)
+                        {
                             let _ = self.event_tx.send(CoreEvent::PacketReceived {
                                 device: id.clone(),
                                 packet: pkt.clone(),
                             });
+                        } else {
+                            warn!(
+                                "[core] ignoring {:?} from unpaired device {}",
+                                pkt.packet_type, id
+                            );
                         }
                     }
                     Err(e) => {

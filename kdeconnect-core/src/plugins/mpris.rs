@@ -7,7 +7,7 @@ use tracing::debug;
 use zbus::interface;
 
 use crate::{
-    device::{Device, DeviceManager},
+    device::{Device, DeviceManager, PairState},
     plugin_interface::Plugin,
     protocol::{DeviceFile, DevicePayload, PacketPayloadTransferInfo, PacketType, ProtocolPacket},
 };
@@ -467,6 +467,9 @@ pub fn monitor_mpris(
                 tokio::spawn(async move {
                     let devices = dm.get_devices().await;
                     for device in devices {
+                        if device.pair_state != PairState::Paired {
+                            continue;
+                        }
                         let _ = ctx.send(crate::event::CoreEvent::SendPacket {
                             device: device.device_id.clone(),
                             packet: packet.clone(),
@@ -523,6 +526,9 @@ pub fn monitor_mpris(
                                         tokio::spawn(async move {
                                             let devices = dm.get_devices().await;
                                             for device in devices {
+                                                if device.pair_state != PairState::Paired {
+                                                    continue;
+                                                }
                                                 let _ =
                                                     ctx.send(crate::event::CoreEvent::SendPacket {
                                                         device: device.device_id.clone(),

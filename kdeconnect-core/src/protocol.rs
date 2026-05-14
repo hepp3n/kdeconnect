@@ -11,6 +11,26 @@ use tokio::{fs::File, io::AsyncRead};
 
 pub const PROTOCOL_VERSION: usize = 8;
 
+fn deserialize_packet_id<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Number(id)) => id
+            .as_u64()
+            .map(|id| Some(id as u128))
+            .ok_or_else(|| serde::de::Error::custom("packet id must be an unsigned integer")),
+        Some(Value::String(id)) => id
+            .parse::<u128>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        None => Ok(None),
+        Some(_) => Err(serde::de::Error::custom(
+            "packet id must be a number or numeric string",
+        )),
+    }
+}
+
 fn serialize_packet_type<S>(pt: &PacketType, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -200,6 +220,7 @@ impl Display for PacketType {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ProtocolPacket {
+    #[serde(default, deserialize_with = "deserialize_packet_id")]
     pub id: Option<u128>,
     #[serde(rename = "type")]
     #[serde(
@@ -320,6 +341,17 @@ mod tests {
     #[test]
     fn from_raw_returns_error_for_invalid_json() {
         assert!(ProtocolPacket::from_raw(b"not json\n").is_err());
+    }
+
+    #[test]
+    fn packet_id_accepts_kdeconnect_string_timestamp() {
+        let decoded = ProtocolPacket::from_raw(
+            br#"{"id":"1712345678901","type":"kdeconnect.ping","body":{}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.id, Some(1_712_345_678_901));
+        assert!(matches!(decoded.packet_type, PacketType::Ping));
     }
 
     #[test]

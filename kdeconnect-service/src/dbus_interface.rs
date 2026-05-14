@@ -131,10 +131,12 @@ mod tests {
     }
 
     #[test]
-    fn sms_send_request_matches_legacy_android_payload() {
+    fn sms_send_request_includes_modern_and_legacy_android_payloads() {
         assert_eq!(
             sms_send_request_body("555-555-5555", "message body"),
             json!({
+                "addresses": [{ "address": "555-555-5555" }],
+                "version": 2,
                 "sendSms": true,
                 "phoneNumber": "555-555-5555",
                 "messageBody": "message body",
@@ -402,6 +404,8 @@ fn sms_conversation_request_body(thread_id: i64) -> serde_json::Value {
 
 fn sms_send_request_body(phone_number: &str, message: &str) -> serde_json::Value {
     json!({
+        "addresses": [{ "address": phone_number }],
+        "version": 2,
         "sendSms": true,
         "phoneNumber": phone_number,
         "messageBody": message,
@@ -891,12 +895,10 @@ impl KdeConnectService {
                     .await?;
                 debug!("SMS D-Bus signal emitted");
             }
-            ConnectionEvent::ContactsReceived(contacts) => {
+            ConnectionEvent::ContactsReceived(device_id, contacts) => {
                 info!("Contacts received: {} entries", contacts.len());
 
-                if let Some(did) = current_device_id.lock().await.as_deref() {
-                    save_contacts_cache(did, &contacts).await;
-                }
+                save_contacts_cache(&device_id.0, &contacts).await;
 
                 let contacts_json = serde_json::to_string(&contacts)?;
 

@@ -42,7 +42,6 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.messages",
     "kdeconnect.systemvolume.request",
     "kdeconnect.telephony",
-    "kdeconnect.lock",
 ];
 
 const OUTGOING_CAPABILITIES: &[&str] = &[
@@ -73,8 +72,6 @@ const OUTGOING_CAPABILITIES: &[&str] = &[
     "kdeconnect.sms.request_conversation",
     "kdeconnect.systemvolume",
     "kdeconnect.telephony.request_mute",
-    "kdeconnect.lock.request",
-    "kdeconnect.lock",
 ];
 
 #[derive(Debug)]
@@ -206,5 +203,12 @@ mod tests {
         assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.clipboard.connect"));
         assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.notification"));
         assert!(INCOMING_CAPABILITIES.contains(&"kdeconnect.notification.request"));
+    }
+
+    #[test]
+    fn advertised_capabilities_do_not_claim_unimplemented_lock_plugin() {
+        assert!(!INCOMING_CAPABILITIES.contains(&"kdeconnect.lock"));
+        assert!(!OUTGOING_CAPABILITIES.contains(&"kdeconnect.lock"));
+        assert!(!OUTGOING_CAPABILITIES.contains(&"kdeconnect.lock.request"));
     }
 }

@@ -41,6 +41,7 @@ pub struct Battery {
     pub is_charging: bool,
     #[serde(
         rename = "thresholdEvent",
+        default,
         serialize_with = "serialize_threshold",
         deserialize_with = "deserialize_threshold"
     )]
@@ -70,17 +71,21 @@ impl Battery {
 }
 
 pub async fn send_local_state(device: DeviceId, event: mpsc::UnboundedSender<CoreEvent>) {
-    let battery = read_local_battery().await.unwrap_or(Battery {
-        charge: 100,
-        is_charging: false,
-        under_threshold: false,
-    });
+    let battery = read_local_battery().await.unwrap_or_else(no_local_battery);
 
     let packet = ProtocolPacket::new(
         PacketType::Battery,
         serde_json::to_value(battery).unwrap_or_default(),
     );
     let _ = event.send(CoreEvent::SendPacket { device, packet });
+}
+
+fn no_local_battery() -> Battery {
+    Battery {
+        charge: -1,
+        is_charging: false,
+        under_threshold: false,
+    }
 }
 
 async fn read_local_battery() -> Option<Battery> {
@@ -106,7 +111,7 @@ async fn read_local_battery() -> Option<Battery> {
         });
     }
 
-    debug!("[battery] no local battery found; reporting desktop default");
+    debug!("[battery] no local battery found; reporting no-battery sentinel");
     None
 }
 
@@ -119,7 +124,7 @@ async fn read_trimmed(path: PathBuf) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Battery;
+    use super::{Battery, no_local_battery};
 
     #[test]
     fn accepts_protocol_no_battery_sentinel() {
@@ -132,5 +137,27 @@ mod tests {
 
         assert_eq!(battery.charge, -1);
         assert!(!battery.is_charging);
+    }
+
+    #[test]
+    fn defaults_missing_threshold_event_to_false() {
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": 87,
+            "isCharging": true
+        }))
+        .unwrap();
+
+        assert_eq!(battery.charge, 87);
+        assert!(battery.is_charging);
+        assert!(!battery.under_threshold);
+    }
+
+    #[test]
+    fn no_local_battery_uses_protocol_sentinel() {
+        let battery = no_local_battery();
+
+        assert_eq!(battery.charge, -1);
+        assert!(!battery.is_charging);
+        assert!(!battery.under_threshold);
     }
 }

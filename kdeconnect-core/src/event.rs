@@ -68,7 +68,7 @@ pub enum ConnectionEvent {
     PairStateChanged((DeviceId, PairState)),
     Mpris((DeviceId, Mpris)),
     SmsMessages(SmsMessages),
-    ContactsReceived(HashMap<String, String>),
+    ContactsReceived(DeviceId, HashMap<String, String>),
     UpdateTransferProgress(u8),
     /// Phone sent pair:true and is waiting for user decision.
     /// Payload is (device_id, device_name).
