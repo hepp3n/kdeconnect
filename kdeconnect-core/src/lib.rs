@@ -574,6 +574,7 @@ impl KdeConnectCore {
                                                 )
                                                 .await;
                                             cleanup_device_data(&id.0).await;
+                                            self.drop_connection(&id).await;
                                             let conn_event = ConnectionEvent::PairStateChanged((
                                                 id.clone(),
                                                 crate::device::PairState::NotPaired,
@@ -896,8 +897,11 @@ impl KdeConnectCore {
                     info!("[core] sent pair:false to {} on unpair", device_id);
                 }
 
-                let _ = self.pairing.cancel_pairing(device_id.clone()).await;
+                self.device_manager
+                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                    .await;
                 cleanup_device_data(&device_id.0).await;
+                self.drop_connection(&device_id).await;
 
                 let conn_event = ConnectionEvent::PairStateChanged((
                     device_id,
@@ -1050,6 +1054,15 @@ impl KdeConnectCore {
         true
     }
 
+    async fn drop_connection(&self, device_id: &DeviceId) -> bool {
+        self.conn_id_map.lock().await.remove(device_id);
+        let removed = self.writer_map.lock().await.remove(device_id).is_some();
+        if removed {
+            info!("[core] dropped connection for {}", device_id);
+        }
+        removed
+    }
+
     pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {
         self.out_tx.clone()
     }
@@ -1057,7 +1070,7 @@ impl KdeConnectCore {
 
 /// Remove all persisted data for a device on unpair.
 /// Cleans plugin config (~/.config/kdeconnect/) and cache (~/.local/share/kdeconnect/).
-async fn cleanup_device_data(device_id: &str) {
+pub async fn cleanup_device_data(device_id: &str) {
     // Plugin enabled/disabled config
     if let Some(config_dir) = dirs::config_dir() {
         let plugin_file = config_dir

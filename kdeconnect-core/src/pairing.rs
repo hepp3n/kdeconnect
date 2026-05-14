@@ -167,8 +167,4 @@ impl PairingManager {
         );
         Ok(true)
     }
-
-    pub async fn cancel_pairing(&self, device_id: DeviceId) {
-        self.device_manager.set_paired(&device_id, false).await
-    }
 }

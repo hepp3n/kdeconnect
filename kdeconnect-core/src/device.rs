@@ -148,8 +148,10 @@ impl Device {
                 .join(CONFIG_DIR);
             let file_path = config_dir.join(format!("{}.ron", self.device_id));
 
-            if file_path.exists() {
-                fs::remove_file(&file_path).await?
+            if let Err(e) = fs::remove_file(&file_path).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
             }
 
             let mut file = fs::File::create(file_path).await?;
