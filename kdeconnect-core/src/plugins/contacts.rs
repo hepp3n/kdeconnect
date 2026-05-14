@@ -94,3 +94,42 @@ pub fn parse_vcards_and_emit(
 pub fn build_vcards_request(uids: Vec<String>) -> Value {
     serde_json::json!({ "uids": uids })
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::{build_vcards_request, parse_vcards_and_emit};
+    use crate::{device::DeviceId, event::ConnectionEvent};
+
+    #[test]
+    fn build_vcards_request_uses_protocol_uids_shape() {
+        assert_eq!(
+            build_vcards_request(vec!["1".to_string(), "2".to_string()]),
+            serde_json::json!({ "uids": ["1", "2"] })
+        );
+    }
+
+    #[test]
+    fn emits_contacts_with_source_device_id() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let device_id = DeviceId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+        parse_vcards_and_emit(
+            device_id.clone(),
+            &serde_json::json!({
+                "uids": ["contact-1"],
+                "contact-1": "BEGIN:VCARD\nFN:Jane Doe\nTEL;TYPE=CELL:+15551234567\nEND:VCARD\n"
+            }),
+            &tx,
+        );
+
+        let event = rx.try_recv().expect("contacts event");
+        match event {
+            ConnectionEvent::ContactsReceived(id, contacts) => {
+                assert_eq!(id, device_id);
+                assert_eq!(contacts.get("+15551234567"), Some(&"Jane Doe".to_string()));
+            }
+            _ => panic!("unexpected event"),
+        }
+    }
+}
