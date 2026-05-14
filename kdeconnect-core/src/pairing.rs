@@ -54,6 +54,15 @@ impl PairingManager {
         // Ensure device is known and up to date.
         let existing = self.device_manager.get_device(&id).await;
         let protocol_version = existing.as_ref().map(|d| d.protocol_version).unwrap_or(0);
+        let pair_state = existing
+            .as_ref()
+            .map(|d| d.pair_state)
+            .unwrap_or(PairState::NotPaired);
+        let remote_certificate = existing
+            .as_ref()
+            .map(|d| d.remote_certificate.clone())
+            .unwrap_or_default();
+
         let mut device = Device::new(
             id.0.clone(),
             name.clone(),
@@ -73,6 +82,8 @@ impl PairingManager {
         )
         .await?;
         device.protocol_version = protocol_version;
+        device.pair_state = pair_state;
+        device.remote_certificate = remote_certificate;
 
         // Store the phone's pairing timestamp for later clock-sync validation.
         if let Some(ts) = pair_packet.timestamp {
@@ -166,5 +177,121 @@ impl PairingManager {
             name
         );
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::PacketType;
+    use serde_json::json;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use tokio::sync::mpsc;
+
+    fn setup_test_env() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", temp_dir.path());
+        }
+        // Ensure the config directory exists for Device::new
+        let kc_dir = temp_dir.path().join(".config").join("kdeconnect");
+        std::fs::create_dir_all(kc_dir).unwrap();
+        temp_dir
+    }
+
+    #[tokio::test]
+    async fn handles_incoming_pair_request_transitions_to_requested() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-id-000000000000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+        let packet = ProtocolPacket::new(
+            PacketType::Pair,
+            json!({
+                "pair": true,
+                "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+            }),
+        );
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test Phone".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(result);
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::Requested);
+    }
+
+    #[tokio::test]
+    async fn accepts_pairing_when_in_requesting_state() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-id-000000000000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+
+        // Manually set state to Requesting (as if we initiated pairing)
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.pair_state = PairState::Requesting;
+        dm.add_or_update_device(id.clone(), device).await;
+
+        let packet = ProtocolPacket::new(PacketType::Pair, json!({ "pair": true }));
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test Phone".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(!result); // Returns false because it's already auto-accepted
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::Paired);
+    }
+
+    #[tokio::test]
+    async fn rejects_pair_request_with_large_clock_skew() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-id-000000000000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+
+        // Set protocol version to 8 to enable clock check
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.protocol_version = 8;
+        dm.add_or_update_device(id.clone(), device).await;
+
+        // Timestamp 1 hour in the past
+        let skewed_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 3601;
+
+        let packet = ProtocolPacket::new(
+            PacketType::Pair,
+            json!({
+                "pair": true,
+                "timestamp": skewed_ts
+            }),
+        );
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test Phone".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(!result);
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::NotPaired);
     }
 }

@@ -11,7 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use zbus::object_server::SignalEmitter;
 use zbus::{Connection, interface};
 
@@ -181,9 +181,6 @@ impl DaemonInterface {
         self.event_sender
             .send(AppEvent::Unpair(DeviceId(device_id.clone())))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-        mark_persisted_device_unpaired(&device_id).await;
-        kdeconnect_core::cleanup_device_data(&device_id).await;
 
         let updated_device = {
             let mut devices = self.devices.lock().await;
@@ -412,51 +409,6 @@ impl DaemonInterface {
         device_id: String,
         commands_json: String,
     ) -> zbus::Result<()>;
-}
-
-async fn mark_persisted_device_unpaired(device_id: &str) {
-    use kdeconnect_core::{config::CONFIG_DIR, device::Device as CoreDevice};
-
-    let Some(config_dir) = dirs::config_dir() else {
-        warn!("Cannot locate config dir while unpairing {}", device_id);
-        return;
-    };
-
-    let path = config_dir
-        .join(CONFIG_DIR)
-        .join(format!("{}.ron", device_id));
-    let raw = match tokio::fs::read_to_string(&path).await {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            warn!(
-                "Failed to read persisted device {} while unpairing: {}",
-                device_id, e
-            );
-            return;
-        }
-    };
-
-    let device = match ron::de::from_str::<CoreDevice>(&raw) {
-        Ok(device) => device,
-        Err(e) => {
-            warn!(
-                "Failed to parse persisted device {} while unpairing: {}",
-                device_id, e
-            );
-            return;
-        }
-    };
-
-    if let Err(e) = device
-        .store_device_identity(kdeconnect_core::device::PairState::NotPaired)
-        .await
-    {
-        warn!(
-            "Failed to persist unpaired state for device {}: {}",
-            device_id, e
-        );
-    }
 }
 
 /// SMS-specific D-Bus interface

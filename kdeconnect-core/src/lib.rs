@@ -759,41 +759,49 @@ impl KdeConnectCore {
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
                     info!("Sent pair request packet to device: {}", device_id);
-                }
-                self.device_manager
-                    .update_pair_state(&device_id, crate::device::PairState::Requesting)
-                    .await;
+                    self.device_manager
+                        .update_pair_state(&device_id, crate::device::PairState::Requesting)
+                        .await;
 
-                // 30-second auto-cancel: if the phone doesn't respond in time,
-                // revert to NotPaired so the user isn't stuck in the pairing state.
-                let dm = self.device_manager.clone();
-                let event_tx = self.event_tx.clone();
-                let conn_tx = self.conn_tx.clone();
-                let mpris_tx = self.mpris_conn_tx.clone();
-                let did = device_id.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
-                    if let Some(dev) = dm.get_device(&did).await
-                        && dev.pair_state == crate::device::PairState::Requesting
-                    {
-                        info!(
-                            "[core] outgoing pair request to {} timed out after {}s",
-                            did, PAIRING_TIMEOUT_SECS
-                        );
-                        let pair = Pair::reject();
-                        let value = serde_json::to_value(pair).expect("fail serializing pair");
-                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                        let _ = event_tx.send(CoreEvent::SendPacket {
-                            device: did.clone(),
-                            packet: pkt,
-                        });
-                        dm.update_pair_state(&did, crate::device::PairState::NotPaired)
-                            .await;
-                        let ev = ConnectionEvent::PairingTimedOut(did);
-                        let _ = conn_tx.send(ev.clone());
-                        let _ = mpris_tx.send(ev);
-                    }
-                });
+                    // 30-second auto-cancel: if the phone doesn't respond in time,
+                    // revert to NotPaired so the user isn't stuck in the pairing state.
+                    let dm = self.device_manager.clone();
+                    let event_tx = self.event_tx.clone();
+                    let conn_tx = self.conn_tx.clone();
+                    let mpris_tx = self.mpris_conn_tx.clone();
+                    let did = device_id.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+                        if let Some(dev) = dm.get_device(&did).await
+                            && dev.pair_state == crate::device::PairState::Requesting
+                        {
+                            info!(
+                                "[core] outgoing pair request to {} timed out after {}s",
+                                did, PAIRING_TIMEOUT_SECS
+                            );
+                            let pair = Pair::reject();
+                            let value = serde_json::to_value(pair).expect("fail serializing pair");
+                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                            let _ = event_tx.send(CoreEvent::SendPacket {
+                                device: did.clone(),
+                                packet: pkt,
+                            });
+                            dm.update_pair_state(&did, crate::device::PairState::NotPaired)
+                                .await;
+                            let ev = ConnectionEvent::PairingTimedOut(did);
+                            let _ = conn_tx.send(ev.clone());
+                            let _ = mpris_tx.send(ev);
+                        }
+                    });
+                } else {
+                    warn!(
+                        "[core] failed to send pair request to {} (no connection)",
+                        device_id
+                    );
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                }
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
@@ -959,8 +967,19 @@ impl KdeConnectCore {
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 if self.queue_packet(&device_id, pkt).await {
                     info!("[core] sent pair:true to {} on accept", device_id);
+                    self.device_manager.set_paired(&device_id, true).await;
+                } else {
+                    warn!(
+                        "[core] failed to send pair acceptance to {} (no connection)",
+                        device_id
+                    );
+                    self.device_manager
+                        .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                        .await;
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
                 }
-                self.device_manager.set_paired(&device_id, true).await;
             }
             AppEvent::RejectPairing(device_id) => {
                 info!("User rejected pairing from {}", device_id);
@@ -1081,6 +1100,19 @@ pub async fn cleanup_device_data(device_id: &str) {
         {
             tracing::warn!(
                 "[cleanup] failed to remove plugin config for {}: {}",
+                device_id,
+                e
+            );
+        }
+
+        let device_file = config_dir
+            .join("kdeconnect")
+            .join(format!("{}.ron", device_id));
+        if let Err(e) = tokio::fs::remove_file(&device_file).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "[cleanup] failed to remove device identity for {}: {}",
                 device_id,
                 e
             );
