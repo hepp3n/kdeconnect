@@ -35,61 +35,61 @@ pub fn create_popup_view<'a>(
 
     // Pairing requests — sourced from the applet's live pairing_requests map,
     // not from Device.pairing_requests which is never populated via D-Bus.
-    if let Some(requests) = pairing_requests {
-        if !requests.is_empty() {
-            content = content.push(
-                widget::text(fl!("pairing-requests"))
-                    .size(14)
-                    .font(cosmic::font::bold()),
-            );
+    if let Some(requests) = pairing_requests
+        && !requests.is_empty()
+    {
+        content = content.push(
+            widget::text(fl!("pairing-requests"))
+                .size(14)
+                .font(cosmic::font::bold()),
+        );
 
-            let mut sorted: Vec<(&String, &String)> = requests.iter().collect();
-            sorted.sort_by(|a, b| a.1.cmp(b.1));
+        let mut sorted: Vec<(&String, &String)> = requests.iter().collect();
+        sorted.sort_by(|a, b| a.1.cmp(b.1));
 
-            for (device_id, device_name) in sorted {
-                let device_id_accept = device_id.clone();
-                let device_id_reject = device_id.clone();
+        for (device_id, device_name) in sorted {
+            let device_id_accept = device_id.clone();
+            let device_id_reject = device_id.clone();
 
-                let request_card = widget::container(
-                    widget::Column::new()
-                        .push(
-                            widget::Row::new()
-                                .push(widget::icon::from_name("phone-symbolic").size(24))
-                                .push(
-                                    widget::Column::new()
-                                        .push(widget::text(device_name).size(14))
-                                        .push(widget::text(fl!("pairing-wants-to-pair")).size(11))
-                                        .spacing(spacing.space_xxxs),
-                                )
-                                .spacing(spacing.space_s)
-                                .align_y(Alignment::Center),
-                        )
-                        .push(widget::Space::new().height(Length::Fixed(spacing.space_xs as f32)))
-                        .push(
-                            widget::Row::new()
-                                .push(
-                                    widget::button::suggested(fl!("pairing-accept"))
-                                        .on_press(Message::AcceptPairing(device_id_accept))
-                                        .width(Length::Fill),
-                                )
-                                .push(
-                                    widget::button::destructive(fl!("pairing-reject"))
-                                        .on_press(Message::RejectPairing(device_id_reject))
-                                        .width(Length::Fill),
-                                )
-                                .spacing(spacing.space_xs),
-                        )
-                        .spacing(spacing.space_xs),
-                )
-                .padding(spacing.space_s)
-                .class(cosmic::theme::Container::Card)
-                .width(Length::Fill);
+            let request_card = widget::container(
+                widget::Column::new()
+                    .push(
+                        widget::Row::new()
+                            .push(widget::icon::from_name("phone-symbolic").size(24))
+                            .push(
+                                widget::Column::new()
+                                    .push(widget::text(device_name).size(14))
+                                    .push(widget::text(fl!("pairing-wants-to-pair")).size(11))
+                                    .spacing(spacing.space_xxxs),
+                            )
+                            .spacing(spacing.space_s)
+                            .align_y(Alignment::Center),
+                    )
+                    .push(widget::Space::new().height(Length::Fixed(spacing.space_xs as f32)))
+                    .push(
+                        widget::Row::new()
+                            .push(
+                                widget::button::suggested(fl!("pairing-accept"))
+                                    .on_press(Message::AcceptPairing(device_id_accept))
+                                    .width(Length::Fill),
+                            )
+                            .push(
+                                widget::button::destructive(fl!("pairing-reject"))
+                                    .on_press(Message::RejectPairing(device_id_reject))
+                                    .width(Length::Fill),
+                            )
+                            .spacing(spacing.space_xs),
+                    )
+                    .spacing(spacing.space_xs),
+            )
+            .padding(spacing.space_s)
+            .class(cosmic::theme::Container::Card)
+            .width(Length::Fill);
 
-                content = content.push(request_card);
-            }
-
-            content = content.push(widget::divider::horizontal::default());
+            content = content.push(request_card);
         }
+
+        content = content.push(widget::divider::horizontal::default());
     }
 
     // All paired devices — reachable and unreachable — sorted alphabetically
@@ -232,13 +232,9 @@ fn create_device_card<'a>(
                         .width(Length::Fill)
                         .class(cosmic::theme::Button::Text),
                 );
-                menu_items = menu_items.push_maybe(if let Some(progress) = device.share_progress {
-                    Some(widget::progress_bar::determinate_linear(
-                        progress as f32 / 100.0,
-                    ))
-                } else {
-                    None
-                });
+                menu_items = menu_items.push_maybe(device.share_progress.map(|progress| {
+                    widget::progress_bar::determinate_linear(progress as f32 / 100.0)
+                }));
             }
 
             if device.has_sftp {

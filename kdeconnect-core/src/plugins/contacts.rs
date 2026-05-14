@@ -12,8 +12,8 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
 
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("FN:") {
-            name = Some(line[3..].trim().to_string());
+        if let Some(stripped) = line.strip_prefix("FN:") {
+            name = Some(stripped.trim().to_string());
         } else if name.is_none() && line.starts_with("N:") {
             let parts: Vec<&str> = line[2..].split(';').collect();
             if parts.len() >= 2 {
@@ -24,12 +24,12 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
                     name = Some(full);
                 }
             }
-        } else if line.starts_with("TEL") {
-            if let Some(pos) = line.rfind(':') {
-                let phone = line[pos + 1..].trim().to_string();
-                if !phone.is_empty() {
-                    phones.push(phone);
-                }
+        } else if line.starts_with("TEL")
+            && let Some(pos) = line.rfind(':')
+        {
+            let phone = line[pos + 1..].trim().to_string();
+            if !phone.is_empty() {
+                phones.push(phone);
             }
         }
     }

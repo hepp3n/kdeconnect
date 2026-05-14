@@ -421,7 +421,7 @@ impl DeviceFile<File> {
         let metadata = file.metadata().await?;
         Ok(DeviceFile {
             buf: file,
-            size: metadata.size().try_into().map_err(std::io::Error::other)?,
+            size: metadata.size(),
         })
     }
 

@@ -94,7 +94,7 @@ impl cosmic::Application for KdeConnectApplet {
                 }
             }
             Message::RefreshDevices => {
-                return Task::perform(backend::fetch_devices(), |devices| {
+                return Task::perform(backend::scan_devices(), |devices| {
                     cosmic::Action::App(Message::DevicesUpdated(devices))
                 });
             }
@@ -215,20 +215,20 @@ impl cosmic::Application for KdeConnectApplet {
                 return Task::perform(
                     async move {
                         let files = portal::pick_files(&fl!("file-picker-title"), true, None).await;
-                        if !files.is_empty() {
-                            if let Err(e) = backend::send_files(id, files).await {
-                                error!("Failed to send files: {:?}", e);
-                            }
+                        if !files.is_empty()
+                            && let Err(e) = backend::send_files(id, files).await
+                        {
+                            error!("Failed to send files: {:?}", e);
                         }
                     },
                     |_| cosmic::Action::App(Message::RefreshDevices),
                 );
             }
             Message::UpdateTransferProgress(progress) => {
-                if let Some(ref current_device) = self.expanded_device {
-                    if let Some(device) = self.devices.get_mut(current_device) {
-                        device.share_progress = if progress < 100 { Some(progress) } else { None };
-                    }
+                if let Some(ref current_device) = self.expanded_device
+                    && let Some(device) = self.devices.get_mut(current_device)
+                {
+                    device.share_progress = if progress < 100 { Some(progress) } else { None };
                 }
             }
             Message::ShareClipboard(ref device_id) => {

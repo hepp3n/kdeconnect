@@ -248,7 +248,7 @@ impl Application for SmsWindow {
                     conv.timestamp = now;
                 }
                 self.conversations
-                    .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                    .sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
                 // Scroll the conversation list to the top so the moved item is visible.
                 let scroll_task = scrollable::scroll_to(
@@ -380,13 +380,13 @@ impl SmsWindow {
                 self.update_conversation_names();
 
                 // If we had a new_* selected, find its real thread by phone number now
-                if let Some(phone) = pending_new_phone {
-                    if let Some(real) = self.conversations.iter().find(|c| {
+                if let Some(phone) = pending_new_phone
+                    && let Some(real) = self.conversations.iter().find(|c| {
                         !c.thread_id.starts_with("new_")
                             && super::utils::phone_numbers_match(&c.phone_number, &phone)
-                    }) {
-                        self.selected_thread = Some(real.thread_id.clone());
-                    }
+                    })
+                {
+                    self.selected_thread = Some(real.thread_id.clone());
                 }
             }
             ProtocolEvent::MessageReceived(message) => {
@@ -426,7 +426,7 @@ impl SmsWindow {
                     conv.timestamp = message.date;
                 }
                 self.conversations
-                    .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                    .sort_by_key(|b| std::cmp::Reverse(b.timestamp));
             }
             ProtocolEvent::Error(e) => error!("SMS protocol error: {}", e),
         }

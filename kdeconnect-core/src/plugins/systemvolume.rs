@@ -255,12 +255,11 @@ fn pa_thread(
         // Subscribe to sink changes — signal ourselves via the message channel.
         let did_sub = device_id.clone();
         context.set_subscribe_callback(Some(Box::new(move |facility, _op, _index| {
-            if facility == Some(Facility::Sink) {
-                if let Ok(map) = PA_CONNECTIONS.lock() {
-                    if let Some(conn) = map.get(&did_sub.0) {
-                        conn.send(PaMessage::GetSinks);
-                    }
-                }
+            if facility == Some(Facility::Sink)
+                && let Ok(map) = PA_CONNECTIONS.lock()
+                && let Some(conn) = map.get(&did_sub.0)
+            {
+                conn.send(PaMessage::GetSinks);
             }
         })));
         context.subscribe(InterestMaskSet::SINK, |_| {});
@@ -385,12 +384,11 @@ fn enumerate_sinks(mainloop: &mut Mainloop, context: &Context) -> Option<Vec<Sin
 
     mainloop.lock();
     let op = introspect.get_sink_info_list(move |result| {
-        if let ListResult::Item(info) = result {
-            if let Some(sink) = pa_sink_to_info(info, &default_name_cb) {
-                if let Ok(mut guard) = sinks_cb.lock() {
-                    guard.push(sink);
-                }
-            }
+        if let ListResult::Item(info) = result
+            && let Some(sink) = pa_sink_to_info(info, &default_name_cb)
+            && let Ok(mut guard) = sinks_cb.lock()
+        {
+            guard.push(sink);
         }
     });
 
@@ -417,10 +415,10 @@ fn set_volume(mainloop: &mut Mainloop, context: &Context, name: &str, volume: u3
     mainloop.lock();
     let mut introspect = context.introspect();
     let op = introspect.get_sink_info_by_name(name, move |result| {
-        if let ListResult::Item(info) = result {
-            if let Ok(mut guard) = channels_cb.lock() {
-                *guard = info.channel_map.len() as u8;
-            }
+        if let ListResult::Item(info) = result
+            && let Ok(mut guard) = channels_cb.lock()
+        {
+            *guard = info.channel_map.len();
         }
     });
 

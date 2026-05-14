@@ -217,7 +217,7 @@ impl TcpTransport {
                     }
 
                     // Validate device ID and sanitize name early, before TLS.
-                    if !crate::device::validate_device_id(&id).is_ok() {
+                    if crate::device::validate_device_id(&id).is_err() {
                         warn!(peer = ?peer, device_id = ?id, "[tcp] invalid device ID, dropping");
                         continue;
                     }
@@ -420,18 +420,30 @@ impl UdpTransport {
         .expect("Failed to serialize identity packet");
 
         let handle = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            let mut interval = tokio::time::interval(Duration::from_secs(interval.as_secs()));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-            loop {
+            // Send a short burst immediately for explicit scans. UDP broadcast is
+            // intentionally lossy on many Wi-Fi networks, so a single packet can
+            // be missed even when discovery should work.
+            for _ in 0..3 {
                 match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
                     Ok(size) => {
                         debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast")
                     }
                     Err(e) => warn!(addr = ?BROADCAST_ADDR, "Failed to send UDP packet: {}", e),
                 }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+
+            let mut interval = tokio::time::interval(Duration::from_secs(interval.as_secs()));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            loop {
                 interval.tick().await;
+                match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
+                    Ok(size) => {
+                        debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast")
+                    }
+                    Err(e) => warn!(addr = ?BROADCAST_ADDR, "Failed to send UDP packet: {}", e),
+                }
             }
         });
 

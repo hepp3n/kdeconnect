@@ -195,7 +195,7 @@ fn view_conversations_list<'a>(
         .collect();
 
     // Sort by timestamp (most recent first)
-    filtered.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    filtered.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
     if filtered.is_empty() {
         let msg = if app.search_query.is_empty() {

@@ -423,18 +423,18 @@ pub fn monitor_mpris(
             if let Ok(call_active) = call_rx.try_recv() {
                 if call_active {
                     paused_players.clear();
-                    if let Ok(finder) = mpris::PlayerFinder::new() {
-                        if let Ok(players) = finder.find_all() {
-                            for player in players {
-                                if matches!(
-                                    player.get_playback_status(),
-                                    Ok(mpris::PlaybackStatus::Playing)
-                                ) {
-                                    let name = player.identity().to_string();
-                                    if player.pause().is_ok() {
-                                        tracing::info!("[mpris] paused for call: {}", name);
-                                        paused_players.push(player);
-                                    }
+                    if let Ok(finder) = mpris::PlayerFinder::new()
+                        && let Ok(players) = finder.find_all()
+                    {
+                        for player in players {
+                            if matches!(
+                                player.get_playback_status(),
+                                Ok(mpris::PlaybackStatus::Playing)
+                            ) {
+                                let name = player.identity().to_string();
+                                if player.pause().is_ok() {
+                                    tracing::info!("[mpris] paused for call: {}", name);
+                                    paused_players.push(player);
                                 }
                             }
                         }
@@ -875,7 +875,7 @@ pub fn expose_phone_mpris(
                                                 let emitter = iface_ref.signal_emitter();
                                                 let iface = iface_ref.get().await;
                                                 let _ = iface
-                                                    .playback_status_changed(&emitter)
+                                                    .playback_status_changed(emitter)
                                                     .await;
                                             }
                                         }

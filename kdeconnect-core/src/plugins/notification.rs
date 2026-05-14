@@ -113,17 +113,17 @@ impl Notification {
                 }
             };
 
-            if !key.is_empty() {
-                if let Ok(mut ids) = NOTIFICATION_IDS.lock() {
-                    ids.insert(key.clone(), handle.id());
-                }
+            if !key.is_empty()
+                && let Ok(mut ids) = NOTIFICATION_IDS.lock()
+            {
+                ids.insert(key.clone(), handle.id());
             }
 
             handle.wait_for_action(|action| {
-                if !key.is_empty() {
-                    if let Ok(mut ids) = NOTIFICATION_IDS.lock() {
-                        ids.remove(&key);
-                    }
+                if !key.is_empty()
+                    && let Ok(mut ids) = NOTIFICATION_IDS.lock()
+                {
+                    ids.remove(&key);
                 }
 
                 match action {

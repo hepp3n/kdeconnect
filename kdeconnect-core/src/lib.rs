@@ -112,19 +112,16 @@ impl KdeConnectCore {
                     if path.extension().and_then(|e| e.to_str()) == Some("ron") {
                         match tokio::fs::read_to_string(&path).await {
                             Ok(raw) => {
-                                if let Ok(dev) = ron::de::from_str::<Device>(&raw) {
-                                    if dev.pair_state == PairState::Paired {
-                                        info!(
-                                            "Restored paired device: {} ({})",
-                                            dev.name, dev.device_id
-                                        );
-                                        device_manager
-                                            .add_or_update_device(
-                                                dev.device_id.clone(),
-                                                dev.clone(),
-                                            )
-                                            .await;
-                                    }
+                                if let Ok(dev) = ron::de::from_str::<Device>(&raw)
+                                    && dev.pair_state == PairState::Paired
+                                {
+                                    info!(
+                                        "Restored paired device: {} ({})",
+                                        dev.name, dev.device_id
+                                    );
+                                    device_manager
+                                        .add_or_update_device(dev.device_id.clone(), dev.clone())
+                                        .await;
                                 }
                             }
                             Err(e) => {
@@ -640,34 +637,31 @@ impl KdeConnectCore {
                                                 PAIRING_TIMEOUT_SECS,
                                             ))
                                             .await;
-                                            if let Some(dev) = dm.get_device(&did).await {
-                                                if dev.pair_state
+                                            if let Some(dev) = dm.get_device(&did).await
+                                                && dev.pair_state
                                                     == crate::device::PairState::Requested
-                                                {
-                                                    info!(
-                                                        "[core] incoming pair request from {} timed out after {}s",
-                                                        did, PAIRING_TIMEOUT_SECS
-                                                    );
-                                                    let pair = Pair::reject();
-                                                    let value = serde_json::to_value(pair)
-                                                        .expect("fail serializing pair");
-                                                    let pkt = ProtocolPacket::new(
-                                                        PacketType::Pair,
-                                                        value,
-                                                    );
-                                                    let _ = event_tx.send(CoreEvent::SendPacket {
-                                                        device: did.clone(),
-                                                        packet: pkt,
-                                                    });
-                                                    dm.update_pair_state(
-                                                        &did,
-                                                        crate::device::PairState::NotPaired,
-                                                    )
-                                                    .await;
-                                                    let ev = ConnectionEvent::PairingTimedOut(did);
-                                                    let _ = conn_tx.send(ev.clone());
-                                                    let _ = mpris_tx.send(ev);
-                                                }
+                                            {
+                                                info!(
+                                                    "[core] incoming pair request from {} timed out after {}s",
+                                                    did, PAIRING_TIMEOUT_SECS
+                                                );
+                                                let pair = Pair::reject();
+                                                let value = serde_json::to_value(pair)
+                                                    .expect("fail serializing pair");
+                                                let pkt =
+                                                    ProtocolPacket::new(PacketType::Pair, value);
+                                                let _ = event_tx.send(CoreEvent::SendPacket {
+                                                    device: did.clone(),
+                                                    packet: pkt,
+                                                });
+                                                dm.update_pair_state(
+                                                    &did,
+                                                    crate::device::PairState::NotPaired,
+                                                )
+                                                .await;
+                                                let ev = ConnectionEvent::PairingTimedOut(did);
+                                                let _ = conn_tx.send(ev.clone());
+                                                let _ = mpris_tx.send(ev);
                                             }
                                         });
                                     }
@@ -765,25 +759,25 @@ impl KdeConnectCore {
                 let did = device_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
-                    if let Some(dev) = dm.get_device(&did).await {
-                        if dev.pair_state == crate::device::PairState::Requesting {
-                            info!(
-                                "[core] outgoing pair request to {} timed out after {}s",
-                                did, PAIRING_TIMEOUT_SECS
-                            );
-                            let pair = Pair::reject();
-                            let value = serde_json::to_value(pair).expect("fail serializing pair");
-                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                            let _ = event_tx.send(CoreEvent::SendPacket {
-                                device: did.clone(),
-                                packet: pkt,
-                            });
-                            dm.update_pair_state(&did, crate::device::PairState::NotPaired)
-                                .await;
-                            let ev = ConnectionEvent::PairingTimedOut(did);
-                            let _ = conn_tx.send(ev.clone());
-                            let _ = mpris_tx.send(ev);
-                        }
+                    if let Some(dev) = dm.get_device(&did).await
+                        && dev.pair_state == crate::device::PairState::Requesting
+                    {
+                        info!(
+                            "[core] outgoing pair request to {} timed out after {}s",
+                            did, PAIRING_TIMEOUT_SECS
+                        );
+                        let pair = Pair::reject();
+                        let value = serde_json::to_value(pair).expect("fail serializing pair");
+                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                        let _ = event_tx.send(CoreEvent::SendPacket {
+                            device: did.clone(),
+                            packet: pkt,
+                        });
+                        dm.update_pair_state(&did, crate::device::PairState::NotPaired)
+                            .await;
+                        let ev = ConnectionEvent::PairingTimedOut(did);
+                        let _ = conn_tx.send(ev.clone());
+                        let _ = mpris_tx.send(ev);
                     }
                 });
             }
@@ -906,47 +900,39 @@ impl KdeConnectCore {
                 // if the phone's pairing timestamp and our current time differ
                 // by more than 30 minutes, reject the pairing to prevent
                 // security issues from clock skew.
-                if let Some(dev) = self.device_manager.get_device(&device_id).await {
-                    if dev.protocol_version >= 8 {
-                        let phone_ts = dev.pairing_timestamp;
-                        if phone_ts > 0 {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
-                            let diff = if phone_ts > now {
-                                phone_ts - now
-                            } else {
-                                now - phone_ts
-                            };
-                            if diff > ALLOWED_TIMESTAMP_DIFF_SECS {
-                                warn!(
-                                    "[core] pairing rejected for {}: clocks out of sync (phone_ts={}, local_ts={}, diff={}s)",
-                                    device_id, phone_ts, now, diff
+                if let Some(dev) = self.device_manager.get_device(&device_id).await
+                    && dev.protocol_version >= 8
+                {
+                    let phone_ts = dev.pairing_timestamp;
+                    if phone_ts > 0 {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let diff = phone_ts.abs_diff(now);
+                        if diff > ALLOWED_TIMESTAMP_DIFF_SECS {
+                            warn!(
+                                "[core] pairing rejected for {}: clocks out of sync (phone_ts={}, local_ts={}, diff={}s)",
+                                device_id, phone_ts, now, diff
+                            );
+                            // Reject by sending pair:false and un-setting paired state.
+                            let pair = Pair::reject();
+                            let value = serde_json::to_value(pair).expect("fail serializing pair");
+                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                            if self.queue_packet(&device_id, pkt).await {
+                                info!(
+                                    "[core] sent pair:false to {} due to clock mismatch",
+                                    device_id
                                 );
-                                // Reject by sending pair:false and un-setting paired state.
-                                let pair = Pair::reject();
-                                let value =
-                                    serde_json::to_value(pair).expect("fail serializing pair");
-                                let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                                if self.queue_packet(&device_id, pkt).await {
-                                    info!(
-                                        "[core] sent pair:false to {} due to clock mismatch",
-                                        device_id
-                                    );
-                                }
-                                self.device_manager
-                                    .update_pair_state(
-                                        &device_id,
-                                        crate::device::PairState::NotPaired,
-                                    )
-                                    .await;
-                                // Emit a timed-out event so the UI can show a message.
-                                let ev = ConnectionEvent::PairingTimedOut(device_id);
-                                let _ = self.conn_tx.send(ev.clone());
-                                let _ = self.mpris_conn_tx.send(ev);
-                                return;
                             }
+                            self.device_manager
+                                .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                                .await;
+                            // Emit a timed-out event so the UI can show a message.
+                            let ev = ConnectionEvent::PairingTimedOut(device_id);
+                            let _ = self.conn_tx.send(ev.clone());
+                            let _ = self.mpris_conn_tx.send(ev);
+                            return;
                         }
                     }
                 }
@@ -1064,28 +1050,28 @@ async fn cleanup_device_data(device_id: &str) {
         let plugin_file = config_dir
             .join("kdeconnect")
             .join(format!("{}_plugins.json", device_id));
-        if let Err(e) = tokio::fs::remove_file(&plugin_file).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "[cleanup] failed to remove plugin config for {}: {}",
-                    device_id,
-                    e
-                );
-            }
+        if let Err(e) = tokio::fs::remove_file(&plugin_file).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "[cleanup] failed to remove plugin config for {}: {}",
+                device_id,
+                e
+            );
         }
     }
 
     // SMS and contacts cache directory
     if let Some(data_dir) = dirs::data_local_dir() {
         let cache_dir = data_dir.join("kdeconnect").join(device_id);
-        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "[cleanup] failed to remove cache dir for {}: {}",
-                    device_id,
-                    e
-                );
-            }
+        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "[cleanup] failed to remove cache dir for {}: {}",
+                device_id,
+                e
+            );
         }
     }
 

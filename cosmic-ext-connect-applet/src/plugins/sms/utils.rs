@@ -55,10 +55,10 @@ pub fn phone_numbers_match(phone1: &str, phone2: &str) -> bool {
 
     // Handle US country code (+1) prefix
     if norm1.len() == 10 && norm2.len() == 11 && norm2.starts_with('1') {
-        return norm1 == &norm2[1..];
+        return norm1 == norm2[1..];
     }
     if norm2.len() == 10 && norm1.len() == 11 && norm1.starts_with('1') {
-        return norm2 == &norm1[1..];
+        return norm2 == norm1[1..];
     }
 
     // Check last 7 digits for international numbers
@@ -91,8 +91,8 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
         let line = line.trim();
 
         // Extract name (FN = Formatted Name)
-        if line.starts_with("FN:") {
-            name = Some(line[3..].trim().to_string());
+        if let Some(stripped) = line.strip_prefix("FN:") {
+            name = Some(stripped.trim().to_string());
         }
         // Fallback to N: field if FN not found
         else if name.is_none() && line.starts_with("N:") {
@@ -108,12 +108,12 @@ pub fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
             }
         }
         // Extract phone numbers
-        else if line.starts_with("TEL") {
-            if let Some(colon_pos) = line.rfind(':') {
-                let phone = line[colon_pos + 1..].trim().to_string();
-                if !phone.is_empty() {
-                    phones.push(phone);
-                }
+        else if line.starts_with("TEL")
+            && let Some(colon_pos) = line.rfind(':')
+        {
+            let phone = line[colon_pos + 1..].trim().to_string();
+            if !phone.is_empty() {
+                phones.push(phone);
             }
         }
     }

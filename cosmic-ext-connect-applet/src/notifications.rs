@@ -33,22 +33,19 @@ async fn listen_for_pairing_signals(tx: mpsc::Sender<PairingNotification>) -> an
     info!("Listening for pairing signals on D-Bus");
 
     while let Some(event) = event_stream.next().await {
-        match event {
-            ServiceEvent::DevicePaired(device_id, device) => {
-                info!("Pairing notification: {} ({})", device.name, device_id);
+        if let ServiceEvent::DevicePaired(device_id, device) = event {
+            info!("Pairing notification: {} ({})", device.name, device_id);
 
-                let notification = PairingNotification {
-                    device_id,
-                    device_name: device.name,
-                    device_type: device.device_type,
-                };
+            let notification = PairingNotification {
+                device_id,
+                device_name: device.name,
+                device_type: device.device_type,
+            };
 
-                if tx.send(notification).await.is_err() {
-                    warn!("Failed to send pairing notification - receiver dropped");
-                    break;
-                }
+            if tx.send(notification).await.is_err() {
+                warn!("Failed to send pairing notification - receiver dropped");
+                break;
             }
-            _ => {}
         }
     }
 

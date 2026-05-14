@@ -1,4 +1,7 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -181,7 +184,7 @@ impl ShareRequest {
 
 /// Returns a path that doesn't already exist by appending ` (N)` before the
 /// extension — e.g. `photo (1).jpg`, `photo (2).jpg`.
-fn unique_path(dir: &PathBuf, filename: &str) -> PathBuf {
+fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     let candidate = dir.join(filename);
     if !candidate.exists() {
         return candidate;

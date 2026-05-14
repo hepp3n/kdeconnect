@@ -121,14 +121,14 @@ impl PluginRegistry {
         mpris_tx: mpsc::UnboundedSender<ConnectionEvent>,
     ) {
         // Gate on plugin enabled state before doing any work.
-        if let Some(plugin_id) = packet_plugin_id(&packet.packet_type) {
-            if !self.is_plugin_enabled(&device.device_id.0, plugin_id).await {
-                debug!(
-                    "[plugin_registry] packet {:?} skipped — plugin '{}' disabled for {}",
-                    packet.packet_type, plugin_id, device.device_id
-                );
-                return;
-            }
+        if let Some(plugin_id) = packet_plugin_id(&packet.packet_type)
+            && !self.is_plugin_enabled(&device.device_id.0, plugin_id).await
+        {
+            debug!(
+                "[plugin_registry] packet {:?} skipped — plugin '{}' disabled for {}",
+                packet.packet_type, plugin_id, device.device_id
+            );
+            return;
         }
 
         let body = packet.body.clone();
@@ -201,13 +201,13 @@ impl PluginRegistry {
                     std::collections::HashMap::new();
                 if let Some(uids_val) = body.get("uids").and_then(|v| v.as_array()) {
                     for uid_val in uids_val {
-                        if let Some(uid) = uid_val.as_str() {
-                            if let Some(vcard_str) = body.get(uid).and_then(|v| v.as_str()) {
-                                let (name_opt, phones) = parse_vcard(vcard_str);
-                                if let Some(name) = name_opt {
-                                    for phone in phones {
-                                        contacts.insert(phone, name.clone());
-                                    }
+                        if let Some(uid) = uid_val.as_str()
+                            && let Some(vcard_str) = body.get(uid).and_then(|v| v.as_str())
+                        {
+                            let (name_opt, phones) = parse_vcard(vcard_str);
+                            if let Some(name) = name_opt {
+                                for phone in phones {
+                                    contacts.insert(phone, name.clone());
                                 }
                             }
                         }
@@ -509,8 +509,8 @@ fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
     let mut phones: Vec<String> = Vec::new();
     for line in content.lines() {
         let line = line.trim();
-        if line.starts_with("FN:") {
-            name = Some(line[3..].trim().to_string());
+        if let Some(stripped) = line.strip_prefix("FN:") {
+            name = Some(stripped.trim().to_string());
         } else if name.is_none() && line.starts_with("N:") {
             let parts: Vec<&str> = line[2..].split(';').collect();
             if parts.len() >= 2 {
@@ -520,12 +520,12 @@ fn parse_vcard(content: &str) -> (Option<String>, Vec<String>) {
                     name = Some(full);
                 }
             }
-        } else if line.starts_with("TEL") {
-            if let Some(pos) = line.rfind(':') {
-                let phone = line[pos + 1..].trim().to_string();
-                if !phone.is_empty() {
-                    phones.push(phone);
-                }
+        } else if line.starts_with("TEL")
+            && let Some(pos) = line.rfind(':')
+        {
+            let phone = line[pos + 1..].trim().to_string();
+            if !phone.is_empty() {
+                phones.push(phone);
             }
         }
     }

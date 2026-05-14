@@ -100,10 +100,10 @@ impl TelephonyPacket {
 
         // Pause desktop players before showing the notification.
         // missedCall arrives after the fact so we skip pausing for that.
-        if event != "missedCall" {
-            if let Some(tx) = mpris::telephony_call_signal() {
-                let _ = tx.send(true);
-            }
+        if event != "missedCall"
+            && let Some(tx) = mpris::telephony_call_signal()
+        {
+            let _ = tx.send(true);
         }
 
         let thumbnail_path = self.phone_thumbnail.as_deref().and_then(|b64| {
@@ -128,7 +128,7 @@ impl TelephonyPacket {
                 .body(&body)
                 .timeout(notify_rust::Timeout::Milliseconds(10_000));
             if let Some(path) = thumbnail_path {
-                notif.icon(&path.to_string_lossy().into_owned());
+                notif.icon(&path.to_string_lossy());
             } else {
                 notif.icon("call-start-symbolic");
             }

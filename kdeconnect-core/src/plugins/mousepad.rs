@@ -165,10 +165,10 @@ fn run_mousepad_request(request: &MousepadRequest) -> anyhow::Result<()> {
         }
     }
 
-    if let Some(special_key) = request.special_key {
-        if let Some(code) = special_key_code(special_key) {
-            return ydotool_key_with_modifiers(code, request);
-        }
+    if let Some(special_key) = request.special_key
+        && let Some(code) = special_key_code(special_key)
+    {
+        return ydotool_key_with_modifiers(code, request);
     }
 
     debug!("[mousepad] ignored unsupported request: {:?}", request);

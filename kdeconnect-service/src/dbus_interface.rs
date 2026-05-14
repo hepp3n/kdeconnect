@@ -416,10 +416,7 @@ impl SmsInterface {
             debug!("Returning in-memory SMS cache ({} bytes)", json.len());
             return json.clone();
         }
-        match load_sms_cache(&device_id).await {
-            Some(json) => json,
-            None => String::new(),
-        }
+        load_sms_cache(&device_id).await.unwrap_or_default()
     }
 
     /// Request all conversations from device
@@ -596,30 +593,24 @@ impl KdeConnectService {
                 if let Ok(mut entries) = tokio::fs::read_dir(&kc_dir).await {
                     while let Ok(Some(entry)) = entries.next_entry().await {
                         let path = entry.path();
-                        if path.extension().and_then(|e| e.to_str()) == Some("ron") {
-                            if let Ok(raw) = tokio::fs::read_to_string(&path).await {
-                                if let Ok(dev) = ron::de::from_str::<CoreDevice>(&raw) {
-                                    if dev.pair_state == PairState::Paired {
-                                        info!("Restoring offline paired device: {}", dev.name);
-                                        map.insert(
-                                            dev.device_id.0.clone(),
-                                            DbusDevice {
-                                                id: dev.device_id.0.clone(),
-                                                name: dev.name.clone(),
-                                                device_type: dev.device_type.clone(),
-                                                incoming_capabilities: dev
-                                                    .incoming_capabilities
-                                                    .clone(),
-                                                outgoing_capabilities: dev
-                                                    .outgoing_capabilities
-                                                    .clone(),
-                                                is_paired: true,
-                                                is_reachable: false,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
+                        if path.extension().and_then(|e| e.to_str()) == Some("ron")
+                            && let Ok(raw) = tokio::fs::read_to_string(&path).await
+                            && let Ok(dev) = ron::de::from_str::<CoreDevice>(&raw)
+                            && dev.pair_state == PairState::Paired
+                        {
+                            info!("Restoring offline paired device: {}", dev.name);
+                            map.insert(
+                                dev.device_id.0.clone(),
+                                DbusDevice {
+                                    id: dev.device_id.0.clone(),
+                                    name: dev.name.clone(),
+                                    device_type: dev.device_type.clone(),
+                                    incoming_capabilities: dev.incoming_capabilities.clone(),
+                                    outgoing_capabilities: dev.outgoing_capabilities.clone(),
+                                    is_paired: true,
+                                    is_reachable: false,
+                                },
+                            );
                         }
                     }
                 }
@@ -746,29 +737,29 @@ impl KdeConnectService {
                 if is_paired {
                     let did = device_id.0.clone();
 
-                    if let Some(cached) = load_contacts_cache(&did).await {
-                        if let Ok(contacts_json) = serde_json::to_string(&cached) {
-                            let iface_ref = connection
-                                .object_server()
-                                .interface::<_, ContactsInterface>(CONTACTS_PATH)
-                                .await?;
-                            ContactsInterface::contacts_received(
-                                iface_ref.signal_emitter(),
-                                contacts_json,
-                            )
+                    if let Some(cached) = load_contacts_cache(&did).await
+                        && let Ok(contacts_json) = serde_json::to_string(&cached)
+                    {
+                        let iface_ref = connection
+                            .object_server()
+                            .interface::<_, ContactsInterface>(CONTACTS_PATH)
                             .await?;
-                            debug!(
-                                "Emitted cached contacts on connect ({} entries)",
-                                cached.len()
-                            );
-                        }
+                        ContactsInterface::contacts_received(
+                            iface_ref.signal_emitter(),
+                            contacts_json,
+                        )
+                        .await?;
+                        debug!(
+                            "Emitted cached contacts on connect ({} entries)",
+                            cached.len()
+                        );
                     }
 
-                    if sms_cache.lock().await.is_none() {
-                        if let Some(cached_sms) = load_sms_cache(&did).await {
-                            *sms_cache.lock().await = Some(cached_sms);
-                            debug!("Seeded in-memory SMS cache from disk on connect");
-                        }
+                    if sms_cache.lock().await.is_none()
+                        && let Some(cached_sms) = load_sms_cache(&did).await
+                    {
+                        *sms_cache.lock().await = Some(cached_sms);
+                        debug!("Seeded in-memory SMS cache from disk on connect");
                     }
 
                     let already_synced = sms_synced.lock().await.contains(&device_id.0);

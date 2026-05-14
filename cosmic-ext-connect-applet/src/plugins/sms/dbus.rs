@@ -106,9 +106,7 @@ pub async fn get_cached_contacts(device_id: &str) -> std::collections::HashMap<S
 #[allow(dead_code)]
 pub async fn get_cached_sms(device_id: &str) -> Option<String> {
     debug!("get_cached_sms device={}", device_id);
-    let Some(client) = get_client().await else {
-        return None;
-    };
+    let client = get_client().await?;
     match client.get_cached_sms(device_id).await {
         Ok(json) if !json.is_empty() => {
             debug!("got cached SMS ({} bytes)", json.len());
@@ -168,7 +166,7 @@ pub fn parse_sms_messages(messages_json: &str) -> (Vec<Message>, Vec<Conversatio
     let conversations: Vec<Conversation> = groups
         .into_iter()
         .map(|(thread_id, mut msgs)| {
-            msgs.sort_by(|a, b| b.date.cmp(&a.date));
+            msgs.sort_by_key(|b| std::cmp::Reverse(b.date));
             let last = msgs.first().unwrap();
             Conversation {
                 thread_id,

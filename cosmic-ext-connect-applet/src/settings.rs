@@ -320,10 +320,10 @@ impl Application for SettingsApp {
                 self.devices = devices;
 
                 // Load plugin states if we auto-selected a new device
-                if self.selected_device != prev {
-                    if let Some(did) = self.selected_device.clone() {
-                        return Self::load_plugin_states_task(did);
-                    }
+                if self.selected_device != prev
+                    && let Some(did) = self.selected_device.clone()
+                {
+                    return Self::load_plugin_states_task(did);
                 }
             }
 
@@ -339,7 +339,7 @@ impl Application for SettingsApp {
                 let trigger_broadcast = tab == Tab::AvailableDevices;
                 self.active_tab = tab;
                 if trigger_broadcast {
-                    return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                    return Task::perform(async { backend::scan_devices().await }, |devices| {
                         Action::App(Message::DevicesLoaded(devices))
                     });
                 }
@@ -378,7 +378,7 @@ impl Application for SettingsApp {
             }
 
             Message::Refresh => {
-                return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                return Task::perform(async { backend::scan_devices().await }, |devices| {
                     Action::App(Message::DevicesLoaded(devices))
                 });
             }
@@ -418,17 +418,17 @@ impl Application for SettingsApp {
             // so paired/connected state changes appear without waiting for polling.
             Message::ServiceEvent(event) => {
                 match &event {
-                    kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
-                        if self.selected_device.as_deref() == Some(id.as_str()) {
-                            // Keep selection — device is just offline, not unpaired.
-                        }
+                    kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id)
+                        if self.selected_device.as_deref() == Some(id.as_str()) =>
+                    {
+                        // Keep selection — device is just offline, not unpaired.
                     }
-                    kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, device) => {
-                        if !device.is_paired && self.selected_device.as_deref() == Some(id.as_str())
-                        {
-                            self.selected_device = None;
-                            self.plugin_states.remove(id);
-                        }
+                    kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, device)
+                        if !device.is_paired
+                            && self.selected_device.as_deref() == Some(id.as_str()) =>
+                    {
+                        self.selected_device = None;
+                        self.plugin_states.remove(id);
                     }
                     _ => {}
                 }

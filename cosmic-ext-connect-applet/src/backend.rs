@@ -25,6 +25,14 @@ pub async fn initialize() -> Result<()> {
     Ok(())
 }
 
+async fn ensure_initialized() -> Result<()> {
+    if CLIENT.lock().await.is_some() {
+        return Ok(());
+    }
+
+    initialize().await
+}
+
 /// Fetch all devices from the service
 pub async fn fetch_devices() -> Vec<Device> {
     let client_guard = CLIENT.lock().await;
@@ -109,6 +117,23 @@ pub async fn fetch_devices() -> Vec<Device> {
             vec![]
         }
     }
+}
+
+/// Actively scan for devices, then return the refreshed service list.
+pub async fn scan_devices() -> Vec<Device> {
+    if let Err(e) = ensure_initialized().await {
+        warn!("D-Bus client not initialized while scanning: {:?}", e);
+        return vec![];
+    }
+
+    if let Err(e) = broadcast_identity().await {
+        warn!("Failed to broadcast identity while scanning: {:?}", e);
+    }
+
+    // Give peers time to receive the UDP identity, open TCP/TLS, and let the
+    // daemon publish the resulting device before the settings page refreshes.
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+    fetch_devices().await
 }
 
 /// Update device in cache
@@ -333,11 +358,10 @@ pub async fn event_stream() -> futures::stream::BoxStream<'static, ServiceEvent>
                     _ = async {
                         loop {
                             sleep(Duration::from_millis(500)).await;
-                            if let Some(current) = CLIENT.lock().await.clone() {
-                                if !Arc::ptr_eq(&current, &client) {
+                            if let Some(current) = CLIENT.lock().await.clone()
+                                && !Arc::ptr_eq(&current, &client) {
                                     return;
                                 }
-                            }
                         }
                     } => {
                         info!("D-Bus client replaced, reconnecting event stream");
@@ -380,8 +404,8 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
 
             while let Some(Ok(msg)) = stream.next().await {
                 let msg: zbus::Message = msg;
-                if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
-                    if !new_owner.is_empty() {
+                if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>()
+                    && !new_owner.is_empty() {
                         // Service has a new owner — reinitialize the client.
                         info!("kdeconnect service reappeared on bus — reinitializing client");
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -408,7 +432,6 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                             }
                         }
                     }
-                }
             }
         }
     })
