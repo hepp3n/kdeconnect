@@ -29,9 +29,8 @@ fn commands_config_path() -> std::path::PathBuf {
         .join("runcommand.json")
 }
 
-/// Load all locally defined commands (returns empty vec if file is missing).
-fn load_local_commands() -> Vec<LocalCommand> {
-    match std::fs::read_to_string(commands_config_path()) {
+async fn load_local_commands() -> Vec<LocalCommand> {
+    match tokio::fs::read_to_string(commands_config_path()).await {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => vec![],
     }
@@ -110,7 +109,7 @@ impl RunCommandRequest {
     ) {
         if let Some(key) = &self.key {
             // Phone is asking us to execute a local command by its UUID key.
-            let commands = load_local_commands();
+            let commands = load_local_commands().await;
             if let Some(cmd) = commands.iter().find(|c| c.id == *key) {
                 info!("[runcommand] executing '{}': {}", cmd.name, cmd.command);
                 if let Err(e) = std::process::Command::new("sh")
@@ -146,7 +145,7 @@ pub async fn send_command_list(
     device_id: &DeviceId,
     core_tx: mpsc::UnboundedSender<crate::event::CoreEvent>,
 ) {
-    let commands = load_local_commands();
+    let commands = load_local_commands().await;
 
     // commandList must be a *JSON-encoded string*, not a nested object.
     // Format: "{\"<uuid>\": {\"name\": \"...\", \"command\": \"...\"}, ...}"

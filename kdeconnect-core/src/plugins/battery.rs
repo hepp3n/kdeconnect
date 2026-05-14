@@ -21,15 +21,12 @@ fn deserialize_threshold<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let buf = i32::deserialize(deserializer)?;
-
-    match buf {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(serde::de::Error::invalid_value(
-            serde::de::Unexpected::Signed(buf.into()),
-            &"0 or 1",
-        )),
+    use serde_json::Value;
+    let v = Value::deserialize(deserializer)?;
+    match v {
+        Value::Bool(b) => Ok(b),
+        Value::Number(n) => Ok(n.as_i64().unwrap_or(0) != 0),
+        _ => Ok(false),
     }
 }
 
@@ -149,6 +146,44 @@ mod tests {
 
         assert_eq!(battery.charge, 87);
         assert!(battery.is_charging);
+        assert!(!battery.under_threshold);
+    }
+
+    #[test]
+    fn accepts_boolean_threshold_event() {
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": 10,
+            "isCharging": false,
+            "thresholdEvent": true
+        }))
+        .unwrap();
+        assert!(battery.under_threshold);
+
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": 80,
+            "isCharging": true,
+            "thresholdEvent": false
+        }))
+        .unwrap();
+        assert!(!battery.under_threshold);
+    }
+
+    #[test]
+    fn accepts_integer_threshold_event() {
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": 10,
+            "isCharging": false,
+            "thresholdEvent": 1
+        }))
+        .unwrap();
+        assert!(battery.under_threshold);
+
+        let battery: Battery = serde_json::from_value(serde_json::json!({
+            "currentCharge": 80,
+            "isCharging": true,
+            "thresholdEvent": 0
+        }))
+        .unwrap();
         assert!(!battery.under_threshold);
     }
 

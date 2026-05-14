@@ -296,7 +296,8 @@ pub fn sanitize_device_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_device_name;
+    use super::*;
+    use tokio::sync::mpsc;
 
     #[test]
     fn sanitizes_long_unicode_device_names_without_panicking() {
@@ -305,5 +306,155 @@ mod tests {
         );
 
         assert_eq!(name.chars().count(), 32);
+    }
+
+    #[test]
+    fn sanitize_removes_forbidden_characters() {
+        assert_eq!(sanitize_device_name("Phone's \"Test\""), "Phones Test");
+        assert_eq!(sanitize_device_name("Phone;Drop"), "PhoneDrop");
+        assert_eq!(sanitize_device_name("<script>"), "script");
+    }
+
+    #[test]
+    fn sanitize_empty_name_returns_unknown() {
+        assert_eq!(sanitize_device_name(""), "Unknown Device");
+        assert_eq!(sanitize_device_name("..."), "Unknown Device");
+        assert_eq!(sanitize_device_name("   "), "Unknown Device");
+    }
+
+    #[test]
+    fn validate_device_id_rejects_short_ids() {
+        assert!(validate_device_id("short").is_err());
+        assert!(validate_device_id("abc").is_err());
+    }
+
+    #[test]
+    fn validate_device_id_rejects_long_ids() {
+        let long_id = "a".repeat(39);
+        assert!(validate_device_id(&long_id).is_err());
+    }
+
+    #[test]
+    fn validate_device_id_rejects_special_chars() {
+        assert!(validate_device_id("abcdef1234567890abcdef12345678/0").is_err());
+        assert!(validate_device_id("abcdef1234567890abcdef1234567..0").is_err());
+        assert!(validate_device_id("abcdef1234567890abcdef12345678 0").is_err());
+    }
+
+    #[test]
+    fn validate_device_id_accepts_valid_ids() {
+        assert!(validate_device_id("abcdef1234567890abcdef1234567890").is_ok());
+        assert!(validate_device_id("ABCDEF-1234_5678-abcdef123456789").is_ok());
+    }
+
+    #[tokio::test]
+    async fn device_manager_add_and_get() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("test-device-mgr-add-00000000000000".to_string());
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.name = "Test Phone".to_string();
+
+        dm.add_or_update_device(id.clone(), device.clone()).await;
+
+        let retrieved = dm.get_device(&id).await;
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().name, "Test Phone");
+    }
+
+    #[tokio::test]
+    async fn device_manager_set_paired_emits_event() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("test-device-pair-emit-0000000000".to_string());
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        dm.add_or_update_device(id.clone(), device).await;
+
+        dm.set_paired(&id, true).await;
+
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::Paired);
+
+        let event = rx.try_recv();
+        assert!(event.is_ok());
+    }
+
+    #[tokio::test]
+    async fn device_manager_update_pair_state() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("test-device-state-up-0000000000".to_string());
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        dm.add_or_update_device(id.clone(), device).await;
+
+        dm.update_pair_state(&id, PairState::Requesting).await;
+        assert_eq!(dm.get_device(&id).await.unwrap().pair_state, PairState::Requesting);
+
+        dm.update_pair_state(&id, PairState::Paired).await;
+        assert_eq!(dm.get_device(&id).await.unwrap().pair_state, PairState::Paired);
+
+        dm.update_pair_state(&id, PairState::NotPaired).await;
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::NotPaired);
+        assert!(dev.remote_certificate.is_empty());
+    }
+
+    #[tokio::test]
+    async fn device_manager_unpair_clears_certificate() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("test-device-cert-clr-0000000000".to_string());
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.pair_state = PairState::Paired;
+        device.remote_certificate = vec![1, 2, 3, 4];
+        dm.add_or_update_device(id.clone(), device).await;
+
+        dm.set_paired(&id, false).await;
+
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::NotPaired);
+        assert!(dev.remote_certificate.is_empty());
+    }
+
+    #[tokio::test]
+    async fn device_manager_protocol_version_and_timestamp() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("test-device-version-0000000000000".to_string());
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        dm.add_or_update_device(id.clone(), device).await;
+
+        dm.set_protocol_version(&id, 8).await;
+        assert_eq!(dm.get_device(&id).await.unwrap().protocol_version, 8);
+
+        dm.set_pairing_timestamp(&id, 1234567890).await;
+        assert_eq!(dm.get_pairing_timestamp(&id).await, 1234567890);
+    }
+
+    #[tokio::test]
+    async fn device_manager_get_devices_returns_all() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        for i in 0..3 {
+            let id = DeviceId(format!("test-device-list-{:02}-000000000000", i));
+            let mut device = Device::default();
+            device.device_id = id.clone();
+            device.name = format!("Phone {}", i);
+            dm.add_or_update_device(id, device).await;
+        }
+
+        let devices = dm.get_devices().await;
+        assert_eq!(devices.len(), 3);
     }
 }

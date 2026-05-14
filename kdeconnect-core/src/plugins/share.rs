@@ -182,31 +182,46 @@ impl ShareRequest {
     }
 }
 
-/// Returns a path that doesn't already exist by appending ` (N)` before the
-/// extension — e.g. `photo (1).jpg`, `photo (2).jpg`.
+fn sanitize_filename(filename: &str) -> String {
+    let after_last_sep = filename
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(filename);
+    let sanitized: String = after_last_sep
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+        .collect();
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        "download".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn unique_path(dir: &Path, filename: &str) -> PathBuf {
-    let candidate = dir.join(filename);
+    let filename = sanitize_filename(filename);
+    let candidate = dir.join(&filename);
     if !candidate.exists() {
         return candidate;
     }
 
-    let stem = PathBuf::from(filename)
+    let stem = PathBuf::from(&filename)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| filename.to_string());
-    let ext = PathBuf::from(filename)
+        .unwrap_or_else(|| filename.clone());
+    let ext = PathBuf::from(&filename)
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
 
-    for i in 1u32.. {
+    for i in 1u32..10000 {
         let candidate = dir.join(format!("{} ({}){}", stem, i, ext));
         if !candidate.exists() {
             return candidate;
         }
     }
 
-    dir.join(filename)
+    dir.join(&filename)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -218,6 +233,78 @@ pub struct ShareRequestFile {
 impl Plugin for ShareRequest {
     fn id(&self) -> &'static str {
         "kdeconnect.share.request"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_directory_traversal() {
+        assert_eq!(sanitize_filename("../../.ssh/authorized_keys"), "authorized_keys");
+        assert_eq!(sanitize_filename("../../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("/etc/shadow"), "shadow");
+    }
+
+    #[test]
+    fn sanitize_strips_path_separators() {
+        assert_eq!(sanitize_filename("foo/bar/baz.txt"), "baz.txt");
+        assert_eq!(sanitize_filename("foo\\bar\\baz.txt"), "baz.txt");
+    }
+
+    #[test]
+    fn sanitize_handles_empty_and_dot_names() {
+        assert_eq!(sanitize_filename(""), "download");
+        assert_eq!(sanitize_filename("."), "download");
+        assert_eq!(sanitize_filename(".."), "download");
+        assert_eq!(sanitize_filename("/"), "download");
+        assert_eq!(sanitize_filename("///"), "download");
+    }
+
+    #[test]
+    fn sanitize_preserves_normal_filenames() {
+        assert_eq!(sanitize_filename("photo.jpg"), "photo.jpg");
+        assert_eq!(sanitize_filename("my file (1).txt"), "my file (1).txt");
+        assert_eq!(sanitize_filename("document.tar.gz"), "document.tar.gz");
+    }
+
+    #[test]
+    fn sanitize_handles_null_bytes() {
+        assert_eq!(sanitize_filename("evil\0name.txt"), "evilname.txt");
+    }
+
+    #[test]
+    fn unique_path_uses_sanitized_name() {
+        let dir = std::env::temp_dir();
+        let result = unique_path(&dir, "../../etc/passwd");
+        assert!(result.starts_with(&dir));
+        assert_eq!(result.file_name().unwrap().to_str().unwrap(), "passwd");
+    }
+
+    #[test]
+    fn unique_path_returns_base_if_not_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = unique_path(tmp.path(), "test.txt");
+        assert_eq!(result, tmp.path().join("test.txt"));
+    }
+
+    #[test]
+    fn unique_path_appends_counter_for_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        let result = unique_path(tmp.path(), "test.txt");
+        assert_eq!(result, tmp.path().join("test (1).txt"));
+    }
+
+    #[test]
+    fn unique_path_skips_existing_counters() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "").unwrap();
+        std::fs::write(tmp.path().join("test (1).txt"), "").unwrap();
+        std::fs::write(tmp.path().join("test (2).txt"), "").unwrap();
+        let result = unique_path(tmp.path(), "test.txt");
+        assert_eq!(result, tmp.path().join("test (3).txt"));
     }
 }
 

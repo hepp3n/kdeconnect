@@ -255,6 +255,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pair_false_on_not_paired_returns_false() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-false-000000000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+        let packet = ProtocolPacket::new(PacketType::Pair, json!({ "pair": false }));
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn already_paired_device_gets_fresh_request_treatment() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-repaired-00000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.pair_state = PairState::Paired;
+        dm.add_or_update_device(id.clone(), device).await;
+
+        let packet = ProtocolPacket::new(
+            PacketType::Pair,
+            json!({
+                "pair": true,
+                "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+            }),
+        );
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test Phone".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(result);
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::Requested);
+    }
+
+    #[tokio::test]
+    async fn rejects_pair_request_without_timestamp_for_v8() {
+        let _td = setup_test_env();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+        let pm = PairingManager::new(dm.clone());
+
+        let id = DeviceId("test-device-no-ts-00000000000000".to_string());
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+
+        let mut device = Device::default();
+        device.device_id = id.clone();
+        device.protocol_version = 8;
+        dm.add_or_update_device(id.clone(), device).await;
+
+        let packet = ProtocolPacket::new(PacketType::Pair, json!({ "pair": true }));
+
+        let result = pm
+            .handle_pair_request(id.clone(), "Test".into(), addr, packet)
+            .await
+            .unwrap();
+
+        assert!(!result);
+        let dev = dm.get_device(&id).await.unwrap();
+        assert_eq!(dev.pair_state, PairState::NotPaired);
+    }
+
+    #[tokio::test]
     async fn rejects_pair_request_with_large_clock_skew() {
         let _td = setup_test_env();
         let (tx, _rx) = mpsc::unbounded_channel();

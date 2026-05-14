@@ -11,9 +11,12 @@ use cosmic::{
 use cosmic_ext_connect_applet::{backend, models::Device};
 use futures::StreamExt as _;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// A desktop command stored as JSON: {id, name, command}
 type LocalCommand = serde_json::Value;
+
+const PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
 
 fn run_commands_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -196,7 +199,7 @@ pub struct SettingsApp {
     selected_device: Option<String>,
     /// device_id → (plugin_id → enabled)
     plugin_states: HashMap<String, HashMap<String, bool>>,
-    pairing_in_progress: HashMap<String, bool>,
+    pairing_in_progress: HashMap<String, Instant>,
     /// Desktop commands manageable from the Run Command section
     run_commands: Vec<LocalCommand>,
     new_cmd_name: String,
@@ -300,7 +303,6 @@ impl Application for SettingsApp {
         match message {
             Message::DevicesLoaded(devices) => {
                 if let Some(sel) = self.selected_device.clone() {
-                    // Clear selection if the device is gone or no longer paired.
                     let still_paired = devices.iter().any(|d| d.id == sel && d.is_paired);
                     if !still_paired {
                         self.plugin_states.remove(&sel);
@@ -317,10 +319,11 @@ impl Application for SettingsApp {
                         self.pairing_in_progress.remove(&d.id);
                     }
                 }
-                // Clear stale in-progress flags for devices that didn't pair
-                // (e.g. pairing was declined or timed out on the phone side).
-                self.pairing_in_progress
-                    .retain(|id, _| devices.iter().any(|d| d.id == *id && !d.is_paired));
+                self.pairing_in_progress.retain(|id, started| {
+                    let still_exists = devices.iter().any(|d| d.id == *id && !d.is_paired);
+                    let within_timeout = started.elapsed() < PAIRING_TIMEOUT;
+                    still_exists && within_timeout
+                });
                 self.devices = devices;
 
                 // Load plugin states if we auto-selected a new device
@@ -388,7 +391,7 @@ impl Application for SettingsApp {
             }
 
             Message::PairDevice(device_id) => {
-                self.pairing_in_progress.insert(device_id.clone(), true);
+                self.pairing_in_progress.insert(device_id.clone(), Instant::now());
                 let id = device_id;
                 return Task::perform(
                     async move {
@@ -768,7 +771,7 @@ impl SettingsApp {
         } else {
             for device in available {
                 let device_id = device.id.clone();
-                let in_progress = *self.pairing_in_progress.get(&device.id).unwrap_or(&false);
+                let in_progress = self.pairing_in_progress.contains_key(&device.id);
 
                 let card = widget::Row::new()
                     .spacing(spacing.space_m)
