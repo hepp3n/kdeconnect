@@ -113,6 +113,11 @@ impl Device {
             file.read_to_string(&mut buffer).await?;
 
             let mut device = ron::de::from_str::<Self>(&buffer)?;
+            if device.pair_state != PairState::Paired {
+                device.pair_state = PairState::NotPaired;
+                device.pairing_timestamp = 0;
+                device.remote_certificate.clear();
+            }
             device.name = name;
             device.address = address;
             device.device_type = device_type;
@@ -137,9 +142,14 @@ impl Device {
 
     pub async fn store_device_identity(&self, pair_state: PairState) -> anyhow::Result<()> {
         let mut data = self.clone();
-        data.pair_state = pair_state;
-        if pair_state == PairState::NotPaired {
+        data.pair_state = if pair_state == PairState::Paired {
+            PairState::Paired
+        } else {
+            PairState::NotPaired
+        };
+        if data.pair_state == PairState::NotPaired {
             data.remote_certificate.clear();
+            data.pairing_timestamp = 0;
         }
 
         if let Ok(file_content) = ron::ser::to_string_pretty(&data, PrettyConfig::new()) {
@@ -428,6 +438,53 @@ mod tests {
         let dev = dm.get_device(&id).await.unwrap();
         assert_eq!(dev.pair_state, PairState::NotPaired);
         assert!(dev.remote_certificate.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transient_pair_states_are_not_persisted_or_reloaded() {
+        let _guard = crate::TEST_ENV_LOCK.lock().await;
+        let td = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", td.path());
+        }
+        let config_dir = td.path().join(".config").join(crate::config::CONFIG_DIR);
+        tokio::fs::create_dir_all(&config_dir).await.unwrap();
+
+        let raw_id = "transientdevice00000000000000000";
+        let device = Device {
+            name: "Test Phone".to_string(),
+            device_id: DeviceId(raw_id.to_string()),
+            pair_state: PairState::Requesting,
+            pairing_timestamp: 1234567890,
+            remote_certificate: vec![1, 2, 3],
+            ..Default::default()
+        };
+
+        device
+            .store_device_identity(PairState::Requesting)
+            .await
+            .unwrap();
+        let stored = tokio::fs::read_to_string(config_dir.join(format!("{}.ron", raw_id)))
+            .await
+            .unwrap();
+        let stored_device = ron::de::from_str::<Device>(&stored).unwrap();
+        assert_eq!(stored_device.pair_state, PairState::NotPaired);
+        assert_eq!(stored_device.pairing_timestamp, 0);
+        assert!(stored_device.remote_certificate.is_empty());
+
+        let loaded = Device::new(
+            raw_id.to_string(),
+            "Loaded Phone".to_string(),
+            "phone".to_string(),
+            vec![],
+            vec![],
+            Device::default().address,
+        )
+        .await
+        .unwrap();
+        assert_eq!(loaded.pair_state, PairState::NotPaired);
+        assert_eq!(loaded.pairing_timestamp, 0);
+        assert!(loaded.remote_certificate.is_empty());
     }
 
     #[tokio::test]

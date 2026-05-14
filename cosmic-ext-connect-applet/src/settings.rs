@@ -177,6 +177,8 @@ pub enum Message {
     TogglePlugin(String, bool),
     Refresh,
     PairDevice(String),
+    PairDeviceFinished(String, Result<(), String>, Vec<Device>),
+    PairingExpired(String),
     UnpairDevice(String),
     /// Fired by the D-Bus event subscription whenever a device connects or pairs.
     ServiceEvent(kdeconnect_dbus_client::ServiceEvent),
@@ -207,6 +209,39 @@ pub struct SettingsApp {
 }
 
 impl SettingsApp {
+    fn apply_devices_loaded(&mut self, devices: Vec<Device>) -> Option<String> {
+        if let Some(sel) = self.selected_device.clone() {
+            let still_paired = devices.iter().any(|d| d.id == sel && d.is_paired);
+            if !still_paired {
+                self.plugin_states.remove(&sel);
+                self.selected_device = None;
+            }
+        }
+        let prev = self.selected_device.clone();
+        if self.selected_device.is_none() {
+            self.selected_device = devices.iter().find(|d| d.is_paired).map(|d| d.id.clone());
+        }
+        for d in &devices {
+            if d.is_paired {
+                self.pairing_in_progress.remove(&d.id);
+            }
+        }
+        self.pairing_in_progress.retain(|id, started| {
+            let still_actionable = devices
+                .iter()
+                .any(|d| d.id == *id && !d.is_paired && d.is_reachable);
+            let within_timeout = started.elapsed() < PAIRING_TIMEOUT;
+            still_actionable && within_timeout
+        });
+        self.devices = devices;
+
+        if self.selected_device != prev {
+            self.selected_device.clone()
+        } else {
+            None
+        }
+    }
+
     fn plugin_enabled(&self, plugin_id: &str) -> bool {
         self.selected_device
             .as_ref()
@@ -302,34 +337,7 @@ impl Application for SettingsApp {
     fn update(&mut self, message: Self::Message) -> Task<Action<Self::Message>> {
         match message {
             Message::DevicesLoaded(devices) => {
-                if let Some(sel) = self.selected_device.clone() {
-                    let still_paired = devices.iter().any(|d| d.id == sel && d.is_paired);
-                    if !still_paired {
-                        self.plugin_states.remove(&sel);
-                        self.selected_device = None;
-                    }
-                }
-                let prev = self.selected_device.clone();
-                if self.selected_device.is_none() {
-                    self.selected_device =
-                        devices.iter().find(|d| d.is_paired).map(|d| d.id.clone());
-                }
-                for d in &devices {
-                    if d.is_paired {
-                        self.pairing_in_progress.remove(&d.id);
-                    }
-                }
-                self.pairing_in_progress.retain(|id, started| {
-                    let still_exists = devices.iter().any(|d| d.id == *id && !d.is_paired);
-                    let within_timeout = started.elapsed() < PAIRING_TIMEOUT;
-                    still_exists && within_timeout
-                });
-                self.devices = devices;
-
-                // Load plugin states if we auto-selected a new device
-                if self.selected_device != prev
-                    && let Some(did) = self.selected_device.clone()
-                {
+                if let Some(did) = self.apply_devices_loaded(devices) {
                     return Self::load_plugin_states_task(did);
                 }
             }
@@ -393,16 +401,47 @@ impl Application for SettingsApp {
             Message::PairDevice(device_id) => {
                 self.pairing_in_progress
                     .insert(device_id.clone(), Instant::now());
-                let id = device_id;
-                return Task::perform(
-                    async move {
-                        if let Err(e) = backend::pair_device(id).await {
-                            eprintln!("[settings] Failed to pair device: {:?}", e);
-                        }
-                        backend::fetch_devices().await
-                    },
-                    |devices| Action::App(Message::DevicesLoaded(devices)),
-                );
+                let pair_id = device_id.clone();
+                let timeout_id = device_id;
+                return Task::batch(vec![
+                    Task::perform(
+                        async move {
+                            let result = backend::pair_device(pair_id.clone())
+                                .await
+                                .map_err(|e| e.to_string());
+                            let devices = backend::fetch_devices().await;
+                            (pair_id, result, devices)
+                        },
+                        |(id, result, devices)| {
+                            Action::App(Message::PairDeviceFinished(id, result, devices))
+                        },
+                    ),
+                    Task::perform(
+                        async move {
+                            tokio::time::sleep(PAIRING_TIMEOUT).await;
+                            timeout_id
+                        },
+                        |id| Action::App(Message::PairingExpired(id)),
+                    ),
+                ]);
+            }
+
+            Message::PairDeviceFinished(device_id, result, devices) => {
+                if let Err(e) = result {
+                    eprintln!("[settings] Failed to pair device {}: {}", device_id, e);
+                    self.pairing_in_progress.remove(&device_id);
+                }
+                if let Some(did) = self.apply_devices_loaded(devices) {
+                    return Self::load_plugin_states_task(did);
+                }
+            }
+
+            Message::PairingExpired(device_id) => {
+                if self.pairing_in_progress.remove(&device_id).is_some() {
+                    return Task::perform(async { backend::fetch_devices().await }, |devices| {
+                        Action::App(Message::DevicesLoaded(devices))
+                    });
+                }
             }
 
             Message::UnpairDevice(device_id) => {
@@ -430,6 +469,10 @@ impl Application for SettingsApp {
                         if self.selected_device.as_deref() == Some(id.as_str()) =>
                     {
                         // Keep selection — device is just offline, not unpaired.
+                        self.pairing_in_progress.remove(id);
+                    }
+                    kdeconnect_dbus_client::ServiceEvent::DeviceDisconnected(id) => {
+                        self.pairing_in_progress.remove(id);
                     }
                     kdeconnect_dbus_client::ServiceEvent::DevicePaired(id, device)
                         if !device.is_paired

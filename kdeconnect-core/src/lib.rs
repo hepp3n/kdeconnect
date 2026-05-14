@@ -712,12 +712,24 @@ impl KdeConnectCore {
                     return;
                 }
 
+                self.fail_pairing_if_pending(&id, "connection dropped")
+                    .await;
                 self.writer_map.lock().await.remove(&id);
                 self.conn_id_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
+            }
+            TransportEvent::PacketSendFailed { id, packet_type } => {
+                warn!(
+                    "[core] failed to send {:?} to {}; checking pending pairing state",
+                    packet_type, id
+                );
+                if matches!(packet_type, PacketType::Pair) {
+                    self.fail_pairing_if_pending(&id, "pair packet send failed")
+                        .await;
+                }
             }
             TransportEvent::PairTrustFailed { id } => {
                 warn!(
@@ -1189,6 +1201,30 @@ impl KdeConnectCore {
             info!("[core] dropped connection for {}", device_id);
         }
         removed
+    }
+
+    async fn fail_pairing_if_pending(&self, device_id: &DeviceId, reason: &str) {
+        let Some(device) = self.device_manager.get_device(device_id).await else {
+            return;
+        };
+
+        if !matches!(
+            device.pair_state,
+            PairState::Requesting | PairState::Requested
+        ) {
+            return;
+        }
+
+        warn!(
+            "[core] pairing with {} failed while in {:?}: {}",
+            device_id, device.pair_state, reason
+        );
+        self.device_manager
+            .update_pair_state(device_id, PairState::NotPaired)
+            .await;
+        let ev = ConnectionEvent::PairingTimedOut(device_id.clone());
+        let _ = self.conn_tx.send(ev.clone());
+        let _ = self.mpris_conn_tx.send(ev);
     }
 
     pub fn take_events(&self) -> Arc<mpsc::UnboundedSender<AppEvent>> {

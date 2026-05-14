@@ -80,6 +80,12 @@ pub enum TransportEvent {
     /// A paired device presented a different TLS certificate than the one
     /// pinned at pairing time.
     PairTrustFailed { id: DeviceId },
+    /// A packet had already been accepted into the write queue, but the socket
+    /// failed while the writer task was sending it.
+    PacketSendFailed {
+        id: DeviceId,
+        packet_type: PacketType,
+    },
     /// Emitted when the reader loop ends (peer closed / broken pipe).
     /// `conn_id` must match the stored value for this device before core
     /// removes the writer_map entry; a mismatch means a newer connection
@@ -875,13 +881,22 @@ async fn handle_connection<R, W>(
             match msg {
                 Some(msg) => {
                     debug!(peer = ?peer, packet_type = ?msg.packet_type, "writing");
+                    let packet_type = msg.packet_type.clone();
 
                     if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
                         error!(peer = ?peer, "Error writing: {}", e);
+                        let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
+                            id: id_writer.clone(),
+                            packet_type,
+                        });
                         break;
                     }
                     if let Err(e) = writer.flush().await {
                         error!(peer = ?peer, "Error flushing: {}", e);
+                        let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
+                            id: id_writer.clone(),
+                            packet_type,
+                        });
                         break;
                     }
                 }
