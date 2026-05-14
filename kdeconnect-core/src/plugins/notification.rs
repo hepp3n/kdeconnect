@@ -73,7 +73,7 @@ impl Notification {
         let key = self.id.clone().unwrap_or_default();
 
         if self.is_cancel.unwrap_or(false) {
-            close_notification(&key).await;
+            tokio::spawn(async move { close_notification(&key).await });
             return;
         }
 
@@ -180,8 +180,9 @@ impl Notification {
 
 impl NotificationRequest {
     pub async fn received_packet(&self) {
-        if let Some(cancel) = self.cancel.as_deref() {
-            close_notification(cancel).await;
+        if let Some(cancel) = &self.cancel {
+            let cancel = cancel.clone();
+            tokio::spawn(async move { close_notification(&cancel).await });
         }
 
         if self.request.unwrap_or(false) {

@@ -352,34 +352,40 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
 
             while let Some(Ok(msg)) = stream.next().await {
                 let msg: zbus::Message = msg;
-                if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>()
-                    && !new_owner.is_empty() {
-                        // Service has a new owner — reinitialize the client.
-                        info!("kdeconnect service reappeared on bus — reinitializing client");
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        if let Err(e) = initialize().await {
-                            error!("Failed to reinitialize D-Bus client: {:?}", e);
-                            continue;
+                if let Ok((_name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+                    if new_owner.is_empty() {
+                        // Service disappeared — invalidate client so pending
+                        // operations fail fast and reconnection waits cleanly.
+                        info!("kdeconnect service disappeared from bus — invalidating client");
+                        *CLIENT.lock().await = None;
+                        continue;
+                    }
+                    // Service has a new owner — reinitialize the client.
+                    info!("kdeconnect service reappeared on bus — reinitializing client");
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    if let Err(e) = initialize().await {
+                        error!("Failed to reinitialize D-Bus client: {:?}", e);
+                        continue;
+                    }
+                    // Broadcast so paired phones reconnect immediately.
+                    broadcast_identity().await.ok();
+                    // Poll until devices appear or give up after 90s.
+                    let mut elapsed = 0u64;
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        elapsed += 3;
+                        let devices = scan_devices().await;
+                        if !devices.is_empty() {
+                            info!("Device found after {}s — yielding refresh", elapsed);
+                            yield crate::messages::Message::RefreshDevices;
+                            break;
                         }
-                        // Broadcast so paired phones reconnect immediately.
-                        broadcast_identity().await.ok();
-                        // Poll until devices appear or give up after 90s.
-                        let mut elapsed = 0u64;
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                            elapsed += 3;
-                            let devices = scan_devices().await;
-                            if !devices.is_empty() {
-                                info!("Device found after {}s — yielding refresh", elapsed);
-                                yield crate::messages::Message::RefreshDevices;
-                                break;
-                            }
-                            if elapsed >= 90 {
-                                warn!("Gave up waiting for devices after 90s");
-                                break;
-                            }
+                        if elapsed >= 90 {
+                            warn!("Gave up waiting for devices after 90s");
+                            break;
                         }
                     }
+                }
             }
         }
     })
