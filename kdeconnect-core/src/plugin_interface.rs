@@ -328,12 +328,14 @@ impl PluginRegistry {
             PacketType::ShareRequest => {
                 if let Ok(share_request) =
                     serde_json::from_value::<plugins::share::ShareRequest>(body)
-                    && let Some(payload_info) = payload_info
                 {
                     // Spawn so the event loop is not blocked during the
                     // notification dialog wait + network payload download.
                     tokio::spawn(async move {
-                        if let Err(e) = share_request.receive_share(&device, &payload_info).await {
+                        if let Err(e) = share_request
+                            .receive_share(&device, payload_info.as_ref())
+                            .await
+                        {
                             warn!("[share] receive_share failed: {}", e);
                         }
                     });

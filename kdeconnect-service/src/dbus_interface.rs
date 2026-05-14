@@ -325,6 +325,13 @@ impl DaemonInterface {
         device_name: String,
     ) -> zbus::Result<()>;
 
+    /// Signal: A pairing request finished, failed, or is no longer actionable.
+    #[zbus(signal)]
+    async fn pairing_finished(
+        signal_emitter: &SignalEmitter<'_>,
+        device_id: String,
+    ) -> zbus::Result<()>;
+
     /// Signal: Device connected
     #[zbus(signal)]
     async fn update_transfer_progress(
@@ -827,6 +834,8 @@ impl KdeConnectService {
                     dbus_device,
                 )
                 .await?;
+                DaemonInterface::pairing_finished(iface_ref.signal_emitter(), device_id.0.clone())
+                    .await?;
                 debug!("Device paired signal emitted");
 
                 // Initial plugin sync is handled in kdeconnect-core, where it can
@@ -885,6 +894,13 @@ impl KdeConnectService {
                         iface_ref.signal_emitter(),
                         device_id.0.clone(),
                         dev,
+                    )
+                    .await?;
+                }
+                if matches!(pair_state, PairState::NotPaired | PairState::Paired) {
+                    DaemonInterface::pairing_finished(
+                        iface_ref.signal_emitter(),
+                        device_id.0.clone(),
                     )
                     .await?;
                 }
@@ -985,7 +1001,17 @@ impl KdeConnectService {
                     )
                     .await?;
                 }
+                DaemonInterface::pairing_finished(iface_ref.signal_emitter(), device_id.0.clone())
+                    .await?;
                 debug!("PairingTimedOut signal emitted for {}", device_id.0);
+            }
+            ConnectionEvent::PairingFinished(device_id) => {
+                let iface_ref = connection
+                    .object_server()
+                    .interface::<_, DaemonInterface>(DAEMON_PATH)
+                    .await?;
+                DaemonInterface::pairing_finished(iface_ref.signal_emitter(), device_id.0).await?;
+                debug!("PairingFinished D-Bus signal emitted");
             }
             ConnectionEvent::ClipboardReceived(content) => {
                 info!("Clipboard received ({} bytes)", content.len());

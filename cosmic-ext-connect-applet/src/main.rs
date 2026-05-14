@@ -342,6 +342,12 @@ impl cosmic::Application for KdeConnectApplet {
                     return get_popup(popup_settings);
                 }
             }
+            Message::PairingFinished(device_id) => {
+                self.pairing_requests.remove(&device_id);
+                return Task::perform(backend::fetch_devices(), |devices| {
+                    cosmic::Action::App(Message::DevicesUpdated(devices))
+                });
+            }
             Message::MprisReceived(device_id, mpris_data) => {
                 debug!("MPRIS from {}: {:?}", device_id, mpris_data);
             }
@@ -458,6 +464,9 @@ impl cosmic::Application for KdeConnectApplet {
                         match event {
                             kdeconnect_dbus_client::ServiceEvent::PairingRequested(id, name) => {
                                 yield Message::PairingRequestReceived(id, name, "phone".to_string());
+                            }
+                            kdeconnect_dbus_client::ServiceEvent::PairingFinished(id) => {
+                                yield Message::PairingFinished(id);
                             }
                             kdeconnect_dbus_client::ServiceEvent::ClipboardReceived(content) => {
                                 yield Message::ClipboardReceived(content);

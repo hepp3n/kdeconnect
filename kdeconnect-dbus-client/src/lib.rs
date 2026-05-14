@@ -36,6 +36,7 @@ pub enum ServiceEvent {
     SmsMessagesReceived(String),               // JSON string
     ContactsReceived(HashMap<String, String>), // phone -> name
     PairingRequested(String, String),          // device_id, device_name
+    PairingFinished(String),                   // device_id
     ClipboardReceived(String),                 // clipboard content from phone
     BatteryReceived(String, i32, bool),        // device_id, level, is_charging
     ConnectivityReceived(String, i32),         // device_id, signal_strength
@@ -72,6 +73,9 @@ trait Daemon {
 
     #[zbus(signal)]
     async fn pairing_requested(&self, device_id: String, device_name: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn pairing_finished(&self, device_id: String) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn update_transfer_progress(&self, progress: u8) -> zbus::Result<()>;
@@ -416,6 +420,24 @@ impl KdeConnectClient {
             .map(|s| Box::pin(s) as futures::stream::BoxStream<'static, ServiceEvent>)
             .unwrap_or_else(|_| Box::pin(futures::stream::empty()));
 
+        let pairing_finished = self
+            .daemon_proxy
+            .receive_pairing_finished()
+            .await
+            .map(|s| {
+                s.filter_map(|signal| async move {
+                    match signal.args() {
+                        Ok(args) => Some(ServiceEvent::PairingFinished(args.device_id.clone())),
+                        Err(e) => {
+                            error!("Failed to parse PairingFinished signal: {:?}", e);
+                            None
+                        }
+                    }
+                })
+            })
+            .map(|s| Box::pin(s) as futures::stream::BoxStream<'static, ServiceEvent>)
+            .unwrap_or_else(|_| Box::pin(futures::stream::empty()));
+
         let clipboard = self
             .daemon_proxy
             .receive_clipboard_received()
@@ -505,6 +527,7 @@ impl KdeConnectClient {
             sms,
             contacts,
             pairing_req,
+            pairing_finished,
             clipboard,
             battery,
             connectivity,

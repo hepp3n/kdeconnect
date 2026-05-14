@@ -75,6 +75,8 @@ pub enum ConnectionEvent {
     PairingRequested((DeviceId, String)),
     /// The 30-second pairing window expired without user action.
     PairingTimedOut(DeviceId),
+    /// Pairing is no longer waiting for user action for this device.
+    PairingFinished(DeviceId),
     /// Phone sent its command list via kdeconnect.runcommand.
     RunCommandListReceived((DeviceId, Vec<RemoteCommand>)),
 }

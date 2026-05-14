@@ -29,6 +29,22 @@ pub async fn load_disabled_plugins(device_id: &str) -> HashSet<String> {
     }
 }
 
+/// Persist the set of disabled plugin IDs for a device.
+pub async fn save_disabled_plugins(device_id: &str, disabled: &HashSet<String>) {
+    let path = config_path(device_id);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent).await;
+    }
+    match serde_json::to_string(disabled) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&path, json).await {
+                tracing::warn!("[plugin_config] failed to save for {}: {}", device_id, e);
+            }
+        }
+        Err(e) => tracing::warn!("[plugin_config] serialize failed: {}", e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,6 +73,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_returns_empty_set_for_missing_file() {
+        let _guard = crate::TEST_ENV_LOCK.lock().await;
         let _td = tempfile::tempdir().unwrap();
         unsafe {
             std::env::set_var("HOME", _td.path());
@@ -67,6 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_and_load_round_trips() {
+        let _guard = crate::TEST_ENV_LOCK.lock().await;
         let td = tempfile::tempdir().unwrap();
         unsafe {
             std::env::set_var("HOME", td.path());
@@ -82,21 +100,5 @@ mod tests {
         save_disabled_plugins(device_id, &disabled).await;
         let loaded = load_disabled_plugins(device_id).await;
         assert_eq!(loaded, disabled);
-    }
-}
-
-/// Persist the set of disabled plugin IDs for a device.
-pub async fn save_disabled_plugins(device_id: &str, disabled: &HashSet<String>) {
-    let path = config_path(device_id);
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent).await;
-    }
-    match serde_json::to_string(disabled) {
-        Ok(json) => {
-            if let Err(e) = fs::write(&path, json).await {
-                tracing::warn!("[plugin_config] failed to save for {}: {}", device_id, e);
-            }
-        }
-        Err(e) => tracing::warn!("[plugin_config] serialize failed: {}", e),
     }
 }

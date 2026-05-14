@@ -168,7 +168,10 @@ pub async fn unpair_device(device_id: String) -> Result<()> {
 
 /// Send a ping to a device
 pub async fn ping_device(device_id: String) -> Result<()> {
-    get_client().await?.send_ping(&device_id, "Ping from COSMIC!").await
+    get_client()
+        .await?
+        .send_ping(&device_id, "Ping from COSMIC!")
+        .await
 }
 
 /// Send files to a device
@@ -178,12 +181,18 @@ pub async fn send_files(device_id: String, files: Vec<String>) -> Result<()> {
 
 /// Send clipboard content to a device
 pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
-    get_client().await?.send_clipboard(&device_id, &content).await
+    get_client()
+        .await?
+        .send_clipboard(&device_id, &content)
+        .await
 }
 
 /// Browse device filesystem (via SFTP)
 pub async fn browse_device_filesystem(device_id: String) -> Result<()> {
-    get_client().await?.browse_device_filesystem(&device_id).await
+    get_client()
+        .await?
+        .browse_device_filesystem(&device_id)
+        .await
 }
 
 /// Accept an incoming pairing request from a device
@@ -244,13 +253,19 @@ pub async fn request_conversations(device_id: String) -> Result<()> {
 /// Request a specific SMS conversation thread
 #[allow(dead_code)]
 pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<()> {
-    get_client().await?.request_conversation(&device_id, thread_id).await
+    get_client()
+        .await?
+        .request_conversation(&device_id, thread_id)
+        .await
 }
 
 /// Send an SMS message
 #[allow(dead_code)]
 pub async fn send_sms(device_id: String, phone_number: String, message: String) -> Result<()> {
-    get_client().await?.send_sms(&device_id, &phone_number, &message).await
+    get_client()
+        .await?
+        .send_sms(&device_id, &phone_number, &message)
+        .await
 }
 
 /// Request the remote command list from a device

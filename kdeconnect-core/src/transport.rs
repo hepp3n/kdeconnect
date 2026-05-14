@@ -1,5 +1,5 @@
 use std::{
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
     sync::{
         Arc,
@@ -11,7 +11,10 @@ use std::{
 use rustls::pki_types::ServerName;
 use socket2::TcpKeepalive;
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt, BufReader, split},
+    io::{
+        AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt, BufReader,
+        split,
+    },
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
@@ -34,6 +37,7 @@ pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 /// Bare newlines are silently skipped by all KDE Connect readers and never
 /// surfaced to users.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_IDENTITY_PACKET_SIZE: usize = 8192;
 
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
 pub const DEFAULT_LISTEN_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
@@ -94,6 +98,135 @@ fn apply_keepalive(stream: &TcpStream) {
     if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive) {
         warn!("Failed to set TCP keepalive: {}", e);
     }
+}
+
+fn is_private_kdeconnect_addr(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(addr) => {
+            let octets = addr.octets();
+            let is_cgnat = octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000;
+            addr.is_private() || addr.is_link_local() || addr.is_loopback() || is_cgnat
+        }
+        IpAddr::V6(addr) => {
+            addr.is_unique_local() || addr.is_unicast_link_local() || addr.is_loopback()
+        }
+    }
+}
+
+async fn read_line_bounded<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    max_len: usize,
+) -> anyhow::Result<String> {
+    let mut raw = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        match reader.read(&mut byte).await? {
+            0 => return Err(anyhow::anyhow!("EOF reading identity")),
+            1 => {
+                raw.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+                if raw.len() > max_len {
+                    return Err(anyhow::anyhow!("identity line too long"));
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
+fn validate_identity_target(
+    peer_identity: &Identity,
+    local_identity: &Identity,
+) -> anyhow::Result<()> {
+    if let Some(target_device_id) = peer_identity.target_device_id.as_deref()
+        && target_device_id != local_identity.device_id
+    {
+        return Err(anyhow::anyhow!(
+            "received connection request for different target device {}",
+            target_device_id
+        ));
+    }
+
+    if let Some(target_protocol_version) = peer_identity.target_protocol_version
+        && target_protocol_version != local_identity.protocol_version
+    {
+        return Err(anyhow::anyhow!(
+            "received connection request for protocol {}, local protocol is {}",
+            target_protocol_version,
+            local_identity.protocol_version
+        ));
+    }
+
+    Ok(())
+}
+
+fn targeted_identity(
+    base: &Identity,
+    target_device_id: &str,
+    target_protocol_version: usize,
+) -> Identity {
+    let mut identity = base.clone();
+    identity.target_device_id = Some(target_device_id.to_string());
+    identity.target_protocol_version = Some(target_protocol_version);
+    identity
+}
+
+async fn write_identity_packet<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    identity: &Identity,
+) -> anyhow::Result<()> {
+    let raw =
+        ProtocolPacket::new(PacketType::Identity, serde_json::to_value(identity)?).as_raw()?;
+    writer.write_all(&raw).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn exchange_secure_identity<S>(
+    stream: &mut S,
+    expected_device_id: &str,
+    expected_protocol_version: usize,
+    local_identity: &Identity,
+) -> anyhow::Result<Identity>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_identity_packet(stream, local_identity).await?;
+
+    let line = tokio::time::timeout(
+        Duration::from_secs(5),
+        read_line_bounded(stream, MAX_IDENTITY_PACKET_SIZE),
+    )
+    .await??;
+    let packet = serde_json::from_str::<ProtocolPacket>(&line)?;
+    if !matches!(packet.packet_type, PacketType::Identity) {
+        return Err(anyhow::anyhow!(
+            "expected secure identity packet, received {:?}",
+            packet.packet_type
+        ));
+    }
+
+    let identity = serde_json::from_value::<Identity>(packet.body)?;
+    crate::device::validate_device_id(&identity.device_id)?;
+    if identity.device_id != expected_device_id {
+        return Err(anyhow::anyhow!(
+            "device ID changed during TLS handshake: {} -> {}",
+            expected_device_id,
+            identity.device_id
+        ));
+    }
+    if identity.protocol_version != expected_protocol_version {
+        return Err(anyhow::anyhow!(
+            "protocol version changed during TLS handshake: {} -> {}",
+            expected_protocol_version,
+            identity.protocol_version
+        ));
+    }
+
+    Ok(identity)
 }
 
 pub struct TcpTransport {
@@ -177,49 +310,45 @@ async fn handle_incoming_tcp(
     client_config: Arc<rustls::ClientConfig>,
     server_config: Arc<rustls::ServerConfig>,
 ) -> anyhow::Result<()> {
+    if !is_private_kdeconnect_addr(peer.ip()) {
+        return Err(anyhow::anyhow!(
+            "discarding TCP connection from non-local address {}",
+            peer.ip()
+        ));
+    }
+
     // Step 1: read phone's pre-TLS identity.
     // Read byte-by-byte to avoid BufReader consuming TLS ClientHello
     // bytes into its internal buffer, which would cause "tls handshake eof".
     debug!(peer = ?peer, "[tcp] step 1: reading pre-TLS identity");
-    let buffer = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut raw = Vec::new();
-        let mut byte = [0u8; 1];
-        loop {
-            match stream.read(&mut byte).await? {
-                0 => return Err(anyhow::anyhow!("EOF reading identity")),
-                1 => {
-                    raw.push(byte[0]);
-                    if byte[0] == b'\n' {
-                        break;
-                    }
-                    if raw.len() > 65536 {
-                        return Err(anyhow::anyhow!("identity line too long"));
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
-        Ok(String::from_utf8_lossy(&raw).into_owned())
-    })
+    let buffer = tokio::time::timeout(
+        Duration::from_secs(5),
+        read_line_bounded(&mut stream, MAX_IDENTITY_PACKET_SIZE),
+    )
     .await??;
     debug!(peer = ?peer, "[tcp] step 1: read {} bytes", buffer.len());
 
     let packet = serde_json::from_str::<ProtocolPacket>(&buffer)?;
-    let peer_identity = match serde_json::from_value::<Identity>(packet.body) {
+    if !matches!(packet.packet_type, PacketType::Identity) {
+        return Err(anyhow::anyhow!(
+            "expected pre-TLS identity packet, received {:?}",
+            packet.packet_type
+        ));
+    }
+    let mut peer_identity = match serde_json::from_value::<Identity>(packet.body) {
         Ok(i) => i,
         Err(e) => {
             // Complete the TLS handshake gracefully so the phone doesn't see
             // an abrupt TCP drop and retry aggressively causing connection churn.
             tokio::spawn(async move {
-                if let Ok(mut tls_stream) =
-                    TlsAcceptor::from(server_config).accept(stream).await
-                {
+                if let Ok(mut tls_stream) = TlsAcceptor::from(server_config).accept(stream).await {
                     let _ = tls_stream.shutdown().await;
                 }
             });
             return Err(e.into());
         }
     };
+    validate_identity_target(&peer_identity, &identity)?;
 
     let name = peer_identity.device_name.clone();
     let id = peer_identity.device_id.clone();
@@ -266,18 +395,18 @@ async fn handle_incoming_tcp(
         ));
     }
 
-    // Step 3: send our identity post-TLS for plugin negotiation.
-    debug!(peer = ?peer, "[tcp] step 3: sending post-TLS identity");
-    let filtered = filtered_identity_for_device(&id).await;
-    let post_tls_identity = ProtocolPacket::new(
-        PacketType::Identity,
-        serde_json::to_value(&filtered).unwrap(),
-    )
-    .as_raw()
-    .expect("Failed to serialize identity packet");
-    tls_stream.write_all(post_tls_identity.as_slice()).await?;
-    tls_stream.flush().await?;
-    debug!(peer = ?peer, "[tcp] step 3: post-TLS identity sent");
+    if peer_protocol_version >= 8 {
+        // Protocol v8 requires replacing the cleartext identity with the
+        // identity exchanged inside TLS before trusting capabilities.
+        debug!(peer = ?peer, "[tcp] step 3: exchanging secure identity");
+        let filtered = filtered_identity_for_device(&id).await;
+        peer_identity =
+            exchange_secure_identity(&mut tls_stream, &id, peer_protocol_version, &filtered)
+                .await?;
+        debug!(peer = ?peer, "[tcp] step 3: secure identity exchanged");
+    }
+
+    let name = crate::device::sanitize_device_name(&peer_identity.device_name);
 
     let (reader, writer) = split(tls_stream);
 
@@ -303,7 +432,7 @@ async fn handle_incoming_tcp(
         device_type: peer_identity.device_type.to_string(),
         incoming_capabilities: peer_identity.incoming_capabilities,
         outgoing_capabilities: peer_identity.outgoing_capabilities,
-        protocol_version: peer_protocol_version,
+        protocol_version: peer_identity.protocol_version,
         pairing_timestamp: 0,
         peer_certificate,
         write_tx,
@@ -437,11 +566,19 @@ impl UdpTransport {
     }
 
     pub async fn listen(&self) -> anyhow::Result<()> {
-        let mut buf = vec![0u8; 8192];
+        let mut buf = vec![0u8; MAX_IDENTITY_PACKET_SIZE];
 
         loop {
             match self.socket.recv_from(&mut buf).await {
                 Ok((len, peer)) => {
+                    if !is_private_kdeconnect_addr(peer.ip()) {
+                        debug!(
+                            peer = ?peer,
+                            "[udp] discarding identity from non-local address"
+                        );
+                        continue;
+                    }
+
                     let raw = &buf[..len];
                     let packet = match ProtocolPacket::from_raw(raw) {
                         Ok(p) => p,
@@ -450,6 +587,13 @@ impl UdpTransport {
                             continue;
                         }
                     };
+                    if !matches!(packet.packet_type, PacketType::Identity) {
+                        debug!(
+                            "[udp] ignoring non-identity packet {:?}",
+                            packet.packet_type
+                        );
+                        continue;
+                    }
 
                     let peer_identity = match serde_json::from_value::<Identity>(packet.body) {
                         Ok(i) => i,
@@ -491,11 +635,18 @@ impl UdpTransport {
 
 async fn handle_discovered_device(
     mut peer: SocketAddr,
-    peer_identity: Identity,
+    mut peer_identity: Identity,
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     this_identity: Arc<Identity>,
     server_config: Arc<rustls::ServerConfig>,
 ) -> anyhow::Result<()> {
+    if !is_private_kdeconnect_addr(peer.ip()) {
+        return Err(anyhow::anyhow!(
+            "discarding UDP discovery from non-local address {}",
+            peer.ip()
+        ));
+    }
+
     let id = DeviceId(peer_identity.device_id.clone());
     let name = peer_identity.device_name.clone();
     let peer_protocol_version = peer_identity.protocol_version;
@@ -509,23 +660,24 @@ async fn handle_discovered_device(
         info!(peer = ?peer, device_id = ?id, device_name = name, "Device supports TCP");
     }
 
-    let mut stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(peer)).await??;
+    let mut stream =
+        tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(peer)).await??;
     apply_keepalive(&stream);
 
     // Send identity pre-TLS — phone reads this before initiating TLS.
+    let pre_tls_identity = targeted_identity(&this_identity, &id.0, peer_protocol_version);
     let pre_tls_identity = ProtocolPacket::new(
         PacketType::Identity,
-        serde_json::to_value(&*this_identity).unwrap(),
+        serde_json::to_value(&pre_tls_identity)?,
     )
-    .as_raw()
-    .expect("Failed to serialize identity packet");
-
+    .as_raw()?;
     stream.write_all(pre_tls_identity.as_slice()).await?;
     stream.flush().await?;
 
     let acceptor = TlsAcceptor::from(server_config);
 
-    let mut tls_stream = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await??;
+    let mut tls_stream =
+        tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await??;
 
     info!(peer = ?peer, device_id = ?id, device_name = name, "[udp] Established TLS connection");
     let peer_certificate = peer_certificate_der(tls_stream.get_ref().1.peer_certificates());
@@ -547,17 +699,14 @@ async fn handle_discovered_device(
         ));
     }
 
-    // Send identity post-TLS — phone uses this for plugin negotiation.
-    let filtered = filtered_identity_for_device(&id.0).await;
-    let post_tls_identity = ProtocolPacket::new(
-        PacketType::Identity,
-        serde_json::to_value(&filtered).unwrap(),
-    )
-    .as_raw()
-    .expect("Failed to serialize identity packet");
+    if peer_protocol_version >= 8 {
+        let filtered = filtered_identity_for_device(&id.0).await;
+        peer_identity =
+            exchange_secure_identity(&mut tls_stream, &id.0, peer_protocol_version, &filtered)
+                .await?;
+    }
 
-    tls_stream.write_all(post_tls_identity.as_slice()).await?;
-    tls_stream.flush().await?;
+    let name = crate::device::sanitize_device_name(&peer_identity.device_name);
 
     let (reader, writer) = split(tls_stream);
 
@@ -583,7 +732,7 @@ async fn handle_discovered_device(
         device_type: peer_identity.device_type.to_string(),
         incoming_capabilities: peer_identity.incoming_capabilities,
         outgoing_capabilities: peer_identity.outgoing_capabilities,
-        protocol_version: peer_protocol_version,
+        protocol_version: peer_identity.protocol_version,
         pairing_timestamp: 0,
         peer_certificate,
         write_tx,
@@ -594,7 +743,6 @@ async fn handle_discovered_device(
 
     Ok(())
 }
-
 
 fn peer_certificate_der(certs: Option<&[rustls::pki_types::CertificateDer<'static>]>) -> Vec<u8> {
     certs
@@ -871,6 +1019,8 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
         device_type: base.device_type,
         protocol_version: base.protocol_version,
         tcp_port: base.tcp_port,
+        target_device_id: None,
+        target_protocol_version: None,
         incoming_capabilities: base
             .incoming_capabilities
             .iter()
@@ -928,4 +1078,38 @@ pub(crate) async fn receive_payload(
     info!("successfully received payload");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_private_kdeconnect_addr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn kdeconnect_lan_filter_allows_private_link_local_loopback_and_cgnat() {
+        assert!(is_private_kdeconnect_addr(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 2
+        ))));
+        assert!(is_private_kdeconnect_addr(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 1, 2
+        ))));
+        assert!(is_private_kdeconnect_addr(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(is_private_kdeconnect_addr(IpAddr::V4(Ipv4Addr::new(
+            100, 64, 1, 2
+        ))));
+        assert!(is_private_kdeconnect_addr(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_private_kdeconnect_addr(IpAddr::V6(
+            "fc00::1".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn kdeconnect_lan_filter_rejects_public_internet_addresses() {
+        assert!(!is_private_kdeconnect_addr(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
+        assert!(!is_private_kdeconnect_addr(IpAddr::V6(
+            "2001:4860:4860::8888".parse().unwrap()
+        )));
+    }
 }

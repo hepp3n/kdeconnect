@@ -188,7 +188,8 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddrV4};
     use tokio::sync::mpsc;
 
-    fn setup_test_env() -> tempfile::TempDir {
+    async fn setup_test_env() -> (tokio::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
+        let guard = crate::TEST_ENV_LOCK.lock().await;
         let temp_dir = tempfile::tempdir().unwrap();
         unsafe {
             std::env::set_var("HOME", temp_dir.path());
@@ -196,12 +197,12 @@ mod tests {
         // Ensure the config directory exists for Device::new
         let kc_dir = temp_dir.path().join(".config").join("kdeconnect");
         std::fs::create_dir_all(kc_dir).unwrap();
-        temp_dir
+        (guard, temp_dir)
     }
 
     #[tokio::test]
     async fn handles_incoming_pair_request_transitions_to_requested() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -228,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn accepts_pairing_when_in_requesting_state() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -237,9 +238,11 @@ mod tests {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
 
         // Manually set state to Requesting (as if we initiated pairing)
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.pair_state = PairState::Requesting;
+        let device = Device {
+            device_id: id.clone(),
+            pair_state: PairState::Requesting,
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         let packet = ProtocolPacket::new(PacketType::Pair, json!({ "pair": true }));
@@ -256,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_false_on_not_paired_returns_false() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -275,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn already_paired_device_gets_fresh_request_treatment() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -283,9 +286,11 @@ mod tests {
         let id = DeviceId("test-device-repaired-00000000000".to_string());
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
 
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.pair_state = PairState::Paired;
+        let device = Device {
+            device_id: id.clone(),
+            pair_state: PairState::Paired,
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         let packet = ProtocolPacket::new(
@@ -308,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_pair_request_without_timestamp_for_v8() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -316,9 +321,11 @@ mod tests {
         let id = DeviceId("test-device-no-ts-00000000000000".to_string());
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
 
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.protocol_version = 8;
+        let device = Device {
+            device_id: id.clone(),
+            protocol_version: 8,
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         let packet = ProtocolPacket::new(PacketType::Pair, json!({ "pair": true }));
@@ -335,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_pair_request_with_large_clock_skew() {
-        let _td = setup_test_env();
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
         let pm = PairingManager::new(dm.clone());
@@ -344,9 +351,11 @@ mod tests {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
 
         // Set protocol version to 8 to enable clock check
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.protocol_version = 8;
+        let device = Device {
+            device_id: id.clone(),
+            protocol_version: 8,
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         // Timestamp 1 hour in the past

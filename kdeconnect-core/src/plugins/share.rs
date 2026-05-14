@@ -77,10 +77,18 @@ impl ShareRequest {
     pub async fn receive_share(
         &self,
         device: &Device,
-        info: &PacketPayloadTransferInfo,
+        info: Option<&PacketPayloadTransferInfo>,
     ) -> anyhow::Result<()> {
         match self {
-            ShareRequest::File(f) => self.handle_file_request(f, device, info).await,
+            ShareRequest::File(f) => {
+                let Some(info) = info else {
+                    return Err(anyhow::anyhow!(
+                        "file share from {} did not include payload transfer info",
+                        device.name
+                    ));
+                };
+                self.handle_file_request(f, device, info).await
+            }
             ShareRequest::Text { text } => {
                 let text = text.clone();
                 tokio::task::spawn_blocking(move || {
@@ -183,10 +191,7 @@ impl ShareRequest {
 }
 
 fn sanitize_filename(filename: &str) -> String {
-    let after_last_sep = filename
-        .rsplit(|c| c == '/' || c == '\\')
-        .next()
-        .unwrap_or(filename);
+    let after_last_sep = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
     let sanitized: String = after_last_sep
         .chars()
         .filter(|c| !matches!(c, '/' | '\\' | '\0'))
@@ -236,13 +241,34 @@ impl Plugin for ShareRequest {
     }
 }
 
+impl ShareRequest {
+    pub async fn send_file(
+        &self,
+        writer: &mpsc::UnboundedSender<ProtocolPacket>,
+        payload_size: u64,
+        payload_transfer_info: Option<PacketPayloadTransferInfo>,
+    ) {
+        let packet = ProtocolPacket::new_with_payload(
+            PacketType::ShareRequest,
+            serde_json::to_value(self.clone()).expect("failed serialize packet body"),
+            payload_size,
+            payload_transfer_info,
+        );
+
+        let _ = writer.send(packet);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn sanitize_strips_directory_traversal() {
-        assert_eq!(sanitize_filename("../../.ssh/authorized_keys"), "authorized_keys");
+        assert_eq!(
+            sanitize_filename("../../.ssh/authorized_keys"),
+            "authorized_keys"
+        );
         assert_eq!(sanitize_filename("../../../etc/passwd"), "passwd");
         assert_eq!(sanitize_filename("/etc/shadow"), "shadow");
     }
@@ -305,23 +331,5 @@ mod tests {
         std::fs::write(tmp.path().join("test (2).txt"), "").unwrap();
         let result = unique_path(tmp.path(), "test.txt");
         assert_eq!(result, tmp.path().join("test (3).txt"));
-    }
-}
-
-impl ShareRequest {
-    pub async fn send_file(
-        &self,
-        writer: &mpsc::UnboundedSender<ProtocolPacket>,
-        payload_size: u64,
-        payload_transfer_info: Option<PacketPayloadTransferInfo>,
-    ) {
-        let packet = ProtocolPacket::new_with_payload(
-            PacketType::ShareRequest,
-            serde_json::to_value(self.clone()).expect("failed serialize packet body"),
-            payload_size,
-            payload_transfer_info,
-        );
-
-        let _ = writer.send(packet);
     }
 }

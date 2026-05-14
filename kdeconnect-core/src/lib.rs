@@ -44,6 +44,10 @@ pub use protocol::{PacketType, ProtocolPacket};
 
 pub static GLOBAL_CONFIG: OnceLock<config::Config> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: once_cell::sync::Lazy<Mutex<()>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(()));
+
 pub struct KdeConnectCore {
     device_manager: Arc<DeviceManager>,
     pairing: Arc<PairingManager>,
@@ -392,6 +396,16 @@ impl KdeConnectCore {
                     }
                 };
 
+                if device.pair_state == crate::device::PairState::Paired
+                    && device.protocol_version > protocol_version
+                {
+                    warn!(
+                        "[core] refusing protocol downgrade for paired device {}: stored={}, incoming={}",
+                        id, device.protocol_version, protocol_version
+                    );
+                    return;
+                }
+
                 let stored_remote_certificate = device.remote_certificate.clone();
                 if device.pair_state == crate::device::PairState::Paired
                     && !stored_remote_certificate.is_empty()
@@ -409,12 +423,6 @@ impl KdeConnectCore {
                         .update_pair_state(&id, crate::device::PairState::NotPaired)
                         .await;
                     cleanup_device_data(&id.0).await;
-                    let conn_event = ConnectionEvent::PairStateChanged((
-                        id,
-                        crate::device::PairState::NotPaired,
-                    ));
-                    let _ = self.conn_tx.send(conn_event.clone());
-                    let _ = self.mpris_conn_tx.send(conn_event);
                     return;
                 }
 
@@ -568,12 +576,6 @@ impl KdeConnectCore {
                                                 .await;
                                             cleanup_device_data(&id.0).await;
                                             self.drop_connection(&id).await;
-                                            let conn_event = ConnectionEvent::PairStateChanged((
-                                                id.clone(),
-                                                crate::device::PairState::NotPaired,
-                                            ));
-                                            let _ = self.conn_tx.send(conn_event.clone());
-                                            let _ = self.mpris_conn_tx.send(conn_event);
                                         }
                                         crate::device::PairState::Requesting
                                         | crate::device::PairState::Requested => {
@@ -732,10 +734,6 @@ impl KdeConnectCore {
                     .update_pair_state(&id, crate::device::PairState::NotPaired)
                     .await;
                 cleanup_device_data(&id.0).await;
-                let conn_event =
-                    ConnectionEvent::PairStateChanged((id, crate::device::PairState::NotPaired));
-                let _ = self.conn_tx.send(conn_event.clone());
-                let _ = self.mpris_conn_tx.send(conn_event);
             }
         }
     }
@@ -747,6 +745,58 @@ impl KdeConnectCore {
             }
             AppEvent::Pair(device_id) => {
                 info!("frontend sent pair event to device: {}", device_id);
+
+                let current_state = match self.device_manager.get_device(&device_id).await {
+                    Some(device) => device.pair_state,
+                    None => {
+                        warn!("[core] cannot pair unknown device {}", device_id);
+                        let _ = self.udp_transport.send_identity().await;
+                        let ev = ConnectionEvent::PairingTimedOut(device_id);
+                        let _ = self.conn_tx.send(ev.clone());
+                        let _ = self.mpris_conn_tx.send(ev);
+                        return;
+                    }
+                };
+
+                match current_state {
+                    crate::device::PairState::Paired => {
+                        warn!(
+                            "[core] ignoring pair request for already paired device {}",
+                            device_id
+                        );
+                        return;
+                    }
+                    crate::device::PairState::Requested => {
+                        info!(
+                            "[core] pair requested while peer request is pending; accepting {}",
+                            device_id
+                        );
+                        let pair = Pair::accept();
+                        let value = serde_json::to_value(pair).expect("fail serializing pair");
+                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                        if self.queue_packet(&device_id, pkt).await {
+                            self.device_manager.set_paired(&device_id, true).await;
+                        } else {
+                            warn!(
+                                "[core] failed to accept pending pair request from {}",
+                                device_id
+                            );
+                            self.device_manager
+                                .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                                .await;
+                            let ev = ConnectionEvent::PairingTimedOut(device_id);
+                            let _ = self.conn_tx.send(ev.clone());
+                            let _ = self.mpris_conn_tx.send(ev);
+                        }
+                        return;
+                    }
+                    crate::device::PairState::Requesting => {
+                        debug!("[core] pair request already in progress for {}", device_id);
+                        return;
+                    }
+                    crate::device::PairState::NotPaired => {}
+                }
+
                 let pair = Pair::request();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
@@ -763,6 +813,16 @@ impl KdeConnectCore {
                 let queued = self.queue_packet(&device_id, pkt).await;
                 if queued {
                     info!("Sent pair request packet to device: {}", device_id);
+                } else {
+                    warn!(
+                        "[core] failed to send pair request to {} (no connection)",
+                        device_id
+                    );
+                    let _ = self.udp_transport.send_identity().await;
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                    return;
                 }
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::Requesting)
@@ -804,10 +864,7 @@ impl KdeConnectCore {
                     if let Some(dev) = dm.get_device(&did).await
                         && dev.pair_state == crate::device::PairState::Requesting
                     {
-                        info!(
-                            "[core] pairing with {} timed out definitively",
-                            did
-                        );
+                        info!("[core] pairing with {} timed out definitively", did);
                         let pair = Pair::reject();
                         let value = serde_json::to_value(pair).expect("fail serializing pair");
                         let pkt = ProtocolPacket::new(PacketType::Pair, value);
@@ -932,24 +989,34 @@ impl KdeConnectCore {
                     .await;
                 cleanup_device_data(&device_id.0).await;
                 self.drop_connection(&device_id).await;
-
-                let conn_event = ConnectionEvent::PairStateChanged((
-                    device_id,
-                    crate::device::PairState::NotPaired,
-                ));
-                let _ = self.conn_tx.send(conn_event.clone());
-                let _ = self.mpris_conn_tx.send(conn_event);
             }
             AppEvent::AcceptPairing(device_id) => {
                 info!("User accepted pairing from {}", device_id);
+
+                let Some(dev) = self.device_manager.get_device(&device_id).await else {
+                    warn!("[core] ignoring accept for unknown device {}", device_id);
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                    return;
+                };
+
+                if dev.pair_state != crate::device::PairState::Requested {
+                    warn!(
+                        "[core] ignoring stale pair accept for {} in state {:?}",
+                        device_id, dev.pair_state
+                    );
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                    return;
+                }
 
                 // Clock-sync validation per KDE Connect protocol v8+:
                 // if the phone's pairing timestamp and our current time differ
                 // by more than 30 minutes, reject the pairing to prevent
                 // security issues from clock skew.
-                if let Some(dev) = self.device_manager.get_device(&device_id).await
-                    && dev.protocol_version >= 8
-                {
+                if dev.protocol_version >= 8 {
                     let phone_ts = dev.pairing_timestamp;
                     if phone_ts > 0 {
                         let now = SystemTime::now()
@@ -1005,6 +1072,26 @@ impl KdeConnectCore {
             }
             AppEvent::RejectPairing(device_id) => {
                 info!("User rejected pairing from {}", device_id);
+
+                let Some(dev) = self.device_manager.get_device(&device_id).await else {
+                    warn!("[core] ignoring reject for unknown device {}", device_id);
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                    return;
+                };
+
+                if dev.pair_state != crate::device::PairState::Requested {
+                    warn!(
+                        "[core] ignoring stale pair reject for {} in state {:?}",
+                        device_id, dev.pair_state
+                    );
+                    let ev = ConnectionEvent::PairingTimedOut(device_id);
+                    let _ = self.conn_tx.send(ev.clone());
+                    let _ = self.mpris_conn_tx.send(ev);
+                    return;
+                }
+
                 let pair = Pair::reject();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);

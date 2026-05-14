@@ -391,7 +391,8 @@ impl Application for SettingsApp {
             }
 
             Message::PairDevice(device_id) => {
-                self.pairing_in_progress.insert(device_id.clone(), Instant::now());
+                self.pairing_in_progress
+                    .insert(device_id.clone(), Instant::now());
                 let id = device_id;
                 return Task::perform(
                     async move {
@@ -436,6 +437,9 @@ impl Application for SettingsApp {
                     {
                         self.selected_device = None;
                         self.plugin_states.remove(id);
+                    }
+                    kdeconnect_dbus_client::ServiceEvent::PairingFinished(id) => {
+                        self.pairing_in_progress.remove(id);
                     }
                     _ => {}
                 }

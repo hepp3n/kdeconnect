@@ -166,6 +166,8 @@ async fn make_identity(device_id: String, tcp_port: Option<u16>) -> Identity {
             .collect(),
         protocol_version: PROTOCOL_VERSION,
         tcp_port,
+        target_device_id: None,
+        target_protocol_version: None,
     }
 }
 

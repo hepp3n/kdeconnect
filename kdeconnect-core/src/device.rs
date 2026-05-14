@@ -233,9 +233,22 @@ impl DeviceManager {
     }
 
     pub async fn set_protocol_version(&self, id: &DeviceId, version: usize) {
-        let mut guard = self.devices.write().await;
-        if let Some(device) = guard.get_mut(id) {
-            device.protocol_version = version;
+        let mut paired_device_to_store = None;
+        {
+            let mut guard = self.devices.write().await;
+            if let Some(device) = guard.get_mut(id) {
+                if device.protocol_version == version {
+                    return;
+                }
+                device.protocol_version = version;
+                if device.pair_state == PairState::Paired {
+                    paired_device_to_store = Some(device.clone());
+                }
+            }
+        }
+
+        if let Some(device) = paired_device_to_store {
+            let _ = device.store_device_identity(PairState::Paired).await;
         }
     }
 
@@ -353,9 +366,11 @@ mod tests {
         let dm = DeviceManager::new(tx);
 
         let id = DeviceId("test-device-mgr-add-00000000000000".to_string());
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.name = "Test Phone".to_string();
+        let device = Device {
+            device_id: id.clone(),
+            name: "Test Phone".to_string(),
+            ..Default::default()
+        };
 
         dm.add_or_update_device(id.clone(), device.clone()).await;
 
@@ -370,8 +385,10 @@ mod tests {
         let dm = DeviceManager::new(tx);
 
         let id = DeviceId("test-device-pair-emit-0000000000".to_string());
-        let mut device = Device::default();
-        device.device_id = id.clone();
+        let device = Device {
+            device_id: id.clone(),
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         dm.set_paired(&id, true).await;
@@ -389,15 +406,23 @@ mod tests {
         let dm = DeviceManager::new(tx);
 
         let id = DeviceId("test-device-state-up-0000000000".to_string());
-        let mut device = Device::default();
-        device.device_id = id.clone();
+        let device = Device {
+            device_id: id.clone(),
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         dm.update_pair_state(&id, PairState::Requesting).await;
-        assert_eq!(dm.get_device(&id).await.unwrap().pair_state, PairState::Requesting);
+        assert_eq!(
+            dm.get_device(&id).await.unwrap().pair_state,
+            PairState::Requesting
+        );
 
         dm.update_pair_state(&id, PairState::Paired).await;
-        assert_eq!(dm.get_device(&id).await.unwrap().pair_state, PairState::Paired);
+        assert_eq!(
+            dm.get_device(&id).await.unwrap().pair_state,
+            PairState::Paired
+        );
 
         dm.update_pair_state(&id, PairState::NotPaired).await;
         let dev = dm.get_device(&id).await.unwrap();
@@ -411,10 +436,12 @@ mod tests {
         let dm = DeviceManager::new(tx);
 
         let id = DeviceId("test-device-cert-clr-0000000000".to_string());
-        let mut device = Device::default();
-        device.device_id = id.clone();
-        device.pair_state = PairState::Paired;
-        device.remote_certificate = vec![1, 2, 3, 4];
+        let device = Device {
+            device_id: id.clone(),
+            pair_state: PairState::Paired,
+            remote_certificate: vec![1, 2, 3, 4],
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         dm.set_paired(&id, false).await;
@@ -430,8 +457,10 @@ mod tests {
         let dm = DeviceManager::new(tx);
 
         let id = DeviceId("test-device-version-0000000000000".to_string());
-        let mut device = Device::default();
-        device.device_id = id.clone();
+        let device = Device {
+            device_id: id.clone(),
+            ..Default::default()
+        };
         dm.add_or_update_device(id.clone(), device).await;
 
         dm.set_protocol_version(&id, 8).await;
@@ -448,9 +477,11 @@ mod tests {
 
         for i in 0..3 {
             let id = DeviceId(format!("test-device-list-{:02}-000000000000", i));
-            let mut device = Device::default();
-            device.device_id = id.clone();
-            device.name = format!("Phone {}", i);
+            let device = Device {
+                device_id: id.clone(),
+                name: format!("Phone {}", i),
+                ..Default::default()
+            };
             dm.add_or_update_device(id, device).await;
         }
 

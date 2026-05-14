@@ -31,6 +31,26 @@ where
     }
 }
 
+fn deserialize_optional_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::Number(id)) => id
+            .as_u64()
+            .map(|id| Some(id as usize))
+            .ok_or_else(|| serde::de::Error::custom("value must be an unsigned integer")),
+        Some(Value::String(id)) => id
+            .parse::<usize>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        None => Ok(None),
+        Some(_) => Err(serde::de::Error::custom(
+            "value must be a number or numeric string",
+        )),
+    }
+}
+
 fn serialize_packet_type<S>(pt: &PacketType, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -365,6 +385,27 @@ mod tests {
     }
 
     #[test]
+    fn identity_accepts_android_string_target_protocol_version() {
+        let identity: Identity = serde_json::from_value(json!({
+            "deviceId": "abcdef1234567890abcdef1234567890",
+            "deviceName": "Phone",
+            "deviceType": "phone",
+            "incomingCapabilities": [],
+            "outgoingCapabilities": [],
+            "protocolVersion": 8,
+            "targetDeviceId": "0123456789abcdef0123456789abcdef",
+            "targetProtocolVersion": "8"
+        }))
+        .unwrap();
+
+        assert_eq!(identity.target_protocol_version, Some(8));
+        assert_eq!(
+            identity.target_device_id.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+    }
+
+    #[test]
     fn pair_packets_only_timestamp_new_requests() {
         let request = Pair::request();
         assert!(request.pair);
@@ -390,6 +431,14 @@ pub struct Identity {
     pub outgoing_capabilities: Vec<String>,
     pub protocol_version: usize,
     pub tcp_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_device_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_usize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub target_protocol_version: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
