@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     select,
@@ -26,11 +26,6 @@ const ALLOWED_TIMESTAMP_DIFF_SECS: u64 = 1800;
 
 /// Auto-reject incoming/outgoing pairing requests after this duration (30 seconds).
 const PAIRING_TIMEOUT_SECS: u64 = 30;
-
-/// Minimum interval between accepting new connections from the same device.
-/// Prevents duplicate TCP connections from repeated UDP discovery broadcasts
-/// from churning an already-working link.
-const MIN_RECONNECT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub mod config;
 pub(crate) mod crypto;
@@ -59,9 +54,6 @@ pub struct KdeConnectCore {
     /// A `Disconnected` event whose conn_id doesn't match is from a superseded
     /// connection and is discarded so it cannot wipe a live writer_map entry.
     conn_id_map: Arc<Mutex<HashMap<DeviceId, u64>>>,
-    /// Tracks when each device last successfully established a connection.
-    /// Used to deduplicate rapid reconnections from repeated UDP broadcasts.
-    last_connected_at: Arc<Mutex<HashMap<DeviceId, Instant>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
     udp_transport: Arc<UdpTransport>,
@@ -90,7 +82,6 @@ impl KdeConnectCore {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
         let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
-        let last_connected_at = Arc::new(Mutex::new(HashMap::new()));
 
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
@@ -204,7 +195,6 @@ impl KdeConnectCore {
                 transport_rx,
                 writer_map,
                 conn_id_map,
-                last_connected_at,
                 event_tx,
                 event_rx,
                 udp_transport,
@@ -457,24 +447,6 @@ impl KdeConnectCore {
                         .await;
                 }
 
-                {
-                    let last_map = self.last_connected_at.lock().await;
-                    let writers = self.writer_map.lock().await;
-                    if let Some(last_time) = last_map.get(&id)
-                        && last_time.elapsed() < MIN_RECONNECT_INTERVAL
-                        && writers.contains_key(&id)
-                        && device.pair_state != crate::device::PairState::Requesting
-                    {
-                        debug!(
-                            "[core] skipping duplicate connection for {} (last connected {}ms ago)",
-                            id,
-                            last_time.elapsed().as_millis()
-                        );
-                        return;
-                    }
-                }
-
-                self.last_connected_at.lock().await.insert(id.clone(), Instant::now());
                 self.conn_id_map.lock().await.insert(id.clone(), conn_id);
                 self.writer_map.lock().await.insert(id.clone(), write_tx);
 
@@ -740,7 +712,6 @@ impl KdeConnectCore {
 
                 self.writer_map.lock().await.remove(&id);
                 self.conn_id_map.lock().await.remove(&id);
-                self.last_connected_at.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -780,111 +751,77 @@ impl KdeConnectCore {
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
 
-                self.last_connected_at.lock().await.remove(&device_id);
+                let udp = self.udp_transport.clone();
+                let wm = self.writer_map.clone();
+                let dm = self.device_manager.clone();
+                let event_tx2 = self.event_tx.clone();
+                let conn_tx2 = self.conn_tx.clone();
+                let mpris_tx2 = self.mpris_conn_tx.clone();
+                let did = device_id.clone();
+                let pkt_clone = pkt.clone();
 
-                if self.queue_packet(&device_id, pkt.clone()).await {
+                let queued = self.queue_packet(&device_id, pkt).await;
+                if queued {
                     info!("Sent pair request packet to device: {}", device_id);
-                    self.device_manager
-                        .update_pair_state(&device_id, crate::device::PairState::Requesting)
-                        .await;
-
-                    let dm = self.device_manager.clone();
-                    let event_tx = self.event_tx.clone();
-                    let conn_tx = self.conn_tx.clone();
-                    let mpris_tx = self.mpris_conn_tx.clone();
-                    let did = device_id.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
-                        if let Some(dev) = dm.get_device(&did).await
-                            && dev.pair_state == crate::device::PairState::Requesting
-                        {
-                            info!(
-                                "[core] outgoing pair request to {} timed out after {}s",
-                                did, PAIRING_TIMEOUT_SECS
-                            );
-                            let pair = Pair::reject();
-                            let value = serde_json::to_value(pair).expect("fail serializing pair");
-                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                            let _ = event_tx.send(CoreEvent::SendPacket {
-                                device: did.clone(),
-                                packet: pkt,
-                            });
-                            dm.update_pair_state(&did, crate::device::PairState::NotPaired)
-                                .await;
-                            let ev = ConnectionEvent::PairingTimedOut(did);
-                            let _ = conn_tx.send(ev.clone());
-                            let _ = mpris_tx.send(ev);
-                        }
-                    });
-                } else {
-                    info!(
-                        "[core] no connection for {} — broadcasting and waiting for reconnect",
-                        device_id
-                    );
-                    self.device_manager
-                        .update_pair_state(&device_id, crate::device::PairState::Requesting)
-                        .await;
-
-                    let udp = self.udp_transport.clone();
-                    let wm = self.writer_map.clone();
-                    let dm = self.device_manager.clone();
-                    let event_tx = self.event_tx.clone();
-                    let conn_tx = self.conn_tx.clone();
-                    let mpris_tx = self.mpris_conn_tx.clone();
-                    let did = device_id.clone();
-                    tokio::spawn(async move {
-                        let _ = udp.send_identity().await;
-                        let mut sent = false;
-                        for _ in 0..30 {
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            let has_writer = wm.lock().await.contains_key(&did);
-                            if has_writer {
-                                let sender = wm.lock().await.get(&did).cloned();
-                                if let Some(sender) = sender {
-                                    if sender.send(pkt.clone()).is_ok() {
-                                        info!("[core] pair request sent to {} after reconnect", did);
-                                        sent = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if sent {
-                            tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
-                            if let Some(dev) = dm.get_device(&did).await
-                                && dev.pair_state == crate::device::PairState::Requesting
-                            {
-                                info!(
-                                    "[core] outgoing pair request to {} timed out after {}s",
-                                    did, PAIRING_TIMEOUT_SECS
-                                );
-                                let pair = Pair::reject();
-                                let value =
-                                    serde_json::to_value(pair).expect("fail serializing pair");
-                                let pkt = ProtocolPacket::new(PacketType::Pair, value);
-                                let _ = event_tx.send(CoreEvent::SendPacket {
-                                    device: did.clone(),
-                                    packet: pkt,
-                                });
-                                dm.update_pair_state(&did, crate::device::PairState::NotPaired)
-                                    .await;
-                                let ev = ConnectionEvent::PairingTimedOut(did);
-                                let _ = conn_tx.send(ev.clone());
-                                let _ = mpris_tx.send(ev);
-                            }
-                        } else {
-                            warn!(
-                                "[core] failed to send pair request to {} (no connection after broadcast)",
-                                did
-                            );
-                            dm.update_pair_state(&did, crate::device::PairState::NotPaired)
-                                .await;
-                            let ev = ConnectionEvent::PairingTimedOut(did);
-                            let _ = conn_tx.send(ev.clone());
-                            let _ = mpris_tx.send(ev);
-                        }
-                    });
                 }
+                self.device_manager
+                    .update_pair_state(&device_id, crate::device::PairState::Requesting)
+                    .await;
+
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+
+                    if let Some(dev) = dm.get_device(&did).await
+                        && dev.pair_state != crate::device::PairState::Requesting
+                    {
+                        return;
+                    }
+
+                    info!(
+                        "[core] pair request to {} timed out after {}s — attempting reconnect",
+                        did, PAIRING_TIMEOUT_SECS
+                    );
+
+                    let _ = udp.send_identity().await;
+
+                    let mut retried = false;
+                    for _ in 0..30 {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        let sender = wm.lock().await.get(&did).cloned();
+                        if let Some(sender) = sender
+                            && sender.send(pkt_clone.clone()).is_ok()
+                        {
+                            info!("[core] pair request resent to {} after reconnect", did);
+                            retried = true;
+                            break;
+                        }
+                    }
+
+                    if retried {
+                        tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+                    }
+
+                    if let Some(dev) = dm.get_device(&did).await
+                        && dev.pair_state == crate::device::PairState::Requesting
+                    {
+                        info!(
+                            "[core] pairing with {} timed out definitively",
+                            did
+                        );
+                        let pair = Pair::reject();
+                        let value = serde_json::to_value(pair).expect("fail serializing pair");
+                        let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                        let _ = event_tx2.send(CoreEvent::SendPacket {
+                            device: did.clone(),
+                            packet: pkt,
+                        });
+                        dm.update_pair_state(&did, crate::device::PairState::NotPaired)
+                            .await;
+                        let ev = ConnectionEvent::PairingTimedOut(did);
+                        let _ = conn_tx2.send(ev.clone());
+                        let _ = mpris_tx2.send(ev);
+                    }
+                });
             }
             AppEvent::Ping((device_id, msg)) => {
                 info!("frontend sent ping event to device: {}", device_id);
@@ -1081,7 +1018,6 @@ impl KdeConnectCore {
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);
                 self.conn_id_map.lock().await.remove(&device_id);
-                self.last_connected_at.lock().await.remove(&device_id);
                 let mut guard = self.writer_map.lock().await;
                 if guard.remove(&device_id).is_some() {
                     let conn_event = ConnectionEvent::Disconnected(device_id);
@@ -1115,7 +1051,6 @@ impl KdeConnectCore {
 
                 {
                     self.conn_id_map.lock().await.remove(&device_id);
-                    self.last_connected_at.lock().await.remove(&device_id);
                     let mut guard = self.writer_map.lock().await;
                     if guard.remove(&device_id).is_some() {
                         info!(
@@ -1151,7 +1086,6 @@ impl KdeConnectCore {
             );
             self.writer_map.lock().await.remove(device_id);
             self.conn_id_map.lock().await.remove(device_id);
-            self.last_connected_at.lock().await.remove(device_id);
             let conn_event = ConnectionEvent::Disconnected(device_id.clone());
             let _ = self.conn_tx.send(conn_event.clone());
             let _ = self.mpris_conn_tx.send(conn_event);
@@ -1163,7 +1097,6 @@ impl KdeConnectCore {
 
     async fn drop_connection(&self, device_id: &DeviceId) -> bool {
         self.conn_id_map.lock().await.remove(device_id);
-        self.last_connected_at.lock().await.remove(device_id);
         let removed = self.writer_map.lock().await.remove(device_id).is_some();
         if removed {
             info!("[core] dropped connection for {}", device_id);

@@ -28,10 +28,11 @@ use crate::{
 
 pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Application-level identity heartbeat interval — keeps the TCP connection
-/// from going idle long enough to trigger OS keepalive probes (which Android
-/// Doze often ignores, causing spurious disconnects). Do not use
-/// `kdeconnect.ping` here: peers such as GSConnect surface pings to users.
+/// Application-level keepalive interval — sends a bare newline to keep the
+/// TCP connection from going idle long enough to trigger OS keepalive probes
+/// (which Android Doze often ignores, causing spurious disconnects).
+/// Bare newlines are silently skipped by all KDE Connect readers and never
+/// surfaced to users.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
@@ -700,9 +701,8 @@ async fn handle_connection<R, W>(
         });
     });
 
-    // Writer task — drains the write channel and sends periodic identity
-    // heartbeats to prevent the connection from going idle long enough for
-    // OS-level TCP keepalive to kick in.
+    // Writer task — drains the write channel and sends periodic bare-newline
+    // keepalives to prevent the TCP connection from going idle.
     let event_tx_writer = event_tx.clone();
     let id_writer = id.clone();
     tokio::spawn(async move {
@@ -713,15 +713,7 @@ async fn handle_connection<R, W>(
                     rx.recv().await
                 } => msg,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
-                    let heartbeat = ProtocolPacket::new(
-                        PacketType::Identity,
-                        serde_json::to_value(&GLOBAL_CONFIG.get().unwrap().identity)
-                            .expect("Failed to serialize heartbeat identity"),
-                    );
-                    let raw = heartbeat
-                        .as_raw()
-                        .expect("Failed to serialize heartbeat");
-                    if let Err(e) = writer.write_all(&raw).await {
+                    if let Err(e) = writer.write_all(b"\n").await {
                         error!(peer = ?peer, "Error writing heartbeat: {}", e);
                         break;
                     }
