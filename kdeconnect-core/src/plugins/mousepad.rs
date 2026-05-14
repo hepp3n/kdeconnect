@@ -1,13 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    io::Read as _,
+    process::{Command, ExitStatus, Stdio},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::{
-    device::Device,
+    device::{Device, DeviceId},
     event::CoreEvent,
     plugin_interface::Plugin,
     protocol::{PacketType, ProtocolPacket},
@@ -26,6 +31,24 @@ impl Plugin for KeyboardState {
 
 static YDOTOOL_MISSING_WARNED: AtomicBool = AtomicBool::new(false);
 static YDOTOOL_DAEMON_WARNED: AtomicBool = AtomicBool::new(false);
+static YDOTOOL_TIMEOUT_WARNED: AtomicBool = AtomicBool::new(false);
+static INPUT_QUEUE_FULL_WARNED: AtomicBool = AtomicBool::new(false);
+static INPUT_QUEUE_CLOSED_WARNED: AtomicBool = AtomicBool::new(false);
+
+const INPUT_QUEUE_CAPACITY: usize = 256;
+const YDOTOOL_TIMEOUT: Duration = Duration::from_secs(2);
+
+static INPUT_QUEUE: OnceLock<mpsc::Sender<InputJob>> = OnceLock::new();
+
+#[derive(Debug)]
+enum InputJob {
+    Mousepad {
+        request: MousepadRequest,
+        device: DeviceId,
+        core_tx: mpsc::UnboundedSender<CoreEvent>,
+    },
+    Presenter(PresenterRequest),
+}
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -65,34 +88,101 @@ impl MousepadRequest {
         device: &Device,
         core_tx: mpsc::UnboundedSender<CoreEvent>,
     ) {
-        let request = self.clone();
-        let result = tokio::task::spawn_blocking(move || run_mousepad_request(&request)).await;
-
-        if matches!(result, Ok(Ok(()))) && self.send_ack == Some(true) {
-            let mut ack = self.clone();
-            ack.send_ack = None;
-            ack.is_ack = Some(true);
-            let packet = ProtocolPacket::new(
-                PacketType::MousePadEcho,
-                serde_json::to_value(ack).unwrap_or_default(),
-            );
-            let _ = core_tx.send(CoreEvent::SendPacket {
-                device: device.device_id.clone(),
-                packet,
-            });
-        }
+        enqueue_input_job(InputJob::Mousepad {
+            request: self.clone(),
+            device: device.device_id.clone(),
+            core_tx,
+        });
     }
 }
 
 impl PresenterRequest {
     pub async fn received_packet(&self) {
-        let request = self.clone();
-        match tokio::task::spawn_blocking(move || run_presenter_request(&request)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!("[mousepad] failed to handle presenter request: {error}"),
-            Err(error) => warn!("[mousepad] presenter handler task failed: {error}"),
+        enqueue_input_job(InputJob::Presenter(self.clone()));
+    }
+}
+
+fn input_queue() -> &'static mpsc::Sender<InputJob> {
+    INPUT_QUEUE.get_or_init(|| {
+        let (tx, mut rx) = mpsc::channel(INPUT_QUEUE_CAPACITY);
+
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                match job {
+                    InputJob::Mousepad {
+                        request,
+                        device,
+                        core_tx,
+                    } => {
+                        let request_for_run = request.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            run_mousepad_request(&request_for_run)
+                        })
+                        .await;
+
+                        match result {
+                            Ok(Ok(())) => {
+                                if request.send_ack == Some(true) {
+                                    send_mousepad_ack(request, device, core_tx);
+                                }
+                            }
+                            Ok(Err(error)) => {
+                                debug!("[mousepad] failed to handle request: {error}");
+                            }
+                            Err(error) => warn!("[mousepad] handler task failed: {error}"),
+                        }
+                    }
+                    InputJob::Presenter(request) => {
+                        match tokio::task::spawn_blocking(move || run_presenter_request(&request))
+                            .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                debug!("[mousepad] failed to handle presenter request: {error}");
+                            }
+                            Err(error) => {
+                                warn!("[mousepad] presenter handler task failed: {error}")
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        tx
+    })
+}
+
+fn enqueue_input_job(job: InputJob) {
+    match input_queue().try_send(job) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            if !INPUT_QUEUE_FULL_WARNED.swap(true, Ordering::Relaxed) {
+                warn!(
+                    "[mousepad] remote input queue is full; dropping input until the backend catches up"
+                );
+            }
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            if !INPUT_QUEUE_CLOSED_WARNED.swap(true, Ordering::Relaxed) {
+                warn!("[mousepad] remote input queue is closed; dropping input");
+            }
         }
     }
+}
+
+fn send_mousepad_ack(
+    mut request: MousepadRequest,
+    device: DeviceId,
+    core_tx: mpsc::UnboundedSender<CoreEvent>,
+) {
+    request.send_ack = None;
+    request.is_ack = Some(true);
+    let packet = ProtocolPacket::new(
+        PacketType::MousePadEcho,
+        serde_json::to_value(request).unwrap_or_default(),
+    );
+    let _ = core_tx.send(CoreEvent::SendPacket { device, packet });
 }
 
 fn run_presenter_request(request: &PresenterRequest) -> anyhow::Result<()> {
@@ -202,45 +292,72 @@ fn ydotool_key_with_modifiers(code: u16, request: &MousepadRequest) -> anyhow::R
 }
 
 fn ydotool<const N: usize>(args: [&str; N]) -> anyhow::Result<()> {
-    let output = Command::new("ydotool")
+    let mut child = match Command::new("ydotool")
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let message = stderr.trim();
-            if message.contains("ydotoold is running")
-                || message.contains("failed to connect socket")
-            {
-                if !YDOTOOL_DAEMON_WARNED.swap(true, Ordering::Relaxed) {
-                    warn!(
-                        "[mousepad] ydotoold is not running or its socket is unavailable; remote input is unavailable"
-                    );
-                }
-            } else {
-                if message.is_empty() {
-                    warn!("[mousepad] ydotool exited with status {}", output.status);
-                } else {
-                    warn!(
-                        "[mousepad] ydotool exited with status {}: {message}",
-                        output.status
-                    );
-                }
-            }
-            anyhow::bail!("ydotool exited with status {}", output.status)
-        }
+        .spawn()
+    {
+        Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !YDOTOOL_MISSING_WARNED.swap(true, Ordering::Relaxed) {
                 warn!("[mousepad] ydotool is not installed; remote input is unavailable");
             }
-            Err(e.into())
+            return Err(e.into());
         }
-        Err(e) => Err(e.into()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stderr = Vec::new();
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_end(&mut stderr);
+                }
+                return handle_ydotool_status(status, &stderr);
+            }
+            Ok(None) if started.elapsed() >= YDOTOOL_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                if !YDOTOOL_TIMEOUT_WARNED.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "[mousepad] ydotool did not exit within {}s; remote input backend appears stuck",
+                        YDOTOOL_TIMEOUT.as_secs()
+                    );
+                }
+                anyhow::bail!("ydotool timed out");
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(e.into()),
+        }
     }
+}
+
+fn handle_ydotool_status(status: ExitStatus, stderr: &[u8]) -> anyhow::Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(stderr);
+    let message = stderr.trim();
+    if message.contains("ydotoold is running") || message.contains("failed to connect socket") {
+        if !YDOTOOL_DAEMON_WARNED.swap(true, Ordering::Relaxed) {
+            warn!(
+                "[mousepad] ydotoold is not running or its socket is unavailable; remote input is unavailable"
+            );
+        }
+    } else if message.is_empty() {
+        warn!("[mousepad] ydotool exited with status {}", status);
+    } else {
+        warn!(
+            "[mousepad] ydotool exited with status {}: {message}",
+            status
+        );
+    }
+
+    anyhow::bail!("ydotool exited with status {}", status)
 }
 
 fn special_key_code(key: u8) -> Option<u16> {
