@@ -227,6 +227,7 @@ impl cosmic::Application for KdeConnectApplet {
             Message::UpdateTransferProgress(progress) => {
                 if let Some(ref current_device) = self.expanded_device
                     && let Some(device) = self.devices.get_mut(current_device)
+                    && device.has_share
                 {
                     device.share_progress = if progress < 100 { Some(progress) } else { None };
                 }

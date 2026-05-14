@@ -33,12 +33,21 @@ async fn ensure_initialized() -> Result<()> {
     initialize().await
 }
 
+async fn get_client() -> Result<Arc<KdeConnectClient>> {
+    match CLIENT.lock().await.clone() {
+        Some(client) => Ok(client),
+        None => Err(anyhow::anyhow!("D-Bus client not initialized")),
+    }
+}
+
 /// Fetch all devices from the service
 pub async fn fetch_devices() -> Vec<Device> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        warn!("D-Bus client not initialized");
-        return vec![];
+    let client = match CLIENT.lock().await.clone() {
+        Some(c) => c,
+        None => {
+            warn!("D-Bus client not initialized");
+            return vec![];
+        }
     };
 
     match client.list_devices().await {
@@ -149,93 +158,54 @@ pub async fn remove_device(device_id: &str) {
 
 /// Pair with a device
 pub async fn pair_device(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.pair_device(&device_id).await
+    get_client().await?.pair_device(&device_id).await
 }
 
 /// Unpair from a device
 pub async fn unpair_device(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.unpair_device(&device_id).await
+    get_client().await?.unpair_device(&device_id).await
 }
 
 /// Send a ping to a device
 pub async fn ping_device(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.send_ping(&device_id, "Ping from COSMIC!").await
+    get_client().await?.send_ping(&device_id, "Ping from COSMIC!").await
 }
 
 /// Send files to a device
 pub async fn send_files(device_id: String, files: Vec<String>) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.send_files(&device_id, files).await
+    get_client().await?.send_files(&device_id, files).await
 }
 
 /// Send clipboard content to a device
 pub async fn send_clipboard(device_id: String, content: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.send_clipboard(&device_id, &content).await
+    get_client().await?.send_clipboard(&device_id, &content).await
 }
 
 /// Browse device filesystem (via SFTP)
 pub async fn browse_device_filesystem(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.browse_device_filesystem(&device_id).await
+    get_client().await?.browse_device_filesystem(&device_id).await
 }
 
 /// Accept an incoming pairing request from a device
 pub async fn accept_pairing(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.accept_pairing(&device_id).await
+    get_client().await?.accept_pairing(&device_id).await
 }
 
 /// Reject an incoming pairing request from a device
 pub async fn reject_pairing(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.reject_pairing(&device_id).await
+    get_client().await?.reject_pairing(&device_id).await
 }
 
 /// Ring a device (findmyphone)
 pub async fn ring_device(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.ring_device(&device_id).await
+    get_client().await?.ring_device(&device_id).await
 }
 
 /// Enable or disable a plugin for a device
 #[allow(dead_code)]
 pub async fn set_plugin_enabled(device_id: String, plugin_id: String, enabled: bool) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client
+    get_client()
+        .await?
         .set_plugin_enabled(&device_id, &plugin_id, enabled)
         .await
 }
@@ -243,10 +213,12 @@ pub async fn set_plugin_enabled(device_id: String, plugin_id: String, enabled: b
 /// Return the list of disabled plugin IDs for a device
 #[allow(dead_code)]
 pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        warn!("D-Bus client not initialized");
-        return vec![];
+    let client = match get_client().await {
+        Ok(c) => c,
+        Err(_) => {
+            warn!("D-Bus client not initialized");
+            return vec![];
+        }
     };
     match client.get_disabled_plugins(&device_id).await {
         Ok(disabled) => disabled,
@@ -260,59 +232,35 @@ pub async fn get_disabled_plugins(device_id: String) -> Vec<String> {
 /// Broadcast our identity packet over UDP to trigger device discovery
 #[allow(dead_code)]
 pub async fn broadcast_identity() -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.broadcast_identity().await
+    get_client().await?.broadcast_identity().await
 }
 
 /// Request SMS conversations from a device
 #[allow(dead_code)]
 pub async fn request_conversations(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.request_conversations(&device_id).await
+    get_client().await?.request_conversations(&device_id).await
 }
 
 /// Request a specific SMS conversation thread
 #[allow(dead_code)]
 pub async fn request_conversation(device_id: String, thread_id: i64) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.request_conversation(&device_id, thread_id).await
+    get_client().await?.request_conversation(&device_id, thread_id).await
 }
 
 /// Send an SMS message
 #[allow(dead_code)]
 pub async fn send_sms(device_id: String, phone_number: String, message: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.send_sms(&device_id, &phone_number, &message).await
+    get_client().await?.send_sms(&device_id, &phone_number, &message).await
 }
 
 /// Request the remote command list from a device
 pub async fn request_run_commands(device_id: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.request_run_commands(&device_id).await
+    get_client().await?.request_run_commands(&device_id).await
 }
 
 /// Execute a remote command on a device by key
 pub async fn execute_run_command(device_id: String, key: String) -> Result<()> {
-    let client_guard = CLIENT.lock().await;
-    let Some(client) = client_guard.as_ref() else {
-        return Err(anyhow::anyhow!("D-Bus client not initialized"));
-    };
-    client.run_command(&device_id, &key).await
+    get_client().await?.run_command(&device_id, &key).await
 }
 
 /// Stream of service events. Reconnects automatically when the client is
@@ -420,7 +368,7 @@ pub fn service_watcher_subscription() -> Subscription<crate::messages::Message> 
                         loop {
                             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                             elapsed += 3;
-                            let devices = fetch_devices().await;
+                            let devices = scan_devices().await;
                             if !devices.is_empty() {
                                 info!("Device found after {}s — yielding refresh", elapsed);
                                 yield crate::messages::Message::RefreshDevices;
@@ -443,16 +391,46 @@ pub fn filetransfer_subscription() -> Subscription<crate::messages::Message> {
 
     Subscription::run_with(TypeId::of::<Worker>(), |_| {
         async_stream::stream! {
-            let client = loop {
-                if let Some(c) = CLIENT.lock().await.clone() {
-                    break c;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            };
+            use tokio::time::{Duration, sleep};
 
-            let mut progress_stream = client.transfer_progress_stream().await;
-            while let Some(progress) = progress_stream.next().await {
-                yield crate::messages::Message::UpdateTransferProgress(progress);
+            'reconnect: loop {
+                let client = 'wait: loop {
+                    if let Some(c) = CLIENT.lock().await.clone() {
+                        break 'wait c;
+                    }
+                    sleep(Duration::from_millis(100)).await;
+                };
+
+                let mut progress_stream = client.transfer_progress_stream().await;
+
+                loop {
+                    tokio::select! {
+                        event = progress_stream.next() => {
+                            match event {
+                                Some(progress) => {
+                                    yield crate::messages::Message::UpdateTransferProgress(progress);
+                                }
+                                None => {
+                                    warn!("Transfer progress stream ended, reconnecting in 1s");
+                                    sleep(Duration::from_secs(1)).await;
+                                    continue 'reconnect;
+                                }
+                            }
+                        }
+                        _ = async {
+                            loop {
+                                sleep(Duration::from_millis(500)).await;
+                                if let Some(current) = CLIENT.lock().await.clone()
+                                    && !Arc::ptr_eq(&current, &client) {
+                                        return;
+                                    }
+                            }
+                        } => {
+                            info!("D-Bus client replaced, reconnecting transfer progress stream");
+                            continue 'reconnect;
+                        }
+                    }
+                }
             }
         }
     })

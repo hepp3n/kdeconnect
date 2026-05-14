@@ -317,6 +317,10 @@ impl Application for SettingsApp {
                         self.pairing_in_progress.remove(&d.id);
                     }
                 }
+                // Clear stale in-progress flags for devices that didn't pair
+                // (e.g. pairing was declined or timed out on the phone side).
+                self.pairing_in_progress
+                    .retain(|id, _| devices.iter().any(|d| d.id == *id && !d.is_paired));
                 self.devices = devices;
 
                 // Load plugin states if we auto-selected a new device
