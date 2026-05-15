@@ -128,7 +128,22 @@ stop:
     systemctl --user stop kdeconnect.service
 
 restart:
-    systemctl --user restart kdeconnect.service
+    @if systemctl --user --quiet is-active kdeconnect.service; then \
+        systemctl --user restart kdeconnect.service; \
+    else \
+        for pid in $(pgrep -f 'kdeconnect-service' || true); do \
+            exe=$(readlink -f /proc/$pid/exe 2>/dev/null || true); \
+            case "$exe" in */kdeconnect-service|*/kdeconnect-service\ \(deleted\)) kill "$pid" 2>/dev/null || true ;; esac; \
+        done; \
+        sleep 0.2; \
+        setsid -f env RUST_LOG="${RUST_LOG:-warn}" {{PREFIX}}/bin/kdeconnect-service >/tmp/kdeconnect-service.log 2>&1; \
+    fi
+    @for pid in $(pgrep -f 'cosmic-ext-connect-applet' || true); do \
+        exe=$(readlink -f /proc/$pid/exe 2>/dev/null || true); \
+        case "$exe" in */cosmic-ext-connect-applet|*/cosmic-ext-connect-applet\ \(deleted\)) kill "$pid" 2>/dev/null || true ;; esac; \
+    done
+    @sleep 0.2
+    @setsid -f env RUST_LOG="${RUST_LOG:-warn}" {{PREFIX}}/bin/cosmic-ext-connect-applet >/tmp/kdeconnect-applet.log 2>&1
 
 clean:
     cargo clean

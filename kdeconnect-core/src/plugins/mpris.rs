@@ -931,6 +931,16 @@ pub fn expose_phone_mpris(
                                 device_id.0
                             );
                         }
+                        crate::event::ConnectionEvent::PairStateChanged((
+                            device_id,
+                            PairState::NotPaired,
+                        )) => {
+                            active_players.retain(|_, conn| conn.device_id != device_id);
+                            tracing::info!(
+                                "Removed MPRIS players for unpaired device: {}",
+                                device_id.0
+                            );
+                        }
                         _ => {}
                     }
                 }

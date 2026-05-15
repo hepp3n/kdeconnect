@@ -9,7 +9,10 @@ use libpulse_binding::{
     volume::{ChannelVolumes, Volume},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -72,6 +75,7 @@ enum PaMessage {
 #[derive(Clone)]
 struct PaConnection {
     tx: mpsc::UnboundedSender<PaMessage>,
+    generation: u64,
 }
 
 impl PaConnection {
@@ -83,6 +87,7 @@ impl PaConnection {
 // Global map: device_id → PA connection handle.
 static PA_CONNECTIONS: std::sync::LazyLock<Mutex<std::collections::HashMap<String, PaConnection>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+static PA_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -134,7 +139,8 @@ pub fn on_device_connect(device_id: DeviceId, core_tx: mpsc::UnboundedSender<Cor
     info!("[systemvolume] on_device_connect for {}", device_id.0);
 
     let (tx, rx) = mpsc::unbounded_channel::<PaMessage>();
-    let conn = PaConnection { tx };
+    let generation = PA_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let conn = PaConnection { tx, generation };
 
     {
         let mut map = match PA_CONNECTIONS.lock() {
@@ -152,11 +158,31 @@ pub fn on_device_connect(device_id: DeviceId, core_tx: mpsc::UnboundedSender<Cor
     let did = device_id.clone();
     std::thread::spawn(move || {
         pa_thread(did.clone(), core_tx, rx);
-        if let Ok(mut map) = PA_CONNECTIONS.lock() {
+        if let Ok(mut map) = PA_CONNECTIONS.lock()
+            && map
+                .get(&did.0)
+                .map(|conn| conn.generation == generation)
+                .unwrap_or(false)
+        {
             map.remove(&did.0);
         }
         info!("[systemvolume] PA thread exited for {}", did.0);
     });
+}
+
+pub fn on_device_disconnect(device_id: &DeviceId) {
+    let conn = match PA_CONNECTIONS.lock() {
+        Ok(mut map) => map.remove(&device_id.0),
+        Err(_) => {
+            warn!("[systemvolume] PA_CONNECTIONS mutex poisoned in on_device_disconnect");
+            None
+        }
+    };
+
+    if let Some(conn) = conn {
+        conn.send(PaMessage::Quit);
+        info!("[systemvolume] stopped PA thread for {}", device_id.0);
+    }
 }
 
 // ---------------------------------------------------------------------------

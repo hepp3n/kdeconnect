@@ -27,13 +27,13 @@
 - Plugin Enable / Disable per device
 - System Volume (Partial support - May not work on certain devices - Known Mobile App Bug)
 - Telephony (Know bug - Media does not resume when Ending/Canceling Call)
+- MousePad / Remote Input
 
 </details>
 
 <details>
 <summary>🚧 Features Not Yet Supported</summary>
 
-- MousePad / Remote Input
 - Presenter Mode
 - SFTP / Browse Device
 - Virtual Display
@@ -144,6 +144,3 @@ sudo iptables -A OUTPUT -o <yourinterface> -p tcp --sport 1714:1764 -m state --s
 ```
 
 For more, directly from official KDEConnect userbase: [KDEConnect Firewall](https://userbase.kde.org/KDEConnect#ufw)
-
-
-

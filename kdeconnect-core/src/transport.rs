@@ -484,14 +484,16 @@ async fn handle_incoming_tcp(
     }
 
     tokio::spawn(handle_connection(
-        event_tx.clone(),
         reader,
         writer,
-        write_rx,
-        peer,
-        DeviceId(id.clone()),
-        conn_id,
-        shutdown_rx,
+        ConnectionContext {
+            event_tx: event_tx.clone(),
+            write_rx,
+            peer,
+            id: DeviceId(id.clone()),
+            conn_id,
+            shutdown_rx,
+        },
     ));
 
     Ok(())
@@ -803,14 +805,16 @@ async fn handle_discovered_device(
     }
 
     tokio::spawn(handle_connection(
-        event_tx.clone(),
         reader,
         writer,
-        write_rx,
-        peer,
-        id.clone(),
-        conn_id,
-        shutdown_rx,
+        ConnectionContext {
+            event_tx: event_tx.clone(),
+            write_rx,
+            peer,
+            id: id.clone(),
+            conn_id,
+            shutdown_rx,
+        },
     ));
 
     Ok(())
@@ -860,31 +864,86 @@ async fn paired_certificate_mismatch(
     mismatch
 }
 
-async fn handle_connection<R, W>(
+struct ConnectionContext {
     event_tx: mpsc::UnboundedSender<TransportEvent>,
-    reader: R,
-    mut writer: W,
     write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
     peer: SocketAddr,
     id: DeviceId,
     conn_id: u64,
     shutdown_rx: watch::Receiver<bool>,
-) where
+}
+
+enum InterruptibleIo {
+    Completed(std::io::Result<()>),
+    Interrupted,
+}
+
+async fn write_all_interruptible<W>(
+    writer: &mut W,
+    bytes: &[u8],
+    shutdown_rx: &mut watch::Receiver<bool>,
+    local_close_rx: &mut watch::Receiver<bool>,
+) -> InterruptibleIo
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::select! {
+        biased;
+        _ = shutdown_rx.changed() => InterruptibleIo::Interrupted,
+        _ = local_close_rx.changed() => InterruptibleIo::Interrupted,
+        result = writer.write_all(bytes) => InterruptibleIo::Completed(result),
+    }
+}
+
+async fn flush_interruptible<W>(
+    writer: &mut W,
+    shutdown_rx: &mut watch::Receiver<bool>,
+    local_close_rx: &mut watch::Receiver<bool>,
+) -> InterruptibleIo
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::select! {
+        biased;
+        _ = shutdown_rx.changed() => InterruptibleIo::Interrupted,
+        _ = local_close_rx.changed() => InterruptibleIo::Interrupted,
+        result = writer.flush() => InterruptibleIo::Completed(result),
+    }
+}
+
+async fn handle_connection<R, W>(reader: R, mut writer: W, context: ConnectionContext)
+where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let ConnectionContext {
+        event_tx,
+        write_rx,
+        peer,
+        id,
+        conn_id,
+        shutdown_rx,
+    } = context;
     let mut reader = BufReader::new(reader);
     let mut buffer = String::new();
+    let (local_close_tx, local_close_rx) = watch::channel(false);
 
     // Reader task — forwards packets and emits Disconnected when the connection ends.
     let event_tx_reader = event_tx.clone();
     let id_reader = id.clone();
     let mut shutdown_rx_reader = shutdown_rx.clone();
+    let mut local_close_rx_reader = local_close_rx.clone();
+    let local_close_tx_reader = local_close_tx.clone();
     tokio::spawn(async move {
         loop {
             let read_result = tokio::select! {
+                biased;
                 _ = shutdown_rx_reader.changed() => {
                     debug!(peer = ?peer, "[reader loop] shutting down superseded connection");
+                    break;
+                }
+                _ = local_close_rx_reader.changed() => {
+                    debug!(peer = ?peer, "[reader loop] writer ended connection");
                     break;
                 }
                 result = reader.read_line(&mut buffer) => result,
@@ -933,6 +992,7 @@ async fn handle_connection<R, W>(
             buffer.clear();
         }
         debug!(peer = ?peer, "reader loop ended");
+        let _ = local_close_tx_reader.send(true);
         // Notify core the connection is dead. conn_id lets core distinguish this
         // disconnect from a stale event belonging to a previous connection.
         let _ = event_tx_reader.send(TransportEvent::Disconnected {
@@ -946,12 +1006,20 @@ async fn handle_connection<R, W>(
     let event_tx_writer = event_tx.clone();
     let id_writer = id.clone();
     let mut shutdown_rx_writer = shutdown_rx;
+    let mut local_close_rx_writer = local_close_rx;
+    let local_close_tx_writer = local_close_tx;
     tokio::spawn(async move {
         let mut close_gracefully = true;
         loop {
             let msg = tokio::select! {
+                biased;
                 _ = shutdown_rx_writer.changed() => {
                     debug!(peer = ?peer, "writer shutting down superseded connection");
+                    close_gracefully = false;
+                    break;
+                }
+                _ = local_close_rx_writer.changed() => {
+                    debug!(peer = ?peer, "writer shutting down because reader ended");
                     close_gracefully = false;
                     break;
                 }
@@ -960,15 +1028,42 @@ async fn handle_connection<R, W>(
                     rx.recv().await
                 } => msg,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
-                    if let Err(e) = writer.write_all(b"\n").await {
-                        error!(peer = ?peer, "Error writing heartbeat: {}", e);
-                        close_gracefully = false;
-                        break;
+                    match write_all_interruptible(
+                        &mut writer,
+                        b"\n",
+                        &mut shutdown_rx_writer,
+                        &mut local_close_rx_writer,
+                    )
+                    .await
+                    {
+                        InterruptibleIo::Completed(Ok(())) => {}
+                        InterruptibleIo::Completed(Err(e)) => {
+                            error!(peer = ?peer, "Error writing heartbeat: {}", e);
+                            close_gracefully = false;
+                            break;
+                        }
+                        InterruptibleIo::Interrupted => {
+                            close_gracefully = false;
+                            break;
+                        }
                     }
-                    if let Err(e) = writer.flush().await {
-                        error!(peer = ?peer, "Error flushing heartbeat: {}", e);
-                        close_gracefully = false;
-                        break;
+                    match flush_interruptible(
+                        &mut writer,
+                        &mut shutdown_rx_writer,
+                        &mut local_close_rx_writer,
+                    )
+                    .await
+                    {
+                        InterruptibleIo::Completed(Ok(())) => {}
+                        InterruptibleIo::Completed(Err(e)) => {
+                            error!(peer = ?peer, "Error flushing heartbeat: {}", e);
+                            close_gracefully = false;
+                            break;
+                        }
+                        InterruptibleIo::Interrupted => {
+                            close_gracefully = false;
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -978,25 +1073,60 @@ async fn handle_connection<R, W>(
                     debug!(peer = ?peer, packet_type = ?msg.packet_type, "writing");
                     let packet_type = msg.packet_type.clone();
 
-                    if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
-                        error!(peer = ?peer, "Error writing: {}", e);
-                        close_gracefully = false;
-                        let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
-                            id: id_writer.clone(),
-                            packet_type,
-                            conn_id,
-                        });
-                        break;
+                    let raw = match msg.as_raw() {
+                        Ok(raw) => raw,
+                        Err(e) => {
+                            error!(peer = ?peer, "Error serializing packet: {}", e);
+                            continue;
+                        }
+                    };
+
+                    match write_all_interruptible(
+                        &mut writer,
+                        &raw,
+                        &mut shutdown_rx_writer,
+                        &mut local_close_rx_writer,
+                    )
+                    .await
+                    {
+                        InterruptibleIo::Completed(Ok(())) => {}
+                        InterruptibleIo::Completed(Err(e)) => {
+                            error!(peer = ?peer, "Error writing: {}", e);
+                            close_gracefully = false;
+                            let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
+                                id: id_writer.clone(),
+                                packet_type,
+                                conn_id,
+                            });
+                            break;
+                        }
+                        InterruptibleIo::Interrupted => {
+                            close_gracefully = false;
+                            break;
+                        }
                     }
-                    if let Err(e) = writer.flush().await {
-                        error!(peer = ?peer, "Error flushing: {}", e);
-                        close_gracefully = false;
-                        let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
-                            id: id_writer.clone(),
-                            packet_type,
-                            conn_id,
-                        });
-                        break;
+                    match flush_interruptible(
+                        &mut writer,
+                        &mut shutdown_rx_writer,
+                        &mut local_close_rx_writer,
+                    )
+                    .await
+                    {
+                        InterruptibleIo::Completed(Ok(())) => {}
+                        InterruptibleIo::Completed(Err(e)) => {
+                            error!(peer = ?peer, "Error flushing: {}", e);
+                            close_gracefully = false;
+                            let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
+                                id: id_writer.clone(),
+                                packet_type,
+                                conn_id,
+                            });
+                            break;
+                        }
+                        InterruptibleIo::Interrupted => {
+                            close_gracefully = false;
+                            break;
+                        }
                     }
                 }
                 None => break,
@@ -1005,6 +1135,7 @@ async fn handle_connection<R, W>(
         if close_gracefully {
             let _ = tokio::time::timeout(TLS_SHUTDOWN_TIMEOUT, writer.shutdown()).await;
         }
+        let _ = local_close_tx_writer.send(true);
         let _ = event_tx_writer.send(TransportEvent::Disconnected {
             id: id_writer,
             conn_id,
@@ -1198,9 +1329,109 @@ pub(crate) async fn receive_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionRateLimiter, is_private_kdeconnect_addr};
-    use crate::device::DeviceId;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use super::{
+        ConnectionContext, ConnectionRateLimiter, TransportEvent, handle_connection,
+        is_private_kdeconnect_addr,
+    };
+    use crate::{
+        device::DeviceId,
+        protocol::{PacketType, ProtocolPacket},
+    };
+    use std::{
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
+        sync::Arc,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex, split},
+        sync::{Mutex, mpsc, watch},
+        time::{Duration, timeout},
+    };
+
+    async fn start_test_connection_with_capacity(
+        conn_id: u64,
+        capacity: usize,
+    ) -> (
+        mpsc::UnboundedSender<ProtocolPacket>,
+        mpsc::UnboundedReceiver<TransportEvent>,
+        watch::Sender<bool>,
+        DuplexStream,
+        DeviceId,
+    ) {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (local, remote) = duplex(capacity);
+        let (reader, writer) = split(local);
+        let (write_tx, write_rx) = mpsc::unbounded_channel();
+        let write_rx = Arc::new(Mutex::new(write_rx));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let id = DeviceId(format!("transport-regression-{conn_id}"));
+        let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
+
+        handle_connection(
+            reader,
+            writer,
+            ConnectionContext {
+                event_tx,
+                write_rx,
+                peer,
+                id: id.clone(),
+                conn_id,
+                shutdown_rx,
+            },
+        )
+        .await;
+
+        (write_tx, event_rx, shutdown_tx, remote, id)
+    }
+
+    async fn start_test_connection(
+        conn_id: u64,
+    ) -> (
+        mpsc::UnboundedSender<ProtocolPacket>,
+        mpsc::UnboundedReceiver<TransportEvent>,
+        watch::Sender<bool>,
+        DuplexStream,
+        DeviceId,
+    ) {
+        start_test_connection_with_capacity(conn_id, 4096).await
+    }
+
+    async fn wait_for_disconnect(
+        event_rx: &mut mpsc::UnboundedReceiver<TransportEvent>,
+        id: &DeviceId,
+        conn_id: u64,
+    ) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                match event_rx
+                    .recv()
+                    .await
+                    .expect("transport event channel closed")
+                {
+                    TransportEvent::Disconnected {
+                        id: disconnected_id,
+                        conn_id: disconnected_conn_id,
+                    } if &disconnected_id == id && disconnected_conn_id == conn_id => break,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("connection did not report disconnect");
+    }
+
+    async fn wait_for_writer_to_close(write_tx: &mpsc::UnboundedSender<ProtocolPacket>) {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let packet = ProtocolPacket::new(PacketType::Ping, serde_json::json!({}));
+                if write_tx.send(packet).is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("writer stayed alive after connection shutdown");
+    }
 
     #[test]
     fn kdeconnect_lan_filter_allows_private_link_local_loopback_and_cgnat() {
@@ -1237,5 +1468,69 @@ mod tests {
 
         assert!(limiter.allow_device_connection(&id).await);
         assert!(!limiter.allow_device_connection(&id).await);
+    }
+
+    #[tokio::test]
+    async fn reader_eof_closes_writer_without_waiting_for_heartbeat() {
+        let (write_tx, mut event_rx, _shutdown_tx, mut remote, id) =
+            start_test_connection(100).await;
+
+        remote.shutdown().await.unwrap();
+
+        wait_for_disconnect(&mut event_rx, &id, 100).await;
+        wait_for_writer_to_close(&write_tx).await;
+    }
+
+    #[tokio::test]
+    async fn presenter_burst_then_peer_close_drops_writer() {
+        let (write_tx, mut event_rx, _shutdown_tx, mut remote, id) =
+            start_test_connection(101).await;
+
+        for _ in 0..32 {
+            let packet = ProtocolPacket::new(
+                PacketType::Presenter,
+                serde_json::json!({ "dx": 0.01, "dy": -0.02 }),
+            );
+            remote.write_all(&packet.as_raw().unwrap()).await.unwrap();
+        }
+        let stop = ProtocolPacket::new(PacketType::Presenter, serde_json::json!({ "stop": true }));
+        remote.write_all(&stop.as_raw().unwrap()).await.unwrap();
+        remote.shutdown().await.unwrap();
+
+        wait_for_disconnect(&mut event_rx, &id, 101).await;
+        wait_for_writer_to_close(&write_tx).await;
+    }
+
+    #[tokio::test]
+    async fn superseded_transport_shutdown_drops_writer() {
+        let (write_tx, mut event_rx, shutdown_tx, _remote, id) = start_test_connection(102).await;
+
+        shutdown_tx.send(true).unwrap();
+
+        wait_for_disconnect(&mut event_rx, &id, 102).await;
+        wait_for_writer_to_close(&write_tx).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_writer_blocked_by_unread_peer() {
+        let (write_tx, mut event_rx, shutdown_tx, mut remote, id) =
+            start_test_connection_with_capacity(103, 64).await;
+
+        let packet = ProtocolPacket::new(
+            PacketType::Ping,
+            serde_json::json!({ "message": "x".repeat(8192) }),
+        );
+        write_tx.send(packet).unwrap();
+
+        let mut first_byte = [0u8; 1];
+        timeout(Duration::from_secs(1), remote.read_exact(&mut first_byte))
+            .await
+            .expect("writer never started writing")
+            .unwrap();
+
+        shutdown_tx.send(true).unwrap();
+
+        wait_for_disconnect(&mut event_rx, &id, 103).await;
+        wait_for_writer_to_close(&write_tx).await;
     }
 }

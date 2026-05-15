@@ -83,6 +83,11 @@ impl MotionAccumulator {
         }
     }
 
+    fn add_presenter_request(&mut self, request: &PresenterRequest) {
+        self.pointer_dx += request.dx.unwrap_or_default() * 1000.0;
+        self.pointer_dy += request.dy.unwrap_or_default() * 1000.0;
+    }
+
     fn has_dispatchable_motion(&self) -> bool {
         self.pointer_dx.round() != 0.0
             || self.pointer_dy.round() != 0.0
@@ -185,7 +190,17 @@ impl MousepadRequest {
 
 impl PresenterRequest {
     pub async fn received_packet(&self) {
+        if self.is_coalescable_motion() {
+            enqueue_presenter_motion(self);
+            return;
+        }
+
         enqueue_input_job(InputJob::Presenter(self.clone()));
+    }
+
+    fn is_coalescable_motion(&self) -> bool {
+        (self.dx.unwrap_or_default() != 0.0 || self.dy.unwrap_or_default() != 0.0)
+            && !self.stop.unwrap_or(false)
     }
 }
 
@@ -274,10 +289,26 @@ fn enqueue_motion_request(request: &MousepadRequest) {
         guard.has_dispatchable_motion()
     };
 
-    if should_flush && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel) {
-        if !enqueue_input_job(InputJob::FlushMouseMotion) {
-            MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
-        }
+    if should_flush
+        && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel)
+        && !enqueue_input_job(InputJob::FlushMouseMotion)
+    {
+        MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
+    }
+}
+
+fn enqueue_presenter_motion(request: &PresenterRequest) {
+    let should_flush = {
+        let mut guard = motion_accumulator().lock().unwrap();
+        guard.add_presenter_request(request);
+        guard.has_dispatchable_motion()
+    };
+
+    if should_flush
+        && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel)
+        && !enqueue_input_job(InputJob::FlushMouseMotion)
+    {
+        MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
     }
 }
 
@@ -310,10 +341,11 @@ async fn flush_mouse_motion() {
     }
 
     MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
-    if has_dispatchable_motion() && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel) {
-        if !enqueue_input_job(InputJob::FlushMouseMotion) {
-            MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
-        }
+    if has_dispatchable_motion()
+        && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel)
+        && !enqueue_input_job(InputJob::FlushMouseMotion)
+    {
+        MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
     }
 }
 
@@ -625,6 +657,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_presenter_schema_and_coalesces_motion_only() {
+        let motion: PresenterRequest = serde_json::from_value(serde_json::json!({
+            "dx": 0.01,
+            "dy": -0.02
+        }))
+        .unwrap();
+        assert_eq!(motion.dx, Some(0.01));
+        assert_eq!(motion.dy, Some(-0.02));
+        assert!(motion.is_coalescable_motion());
+
+        let stop: PresenterRequest = serde_json::from_value(serde_json::json!({
+            "stop": true
+        }))
+        .unwrap();
+        assert_eq!(stop.stop, Some(true));
+        assert!(!stop.is_coalescable_motion());
+    }
+
+    #[test]
     fn motion_accumulator_keeps_fractional_remainder() {
         let mut accumulator = MotionAccumulator::default();
         accumulator.add_request(&MousepadRequest {
@@ -645,5 +696,22 @@ mod tests {
         assert_eq!(batch.pointer_dx, 1);
         assert_eq!(batch.pointer_dy, 1);
         assert!(!accumulator.has_dispatchable_motion());
+    }
+
+    #[test]
+    fn presenter_motion_reuses_mouse_motion_batching() {
+        let mut accumulator = MotionAccumulator::default();
+        accumulator.add_presenter_request(&PresenterRequest {
+            dx: Some(0.0014),
+            dy: Some(-0.0026),
+            stop: None,
+        });
+
+        assert!(accumulator.has_dispatchable_motion());
+        let batch = accumulator.take_dispatchable_batch();
+        assert_eq!(batch.pointer_dx, 1);
+        assert_eq!(batch.pointer_dy, -3);
+        assert_eq!(batch.scroll_dx, 0);
+        assert_eq!(batch.scroll_dy, 0);
     }
 }
