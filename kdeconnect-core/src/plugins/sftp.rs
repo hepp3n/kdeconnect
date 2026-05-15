@@ -63,64 +63,15 @@ impl Sftp {
             .filter(|ip| !ip.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| device.address.ip().to_string());
-        let uri = sftp_uri(
-            &host,
-            port,
-            self.user.as_deref(),
-            self.password.as_deref(),
-            self.path.as_deref(),
-        );
-        info!("[sftp] opening {}", uri_without_password(&uri));
 
-        let opened = run_uri_command("gio", &["open", &uri]).await
-            || run_uri_command("xdg-open", &[&uri]).await;
+        let user = self.user.clone().unwrap_or_default();
+        let password = self.password.clone().unwrap_or_default();
+        let rpath = self.path.clone().unwrap_or_default();
+        let device_name = device.name.clone();
 
-        if !opened {
-            let host = host.clone();
-            let user = self.user.clone();
-            let password = self.password.clone();
-            let single_path = self.path.clone();
-            let multi_paths = self.multi_paths.clone();
-            let path_names = self.path_names.clone();
-
-            tokio::task::spawn_blocking(move || {
-                let uris: Vec<String> = if multi_paths.len() > 1 {
-                    multi_paths
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            let uri = sftp_uri(
-                                &host,
-                                port,
-                                user.as_deref(),
-                                password.as_deref(),
-                                Some(p),
-                            );
-                            let label = path_names
-                                .get(i)
-                                .filter(|n| !n.is_empty())
-                                .map(|n| n.as_str())
-                                .unwrap_or(p.as_str());
-                            format!("{}: {}", label, uri_without_password(&uri))
-                        })
-                        .collect()
-                } else {
-                    vec![uri_without_password(&sftp_uri(
-                        &host,
-                        port,
-                        user.as_deref(),
-                        password.as_deref(),
-                        single_path.as_deref(),
-                    ))]
-                };
-
-                let _ = notify_rust::Notification::new()
-                    .appname("KDE Connect")
-                    .summary("Device filesystem is ready")
-                    .body(&uris.join("\n"))
-                    .show();
-            });
-        }
+        tokio::task::spawn_blocking(move || {
+            mount_and_open(&host, port, &user, &password, &rpath, &device_name);
+        });
     }
 }
 
@@ -177,15 +128,196 @@ fn uri_without_password(uri: &str) -> String {
     uri.to_string()
 }
 
-async fn run_uri_command(program: &str, args: &[&str]) -> bool {
-    Command::new(program)
-        .args(args)
+fn mount_and_open(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    rpath: &str,
+    device_name: &str,
+) {
+    let path = if rpath.is_empty() { "/" } else { rpath };
+    let host_bracketed = bracket_ipv6_host(host);
+    let remote = format!("{}@{}:{}", user, host_bracketed, path);
+
+    info!("[sftp] mounting {} on port {}", host_bracketed, port);
+
+    if try_gio_mount(host, port, user, rpath)
+        || try_sshfs_mount(&remote, port, password, device_name)
+    {
+        return;
+    }
+
+    let uri = sftp_uri(host, port, Some(user), Some(password), Some(path));
+    let display_uri = uri_without_password(&uri);
+    let _ = notify_rust::Notification::new()
+        .appname("KDE Connect")
+        .summary(&format!("{} filesystem", device_name))
+        .body(&format!("Could not mount.\nManual access: {}", display_uri))
+        .show();
+}
+
+fn try_gio_mount(host: &str, port: u16, user: &str, rpath: &str) -> bool {
+    let path = if rpath.is_empty() { "/" } else { rpath };
+    let uri = format!("sftp://{user}@{host}:{port}{path}");
+
+    let status = std::process::Command::new("gio")
+        .args(["mount", &uri])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map(|_| true)
-        .unwrap_or(false)
+        .status();
+
+    if status.map(|s| s.success()).unwrap_or(false) {
+        info!("[sftp] gio mount succeeded for {user}@{host}:{port}");
+
+        let _ = std::process::Command::new("gio")
+            .args(["open", &uri])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        return true;
+    }
+
+    false
+}
+
+fn try_sshfs_mount(remote: &str, port: u16, password: &str, device_name: &str) -> bool {
+    let Some(runtime_dir) = dirs::runtime_dir()
+        .or_else(|| {
+            std::env::var("XDG_RUNTIME_DIR")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
+        .or_else(|| dirs::cache_dir())
+    else {
+        warn!("[sftp] cannot determine runtime directory for mount point");
+        return false;
+    };
+
+    let mount_dir = runtime_dir.join("kdeconnect-sftp");
+    let _ = std::fs::create_dir_all(&mount_dir);
+
+    let clean_name = device_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let mount_point = mount_dir.join(&clean_name);
+
+    if mount_point.exists() {
+        if is_mounted(&mount_point) {
+            open_directory(&mount_point);
+            return true;
+        }
+        let _ = std::fs::remove_dir(&mount_point);
+    }
+
+    let _ = std::fs::create_dir(&mount_point);
+
+    let mut cmd = std::process::Command::new("sshfs");
+    cmd.arg(&remote)
+        .arg(&mount_point)
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg("-o")
+        .arg("UserKnownHostsFile=/dev/null")
+        .arg("-o")
+        .arg("reconnect")
+        .arg("-o")
+        .arg("ServerAliveInterval=30")
+        .arg("-o")
+        .arg("ConnectTimeout=10")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let status = cmd.status();
+
+    if status.map(|s| s.success()).unwrap_or(false) {
+        info!(
+            "[sftp] sshfs mounted {} at {}",
+            remote,
+            mount_point.display()
+        );
+        open_directory(&mount_point);
+        return true;
+    }
+
+    if !password.is_empty() {
+        let mut cmd = std::process::Command::new("sshfs");
+        cmd.arg(&remote)
+            .arg(&mount_point)
+            .arg("-p")
+            .arg(port.to_string())
+            .arg("-o")
+            .arg("StrictHostKeyChecking=no")
+            .arg("-o")
+            .arg("UserKnownHostsFile=/dev/null")
+            .arg("-o")
+            .arg("reconnect")
+            .arg("-o")
+            .arg("ServerAliveInterval=30")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
+            .arg("-o")
+            .arg("password_stdin")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if let Ok(mut child) = cmd.spawn() {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(password.as_bytes());
+                let _ = stdin.write_all(b"\n");
+            }
+            let status = child.wait();
+            if status.map(|s| s.success()).unwrap_or(false) {
+                info!(
+                    "[sftp] sshfs (password) mounted {} at {}",
+                    remote,
+                    mount_point.display()
+                );
+                open_directory(&mount_point);
+                return true;
+            }
+        }
+    }
+
+    let _ = std::fs::remove_dir(&mount_point);
+    warn!("[sftp] sshfs failed to mount {}", remote);
+    false
+}
+
+fn is_mounted(path: &std::path::Path) -> bool {
+    let output = std::process::Command::new("mountpoint")
+        .arg("-q")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    output.map(|s| s.success()).unwrap_or(false)
+}
+
+fn open_directory(path: &std::path::Path) {
+    let _ = std::process::Command::new("xdg-open")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 async fn add_private_key() {
