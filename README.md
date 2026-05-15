@@ -29,13 +29,13 @@
 - Telephony (Know bug - Media does not resume when Ending/Canceling Call)
 - MousePad / Remote Input
 - Presenter Mode
+- SFTP / Browse Device
 
 </details>
 
 <details>
 <summary>🚧 Features Not Yet Supported</summary>
 
-- SFTP / Browse Device
 - Virtual Display
 
 </details>
