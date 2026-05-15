@@ -38,6 +38,7 @@ pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 /// Bare newlines are silently skipped by all KDE Connect readers and never
 /// surfaced to users.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const TLS_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_IDENTITY_PACKET_SIZE: usize = 8192;
 const MIN_DISCOVERY_CONNECTION_INTERVAL: Duration = Duration::from_millis(500);
 const IDENTITY_BURST_COUNT: usize = 2;
@@ -916,7 +917,16 @@ async fn handle_connection<R, W>(
                     }
                 }
                 Err(e) => {
-                    error!(peer = ?peer, "[reader loop] error reading: {}", e);
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::BrokenPipe
+                    ) {
+                        debug!(peer = ?peer, "[reader loop] connection ended: {}", e);
+                    } else {
+                        error!(peer = ?peer, "[reader loop] error reading: {}", e);
+                    }
                     break;
                 }
             }
@@ -937,10 +947,12 @@ async fn handle_connection<R, W>(
     let id_writer = id.clone();
     let mut shutdown_rx_writer = shutdown_rx;
     tokio::spawn(async move {
+        let mut close_gracefully = true;
         loop {
             let msg = tokio::select! {
                 _ = shutdown_rx_writer.changed() => {
                     debug!(peer = ?peer, "writer shutting down superseded connection");
+                    close_gracefully = false;
                     break;
                 }
                 msg = async {
@@ -950,10 +962,12 @@ async fn handle_connection<R, W>(
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
                     if let Err(e) = writer.write_all(b"\n").await {
                         error!(peer = ?peer, "Error writing heartbeat: {}", e);
+                        close_gracefully = false;
                         break;
                     }
                     if let Err(e) = writer.flush().await {
                         error!(peer = ?peer, "Error flushing heartbeat: {}", e);
+                        close_gracefully = false;
                         break;
                     }
                     continue;
@@ -966,6 +980,7 @@ async fn handle_connection<R, W>(
 
                     if let Err(e) = writer.write_all(&msg.as_raw().unwrap()).await {
                         error!(peer = ?peer, "Error writing: {}", e);
+                        close_gracefully = false;
                         let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
                             id: id_writer.clone(),
                             packet_type,
@@ -975,6 +990,7 @@ async fn handle_connection<R, W>(
                     }
                     if let Err(e) = writer.flush().await {
                         error!(peer = ?peer, "Error flushing: {}", e);
+                        close_gracefully = false;
                         let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
                             id: id_writer.clone(),
                             packet_type,
@@ -986,7 +1002,9 @@ async fn handle_connection<R, W>(
                 None => break,
             }
         }
-        let _ = writer.shutdown().await;
+        if close_gracefully {
+            let _ = tokio::time::timeout(TLS_SHUTDOWN_TIMEOUT, writer.shutdown()).await;
+        }
         let _ = event_tx_writer.send(TransportEvent::Disconnected {
             id: id_writer,
             conn_id,

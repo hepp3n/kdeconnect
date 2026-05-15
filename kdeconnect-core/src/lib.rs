@@ -608,6 +608,7 @@ impl KdeConnectCore {
                                                 "[core] Phone unpairing from us — cleaning up {}",
                                                 id
                                             );
+                                            self.pairing_attempts.lock().await.remove(&id);
                                             self.device_manager
                                                 .update_pair_state(
                                                     &id,
@@ -623,6 +624,7 @@ impl KdeConnectCore {
                                                 "[core] pairing with {} was rejected/cancelled by peer",
                                                 id
                                             );
+                                            self.pairing_attempts.lock().await.remove(&id);
                                             self.device_manager
                                                 .update_pair_state(
                                                     &id,
@@ -718,9 +720,15 @@ impl KdeConnectCore {
                             });
                         } else {
                             warn!(
-                                "[core] ignoring {:?} from unpaired device {}",
+                                "[core] received {:?} from unpaired device {}; sending pair:false to resynchronize peer",
                                 pkt.packet_type, id
                             );
+                            let pair = Pair::reject();
+                            let value = serde_json::to_value(pair).expect("fail serializing pair");
+                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                            if self.queue_packet(&id, pkt).await {
+                                info!("[core] sent pair:false to {} after unpaired packet", id);
+                            }
                         }
                     }
                     Err(e) => {
@@ -1075,18 +1083,20 @@ impl KdeConnectCore {
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent unpair event to device: {}", device_id);
 
+                self.pairing_attempts.lock().await.remove(&device_id);
+                self.device_manager
+                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
+                    .await;
+
                 let pair = Pair::reject();
                 let value = serde_json::to_value(pair).expect("fail serializing pair");
                 let pkt = ProtocolPacket::new(PacketType::Pair, value);
                 let queued = self.queue_packet(&device_id, pkt).await;
                 if queued {
                     info!("[core] sent pair:false to {} on unpair", device_id);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
                 }
 
-                self.device_manager
-                    .update_pair_state(&device_id, crate::device::PairState::NotPaired)
-                    .await;
                 cleanup_device_data(&device_id.0).await;
                 self.drop_connection(&device_id).await;
             }
