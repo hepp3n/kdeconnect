@@ -28,7 +28,7 @@ impl Ping {
 
         let summary = self.message.clone().unwrap_or_else(|| "Ping!".into());
 
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             match notify_rust::Notification::new()
                 .summary("KDE Connect")
                 .body(&summary)
@@ -40,8 +40,7 @@ impl Ping {
                     warn!("[ping] failed to show notification: {}", e);
                 }
             }
-        })
-        .await;
+        });
     }
 
     pub async fn send_packet(&self, device: &Device, core_event: mpsc::UnboundedSender<CoreEvent>) {
@@ -95,5 +94,42 @@ mod tests {
     #[test]
     fn ping_plugin_has_correct_id() {
         assert_eq!(Ping::default().id(), "kdeconnect.ping");
+    }
+
+    #[test]
+    fn received_packet_returns_immediately_without_blocking() {
+        use crate::device::{Device, DeviceId};
+        use std::time::Duration;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let ping = Ping {
+                message: Some("test".into()),
+                heartbeat: None,
+            };
+            let device = Device {
+                device_id: DeviceId("test-ping-nonblock".into()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                ping.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "ping received_packet must return immediately without blocking on notification"
+        );
     }
 }

@@ -13,9 +13,7 @@ pub async fn handle_request(device: &Device) {
             .summary("Find My Device")
             .body(&format!("{} is trying to find this computer.", name))
             .show();
-    })
-    .await
-    .ok();
+    });
 
     tokio::spawn(async {
         if !play_alarm().await {
@@ -72,4 +70,38 @@ async fn command_exists(program: &str) -> bool {
         .await
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::{Device, DeviceId};
+    use std::time::Duration;
+
+    #[test]
+    fn handle_request_returns_immediately_without_blocking() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let device = Device {
+                device_id: DeviceId("test-findmyphone-nonblock".into()),
+                name: "Test Phone".into(),
+                ..Default::default()
+            };
+
+            tokio::time::timeout(Duration::from_millis(500), handle_request(&device))
+                .await
+                .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "findmyphone handle_request must return immediately without blocking on notification"
+        );
+    }
 }

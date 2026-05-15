@@ -248,108 +248,116 @@ impl MprisRequest {
     ) {
         debug!("mpris request received: {:?}", self);
 
-        if self.request_player_list == Some(true) {
-            debug!("MPRIS Player list requested");
-            let player_list = get_all_mpris_player_names();
-            debug!("Sending player list: {:?}", player_list);
-            let packet = ProtocolPacket::new(
-                PacketType::Mpris,
-                serde_json::to_value(Mpris::List {
-                    player_list,
-                    supports_album_art_payload: true,
-                })
-                .unwrap(),
-            );
-            let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                device: device.device_id.clone(),
-                packet,
-            });
-            return;
-        }
+        let request = self.clone();
+        let device_id = device.device_id.clone();
 
-        if let Some(player_name) = &self.player {
-            {
-                if let Ok(player) = get_mpris_players(Some(player_name)) {
-                    if let Some(seek_us) = self.seek {
-                        let _ = player.seek(seek_us);
-                    }
+        tokio::task::spawn_blocking(move || {
+            if request.request_player_list == Some(true) {
+                debug!("MPRIS Player list requested");
+                let player_list = get_all_mpris_player_names();
+                debug!("Sending player list: {:?}", player_list);
+                let packet = ProtocolPacket::new(
+                    PacketType::Mpris,
+                    serde_json::to_value(Mpris::List {
+                        player_list,
+                        supports_album_art_payload: true,
+                    })
+                    .unwrap(),
+                );
+                let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
+                    device: device_id,
+                    packet,
+                });
+                return;
+            }
 
-                    if let Some(vol) = self.set_volume {
-                        let _ = player.set_volume(vol as f64 / 100.0);
-                    }
+            let Some(player_name) = request.player.as_deref() else {
+                return;
+            };
 
-                    if let Some(loop_status) = self.set_loop_status {
-                        let status = match loop_status {
-                            MprisLoopStatus::None => mpris::LoopStatus::None,
-                            MprisLoopStatus::Track => mpris::LoopStatus::Track,
-                            MprisLoopStatus::Playlist => mpris::LoopStatus::Playlist,
-                        };
-                        let _ = player.set_loop_status(status);
-                    }
+            if let Ok(player) = get_mpris_players(Some(player_name)) {
+                if let Some(seek_us) = request.seek {
+                    let _ = player.seek(seek_us);
+                }
 
-                    if let Some(position_ms) = self.set_position
-                        && let Ok(metadata) = player.get_metadata()
-                        && let Some(track_id) = metadata.track_id()
-                    {
-                        let duration = std::time::Duration::from_millis(position_ms as u64);
-                        let _ = player.set_position(track_id, &duration);
-                    }
+                if let Some(vol) = request.set_volume {
+                    let _ = player.set_volume(vol as f64 / 100.0);
+                }
 
-                    if let Some(shuffle) = self.set_shuffle {
-                        let _ = player.set_shuffle(shuffle);
-                    }
+                if let Some(loop_status) = request.set_loop_status {
+                    let status = match loop_status {
+                        MprisLoopStatus::None => mpris::LoopStatus::None,
+                        MprisLoopStatus::Track => mpris::LoopStatus::Track,
+                        MprisLoopStatus::Playlist => mpris::LoopStatus::Playlist,
+                    };
+                    let _ = player.set_loop_status(status);
+                }
 
-                    if let Some(command) = self.action {
-                        let _ = match command {
-                            MprisAction::Play => player.play(),
-                            MprisAction::Pause => player.pause(),
-                            MprisAction::PlayPause => player.play_pause(),
-                            MprisAction::Stop => player.stop(),
-                            MprisAction::Next => player.next(),
-                            MprisAction::Previous => player.previous(),
-                        };
-                    }
+                if let Some(position_ms) = request.set_position
+                    && let Ok(metadata) = player.get_metadata()
+                    && let Some(track_id) = metadata.track_id()
+                {
+                    let duration = std::time::Duration::from_millis(position_ms as u64);
+                    let _ = player.set_position(track_id, &duration);
+                }
+
+                if let Some(shuffle) = request.set_shuffle {
+                    let _ = player.set_shuffle(shuffle);
+                }
+
+                if let Some(command) = request.action {
+                    let _ = match command {
+                        MprisAction::Play => player.play(),
+                        MprisAction::Pause => player.pause(),
+                        MprisAction::PlayPause => player.play_pause(),
+                        MprisAction::Stop => player.stop(),
+                        MprisAction::Next => player.next(),
+                        MprisAction::Previous => player.previous(),
+                    };
                 }
             }
 
-            if let Some(album_art_url) = &self.album_art_url {
+            if let Some(album_art_url) = &request.album_art_url {
                 let Ok(player_info) = MprisPlayer::new(Some(player_name)) else {
                     return;
                 };
                 let art = player_info.album_art_url.clone();
 
-                let path = album_art_url.strip_prefix("file://");
-
-                let Some(path) = path else {
+                let Some(path) = album_art_url.strip_prefix("file://") else {
                     return;
                 };
+                let path = path.to_string();
+                let player_name = player_name.to_string();
 
-                if let Ok(file) = DeviceFile::open(path).await {
-                    let payload = DevicePayload::from(file);
+                tokio::spawn(async move {
+                    if let Ok(file) = DeviceFile::open(&path).await {
+                        let payload = DevicePayload::from(file);
 
-                    let construct_packet = ProtocolPacket::new_with_payload(
-                        PacketType::Mpris,
-                        serde_json::to_value(Mpris::TransferringArt {
-                            player: player_name.clone(),
-                            album_art_url: art.unwrap_or(path.to_string()),
-                            transferring_album_art: true,
-                        })
-                        .unwrap(),
-                        payload.size,
-                        None,
-                    );
+                        let construct_packet = ProtocolPacket::new_with_payload(
+                            PacketType::Mpris,
+                            serde_json::to_value(Mpris::TransferringArt {
+                                player: player_name,
+                                album_art_url: art.unwrap_or(path),
+                                transferring_album_art: true,
+                            })
+                            .unwrap(),
+                            payload.size,
+                            None,
+                        );
 
-                    let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
-                        device: device.device_id.clone(),
-                        packet: construct_packet,
-                        payload: Box::new(payload.buf),
-                        payload_size: payload.size,
-                    });
-                }
+                        let _ = core_tx.send(crate::event::CoreEvent::SendPaylod {
+                            device: device_id,
+                            packet: construct_packet,
+                            payload: Box::new(payload.buf),
+                            payload_size: payload.size,
+                        });
+                    }
+                });
                 return;
             }
 
-            if (self.request_now_playing == Some(true) || self.request_volume == Some(true))
+            if (request.request_now_playing == Some(true)
+                || request.request_volume == Some(true))
                 && let Ok(player_info) = MprisPlayer::new(Some(player_name))
             {
                 let construct_packet = ProtocolPacket::new(
@@ -358,11 +366,11 @@ impl MprisRequest {
                 );
 
                 let _ = core_tx.send(crate::event::CoreEvent::SendPacket {
-                    device: device.device_id.clone(),
+                    device: device_id,
                     packet: construct_packet,
                 });
             }
-        }
+        });
     }
 
     pub async fn send_packet(
@@ -1008,4 +1016,116 @@ async fn register_phone_player(
         .await?;
 
     Ok((conn, player_state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::{Device, DeviceId};
+    use std::time::Duration;
+
+    #[test]
+    fn received_packet_returns_immediately_without_blocking() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let request = MprisRequest {
+                request_player_list: Some(true),
+                ..Default::default()
+            };
+            let device = Device {
+                device_id: DeviceId("test-mpris-nonblock".into()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                request.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "mpris received_packet must return immediately without blocking on D-Bus calls"
+        );
+    }
+
+    #[test]
+    fn control_commands_do_not_block_event_loop() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let request = MprisRequest {
+                player: Some("NonexistentPlayer".to_string()),
+                action: Some(MprisAction::PlayPause),
+                set_volume: Some(50),
+                ..Default::default()
+            };
+            let device = Device {
+                device_id: DeviceId("test-mpris-control-nonblock".into()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                request.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "mpris control commands must not block the event loop"
+        );
+    }
+
+    #[test]
+    fn now_playing_request_does_not_block_event_loop() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let request = MprisRequest {
+                player: Some("NonexistentPlayer".to_string()),
+                request_now_playing: Some(true),
+                ..Default::default()
+            };
+            let device = Device {
+                device_id: DeviceId("test-mpris-nowplaying-nonblock".into()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                request.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "mpris now-playing request must not block the event loop"
+        );
+    }
 }

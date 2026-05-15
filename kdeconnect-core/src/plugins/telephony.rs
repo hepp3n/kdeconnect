@@ -120,7 +120,7 @@ impl TelephonyPacket {
             Some(path)
         });
 
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let mut notif = notify_rust::Notification::new();
             notif
                 .appname("KDE Connect")
@@ -133,8 +133,7 @@ impl TelephonyPacket {
                 notif.icon("call-start-symbolic");
             }
             notif.show().ok();
-        })
-        .await;
+        });
     }
 
     /// Send a kdeconnect.telephony.request_mute to silence the phone's ringer.
@@ -144,5 +143,47 @@ impl TelephonyPacket {
             device: device.device_id.clone(),
             packet,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::{Device, DeviceId};
+    use std::time::Duration;
+
+    #[test]
+    fn received_packet_returns_immediately_without_blocking() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let pkt = TelephonyPacket {
+                event: Some("ringing".to_string()),
+                contact_name: Some("Test Caller".to_string()),
+                ..Default::default()
+            };
+            let device = Device {
+                device_id: DeviceId("test-telephony-nonblock".into()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                pkt.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "telephony received_packet must return immediately without blocking on notification"
+        );
     }
 }

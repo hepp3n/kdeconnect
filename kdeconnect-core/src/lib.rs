@@ -1239,13 +1239,20 @@ impl KdeConnectCore {
 
                 let pkt = pair_false_packet();
                 let queued = self.queue_packet(&device_id, pkt).await;
-                if queued {
-                    info!("[core] sent pair:false to {} on unpair", device_id);
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                }
 
-                cleanup_device_data(&device_id.0).await;
-                self.drop_connection(&device_id).await;
+                let writer_map = self.writer_map.clone();
+                let conn_id_map = self.conn_id_map.clone();
+                tokio::spawn(async move {
+                    if queued {
+                        info!("[core] sent pair:false to {} on unpair", device_id);
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                    cleanup_device_data(&device_id.0).await;
+                    if remove_connection(&writer_map, &conn_id_map, &device_id).await {
+                        plugins::systemvolume::on_device_disconnect(&device_id);
+                        info!("[core] dropped connection for {}", device_id);
+                    }
+                });
             }
             AppEvent::AcceptPairing(device_id) => {
                 info!("User accepted pairing from {}", device_id);

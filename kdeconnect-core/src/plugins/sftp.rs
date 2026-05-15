@@ -41,9 +41,7 @@ impl Sftp {
                     .summary(&format!("{} reported an SFTP error", name))
                     .body(&error)
                     .show();
-            })
-            .await
-            .ok();
+            });
             return;
         }
 
@@ -83,9 +81,7 @@ impl Sftp {
                     .summary("Device filesystem is ready")
                     .body(&display_uri)
                     .show();
-            })
-            .await
-            .ok();
+            });
         }
     }
 }
@@ -227,6 +223,47 @@ mod tests {
         assert_eq!(
             uri_without_password("sftp://user:secret@192.168.1.10:1740/"),
             "sftp://user:***@192.168.1.10:1740/"
+        );
+    }
+
+    #[test]
+    fn received_packet_returns_immediately_without_blocking() {
+        use crate::device::{Device, DeviceId};
+        use std::time::Duration;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let sftp_err = super::Sftp {
+                ip: None,
+                port: None,
+                user: None,
+                password: None,
+                path: None,
+                multi_paths: vec![],
+                error_message: Some("test error".to_string()),
+            };
+            let device = Device {
+                device_id: DeviceId("test-sftp-nonblock".into()),
+                ..Default::default()
+            };
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                sftp_err.received_packet(&device),
+            )
+            .await
+            .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "sftp received_packet must return immediately without blocking on notification"
         );
     }
 }
