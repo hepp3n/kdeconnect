@@ -57,12 +57,7 @@ impl Sftp {
             debug!("[sftp] response includes user '{}'", user);
         }
 
-        let host = self
-            .ip
-            .as_deref()
-            .filter(|ip| !ip.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| device.address.ip().to_string());
+        let host = device.address.ip().to_string();
 
         let user = self.user.clone().unwrap_or_default();
         let password = self.password.clone().unwrap_or_default();
