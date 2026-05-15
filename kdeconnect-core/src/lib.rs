@@ -54,6 +54,72 @@ struct ConnectionHandle {
     shutdown_tx: watch::Sender<bool>,
 }
 
+async fn install_connection(
+    writer_map: &Arc<Mutex<HashMap<DeviceId, ConnectionHandle>>>,
+    conn_id_map: &Arc<Mutex<HashMap<DeviceId, u64>>>,
+    device_id: DeviceId,
+    conn_id: u64,
+    handle: ConnectionHandle,
+) {
+    conn_id_map.lock().await.insert(device_id.clone(), conn_id);
+    let previous_handle = writer_map.lock().await.insert(device_id, handle);
+    if let Some(previous_handle) = previous_handle {
+        let _ = previous_handle.shutdown_tx.send(true);
+    }
+}
+
+async fn remove_connection(
+    writer_map: &Arc<Mutex<HashMap<DeviceId, ConnectionHandle>>>,
+    conn_id_map: &Arc<Mutex<HashMap<DeviceId, u64>>>,
+    device_id: &DeviceId,
+) -> bool {
+    conn_id_map.lock().await.remove(device_id);
+    let removed = writer_map.lock().await.remove(device_id);
+    if let Some(handle) = removed {
+        let _ = handle.shutdown_tx.send(true);
+        true
+    } else {
+        false
+    }
+}
+
+async fn is_current_connection(
+    conn_id_map: &Arc<Mutex<HashMap<DeviceId, u64>>>,
+    device_id: &DeviceId,
+    conn_id: u64,
+) -> bool {
+    let guard = conn_id_map.lock().await;
+    guard
+        .get(device_id)
+        .map(|&current| current == conn_id)
+        .unwrap_or(false)
+}
+
+async fn remove_connection_if_current(
+    writer_map: &Arc<Mutex<HashMap<DeviceId, ConnectionHandle>>>,
+    conn_id_map: &Arc<Mutex<HashMap<DeviceId, u64>>>,
+    device_id: &DeviceId,
+    conn_id: u64,
+) -> bool {
+    if !is_current_connection(conn_id_map, device_id, conn_id).await {
+        return false;
+    }
+    remove_connection(writer_map, conn_id_map, device_id).await
+}
+
+async fn remove_pairing_attempt(
+    pairing_attempts: &Arc<Mutex<HashMap<DeviceId, u64>>>,
+    device_id: &DeviceId,
+) {
+    pairing_attempts.lock().await.remove(device_id);
+}
+
+fn pair_false_packet() -> ProtocolPacket {
+    let pair = Pair::reject();
+    let value = serde_json::to_value(pair).expect("fail serializing pair");
+    ProtocolPacket::new(PacketType::Pair, value)
+}
+
 pub struct KdeConnectCore {
     device_manager: Arc<DeviceManager>,
     pairing: Arc<PairingManager>,
@@ -281,7 +347,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired: {}", device_id);
-                self.pairing_attempts.lock().await.remove(&device_id);
+                remove_pairing_attempt(&self.pairing_attempts, &device_id).await;
 
                 if self
                     .plugin_registry
@@ -331,7 +397,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePairCancelled(device_id) => {
                 info!("[core] device pair cancelled.");
-                self.pairing_attempts.lock().await.remove(&device_id);
+                remove_pairing_attempt(&self.pairing_attempts, &device_id).await;
                 let conn_event = ConnectionEvent::PairStateChanged((
                     device_id,
                     crate::device::PairState::NotPaired,
@@ -341,7 +407,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePairStateChanged((device_id, pair_state)) => {
                 if matches!(pair_state, PairState::NotPaired | PairState::Paired) {
-                    self.pairing_attempts.lock().await.remove(&device_id);
+                    remove_pairing_attempt(&self.pairing_attempts, &device_id).await;
                 }
                 let conn_event = ConnectionEvent::PairStateChanged((device_id, pair_state));
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -472,18 +538,18 @@ impl KdeConnectCore {
                         .await;
                 }
 
-                self.conn_id_map.lock().await.insert(id.clone(), conn_id);
-                let previous_handle = self.writer_map.lock().await.insert(
+                install_connection(
+                    &self.writer_map,
+                    &self.conn_id_map,
                     id.clone(),
+                    conn_id,
                     ConnectionHandle {
                         write_tx,
                         shutdown_tx,
                     },
-                );
-                if let Some(previous_handle) = previous_handle {
-                    let _ = previous_handle.shutdown_tx.send(true);
-                    debug!("[core] shut down superseded connection for {}", id);
-                }
+                )
+                .await;
+                debug!("[core] installed connection for {}", id);
 
                 if device.pair_state == crate::device::PairState::Paired {
                     if self
@@ -608,7 +674,8 @@ impl KdeConnectCore {
                                                 "[core] Phone unpairing from us — cleaning up {}",
                                                 id
                                             );
-                                            self.pairing_attempts.lock().await.remove(&id);
+                                            remove_pairing_attempt(&self.pairing_attempts, &id)
+                                                .await;
                                             self.device_manager
                                                 .update_pair_state(
                                                     &id,
@@ -624,7 +691,8 @@ impl KdeConnectCore {
                                                 "[core] pairing with {} was rejected/cancelled by peer",
                                                 id
                                             );
-                                            self.pairing_attempts.lock().await.remove(&id);
+                                            remove_pairing_attempt(&self.pairing_attempts, &id)
+                                                .await;
                                             self.device_manager
                                                 .update_pair_state(
                                                     &id,
@@ -723,9 +791,7 @@ impl KdeConnectCore {
                                 "[core] received {:?} from unpaired device {}; sending pair:false to resynchronize peer",
                                 pkt.packet_type, id
                             );
-                            let pair = Pair::reject();
-                            let value = serde_json::to_value(pair).expect("fail serializing pair");
-                            let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                            let pkt = pair_false_packet();
                             if self.queue_packet(&id, pkt).await {
                                 info!("[core] sent pair:false to {} after unpaired packet", id);
                             }
@@ -744,13 +810,7 @@ impl KdeConnectCore {
                 // currently live for this device. If conn_id_map holds a *different*
                 // (higher) ID, a newer connection has already taken over and this
                 // event is stale — dropping it avoids wiping the live writer entry.
-                let is_current = {
-                    let guard = self.conn_id_map.lock().await;
-                    guard
-                        .get(&id)
-                        .map(|&current| current == conn_id)
-                        .unwrap_or(false)
-                };
+                let is_current = { is_current_connection(&self.conn_id_map, &id, conn_id).await };
 
                 if !is_current {
                     info!(
@@ -762,10 +822,8 @@ impl KdeConnectCore {
 
                 self.fail_pairing_if_pending(&id, "connection dropped")
                     .await;
-                if let Some(handle) = self.writer_map.lock().await.remove(&id) {
-                    let _ = handle.shutdown_tx.send(true);
-                }
-                self.conn_id_map.lock().await.remove(&id);
+                remove_connection_if_current(&self.writer_map, &self.conn_id_map, &id, conn_id)
+                    .await;
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -1083,14 +1141,12 @@ impl KdeConnectCore {
             AppEvent::Unpair(device_id) => {
                 info!("frontend sent unpair event to device: {}", device_id);
 
-                self.pairing_attempts.lock().await.remove(&device_id);
+                remove_pairing_attempt(&self.pairing_attempts, &device_id).await;
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::NotPaired)
                     .await;
 
-                let pair = Pair::reject();
-                let value = serde_json::to_value(pair).expect("fail serializing pair");
-                let pkt = ProtocolPacket::new(PacketType::Pair, value);
+                let pkt = pair_false_packet();
                 let queued = self.queue_packet(&device_id, pkt).await;
                 if queued {
                     info!("[core] sent pair:false to {} on unpair", device_id);
@@ -1275,10 +1331,7 @@ impl KdeConnectCore {
                 device_id,
                 e
             );
-            if let Some(handle) = self.writer_map.lock().await.remove(device_id) {
-                let _ = handle.shutdown_tx.send(true);
-            }
-            self.conn_id_map.lock().await.remove(device_id);
+            remove_connection(&self.writer_map, &self.conn_id_map, device_id).await;
             let conn_event = ConnectionEvent::Disconnected(device_id.clone());
             let _ = self.conn_tx.send(conn_event.clone());
             let _ = self.mpris_conn_tx.send(conn_event);
@@ -1289,10 +1342,7 @@ impl KdeConnectCore {
     }
 
     async fn drop_connection(&self, device_id: &DeviceId) -> bool {
-        self.conn_id_map.lock().await.remove(device_id);
-        let removed = self.writer_map.lock().await.remove(device_id);
-        if let Some(handle) = removed {
-            let _ = handle.shutdown_tx.send(true);
+        if remove_connection(&self.writer_map, &self.conn_id_map, device_id).await {
             info!("[core] dropped connection for {}", device_id);
             true
         } else {
@@ -1301,11 +1351,7 @@ impl KdeConnectCore {
     }
 
     async fn is_current_connection(&self, device_id: &DeviceId, conn_id: u64) -> bool {
-        let guard = self.conn_id_map.lock().await;
-        guard
-            .get(device_id)
-            .map(|&current| current == conn_id)
-            .unwrap_or(false)
+        is_current_connection(&self.conn_id_map, device_id, conn_id).await
     }
 
     async fn fail_pairing_if_pending(&self, device_id: &DeviceId, reason: &str) {
@@ -1324,7 +1370,7 @@ impl KdeConnectCore {
             "[core] pairing with {} failed while in {:?}: {}",
             device_id, device.pair_state, reason
         );
-        self.pairing_attempts.lock().await.remove(device_id);
+        remove_pairing_attempt(&self.pairing_attempts, device_id).await;
         self.device_manager
             .update_pair_state(device_id, PairState::NotPaired)
             .await;
@@ -1385,4 +1431,176 @@ pub async fn cleanup_device_data(device_id: &str) {
     }
 
     tracing::info!("[cleanup] removed persisted data for device {}", device_id);
+}
+
+#[cfg(test)]
+mod pairing_regression_tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::time::timeout;
+
+    fn test_device_id(suffix: &str) -> DeviceId {
+        DeviceId(format!("pairing-regression-{suffix}"))
+    }
+
+    fn test_connection_handle() -> (
+        ConnectionHandle,
+        watch::Receiver<bool>,
+        mpsc::UnboundedReceiver<ProtocolPacket>,
+    ) {
+        let (write_tx, write_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        (
+            ConnectionHandle {
+                write_tx,
+                shutdown_tx,
+            },
+            shutdown_rx,
+            write_rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn replacing_device_connection_shuts_down_only_the_previous_link() {
+        let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let device_id = test_device_id("replace-one");
+
+        let (first, mut first_shutdown, _first_rx) = test_connection_handle();
+        let (second, second_shutdown, mut second_rx) = test_connection_handle();
+
+        install_connection(&writer_map, &conn_id_map, device_id.clone(), 1, first).await;
+        install_connection(&writer_map, &conn_id_map, device_id.clone(), 2, second).await;
+
+        first_shutdown.changed().await.unwrap();
+        assert!(*first_shutdown.borrow());
+        assert!(!*second_shutdown.borrow());
+        assert!(is_current_connection(&conn_id_map, &device_id, 2).await);
+        assert!(!is_current_connection(&conn_id_map, &device_id, 1).await);
+
+        let sender = writer_map
+            .lock()
+            .await
+            .get(&device_id)
+            .unwrap()
+            .write_tx
+            .clone();
+        let pkt = ProtocolPacket::new(PacketType::Ping, json!({}));
+        sender.send(pkt).unwrap();
+        assert!(matches!(
+            second_rx.recv().await.unwrap().packet_type,
+            PacketType::Ping
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_disconnect_cannot_remove_newer_connection() {
+        let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let device_id = test_device_id("stale-disconnect");
+
+        let (first, mut first_shutdown, _first_rx) = test_connection_handle();
+        let (second, mut second_shutdown, _second_rx) = test_connection_handle();
+
+        install_connection(&writer_map, &conn_id_map, device_id.clone(), 10, first).await;
+        install_connection(&writer_map, &conn_id_map, device_id.clone(), 11, second).await;
+        first_shutdown.changed().await.unwrap();
+
+        assert!(!remove_connection_if_current(&writer_map, &conn_id_map, &device_id, 10).await);
+        assert!(writer_map.lock().await.contains_key(&device_id));
+        assert!(!*second_shutdown.borrow());
+        assert!(
+            timeout(Duration::from_millis(25), second_shutdown.changed())
+                .await
+                .is_err()
+        );
+
+        assert!(is_current_connection(&conn_id_map, &device_id, 11).await);
+    }
+
+    #[tokio::test]
+    async fn dropping_connection_shuts_down_only_that_device() {
+        let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let first_id = test_device_id("drop-first");
+        let second_id = test_device_id("drop-second");
+
+        let (first, mut first_shutdown, _first_rx) = test_connection_handle();
+        let (second, second_shutdown, _second_rx) = test_connection_handle();
+
+        install_connection(&writer_map, &conn_id_map, first_id.clone(), 1, first).await;
+        install_connection(&writer_map, &conn_id_map, second_id.clone(), 1, second).await;
+
+        assert!(remove_connection(&writer_map, &conn_id_map, &first_id).await);
+        first_shutdown.changed().await.unwrap();
+        assert!(*first_shutdown.borrow());
+        assert!(!writer_map.lock().await.contains_key(&first_id));
+        assert!(!is_current_connection(&conn_id_map, &first_id, 1).await);
+
+        assert!(writer_map.lock().await.contains_key(&second_id));
+        assert!(is_current_connection(&conn_id_map, &second_id, 1).await);
+        assert!(!*second_shutdown.borrow());
+    }
+
+    #[tokio::test]
+    async fn repeated_reconnect_churn_is_isolated_across_devices() {
+        let writer_map = Arc::new(Mutex::new(HashMap::new()));
+        let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let ids = vec![
+            test_device_id("churn-a"),
+            test_device_id("churn-b"),
+            test_device_id("churn-c"),
+        ];
+
+        let mut tasks = Vec::new();
+        for id in ids.clone() {
+            let writer_map = writer_map.clone();
+            let conn_id_map = conn_id_map.clone();
+            tasks.push(tokio::spawn(async move {
+                for conn_id in 0..25 {
+                    let (handle, _shutdown, _rx) = test_connection_handle();
+                    install_connection(&writer_map, &conn_id_map, id.clone(), conn_id, handle)
+                        .await;
+                }
+            }));
+        }
+
+        for task in tasks {
+            task.await.unwrap();
+        }
+
+        let writers = writer_map.lock().await;
+        assert_eq!(writers.len(), ids.len());
+        drop(writers);
+
+        for id in ids {
+            assert!(is_current_connection(&conn_id_map, &id, 24).await);
+        }
+    }
+
+    #[tokio::test]
+    async fn pairing_attempt_cancellation_is_per_device() {
+        let attempts = Arc::new(Mutex::new(HashMap::new()));
+        let first_id = test_device_id("attempt-first");
+        let second_id = test_device_id("attempt-second");
+
+        attempts.lock().await.insert(first_id.clone(), 7);
+        attempts.lock().await.insert(second_id.clone(), 13);
+
+        remove_pairing_attempt(&attempts, &first_id).await;
+
+        let guard = attempts.lock().await;
+        assert!(!guard.contains_key(&first_id));
+        assert_eq!(guard.get(&second_id).copied(), Some(13));
+    }
+
+    #[test]
+    fn unpaired_resync_packet_is_pair_false_without_timestamp() {
+        let pkt = pair_false_packet();
+        assert!(matches!(pkt.packet_type, PacketType::Pair));
+
+        let pair = serde_json::from_value::<Pair>(pkt.body).unwrap();
+        assert!(!pair.pair);
+        assert!(pair.timestamp.is_none());
+    }
 }
