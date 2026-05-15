@@ -238,15 +238,25 @@ fn input_queue() -> &'static mpsc::Sender<InputJob> {
                         flush_mouse_motion().await;
                     }
                     InputJob::Presenter(request) => {
-                        match tokio::task::spawn_blocking(move || run_presenter_request(&request))
-                            .await
+                        if request.stop.unwrap_or(false) {
+                            flush_mouse_motion().await;
+                        }
+
+                        if request.dx.unwrap_or_default() != 0.0
+                            || request.dy.unwrap_or_default() != 0.0
                         {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                debug!("[mousepad] failed to handle presenter request: {error}");
-                            }
-                            Err(error) => {
-                                warn!("[mousepad] presenter handler task failed: {error}")
+                            match tokio::task::spawn_blocking(move || {
+                                run_presenter_request(&request)
+                            })
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) => {
+                                    debug!("[mousepad] failed presenter request: {error}");
+                                }
+                                Err(error) => {
+                                    warn!("[mousepad] presenter task failed: {error}")
+                                }
                             }
                         }
                     }
@@ -364,17 +374,16 @@ fn send_mousepad_ack(
 }
 
 fn run_presenter_request(request: &PresenterRequest) -> anyhow::Result<()> {
-    if request.stop.unwrap_or(false) {
-        return Ok(());
-    }
+    let dx = request.dx.unwrap_or_default();
+    let dy = request.dy.unwrap_or_default();
 
-    if let (Some(dx), Some(dy)) = (request.dx, request.dy) {
-        return ydotool([
+    if dx != 0.0 || dy != 0.0 {
+        ydotool([
             "mousemove",
             "--",
             &(dx * 1000.0).round().to_string(),
             &(dy * 1000.0).round().to_string(),
-        ]);
+        ])?;
     }
 
     Ok(())
@@ -713,5 +722,91 @@ mod tests {
         assert_eq!(batch.pointer_dy, -3);
         assert_eq!(batch.scroll_dx, 0);
         assert_eq!(batch.scroll_dy, 0);
+    }
+
+    #[test]
+    fn presenter_stop_with_motion_is_not_coalescable() {
+        let stop_with_motion = PresenterRequest {
+            dx: Some(0.01),
+            dy: Some(-0.02),
+            stop: Some(true),
+        };
+        assert!(!stop_with_motion.is_coalescable_motion());
+
+        let stop_only = PresenterRequest {
+            dx: None,
+            dy: None,
+            stop: Some(true),
+        };
+        assert!(!stop_only.is_coalescable_motion());
+    }
+
+    #[test]
+    fn presenter_accumulator_scales_by_thousand() {
+        let mut accumulator = MotionAccumulator::default();
+        accumulator.add_presenter_request(&PresenterRequest {
+            dx: Some(1.5),
+            dy: Some(-0.003),
+            stop: None,
+        });
+        assert!(accumulator.has_dispatchable_motion());
+        let batch = accumulator.take_dispatchable_batch();
+        assert_eq!(batch.pointer_dx, 1500);
+        assert_eq!(batch.pointer_dy, -3);
+    }
+
+    #[test]
+    fn presenter_received_packet_returns_immediately() {
+        use std::time::Duration;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let request = PresenterRequest {
+                dx: Some(0.5),
+                dy: Some(-0.3),
+                ..Default::default()
+            };
+
+            tokio::time::timeout(Duration::from_millis(500), request.received_packet())
+                .await
+                .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(passed, "presenter received_packet must return immediately");
+    }
+
+    #[test]
+    fn presenter_stop_received_packet_returns_immediately() {
+        use std::time::Duration;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let request = PresenterRequest {
+                dx: None,
+                dy: None,
+                stop: Some(true),
+            };
+
+            tokio::time::timeout(Duration::from_millis(500), request.received_packet())
+                .await
+                .is_ok()
+        });
+
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "presenter stop received_packet must return immediately"
+        );
     }
 }

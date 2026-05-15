@@ -28,13 +28,13 @@
 - System Volume (Partial support - May not work on certain devices - Known Mobile App Bug)
 - Telephony (Know bug - Media does not resume when Ending/Canceling Call)
 - MousePad / Remote Input
+- Presenter Mode
 
 </details>
 
 <details>
 <summary>🚧 Features Not Yet Supported</summary>
 
-- Presenter Mode
 - SFTP / Browse Device
 - Virtual Display
 

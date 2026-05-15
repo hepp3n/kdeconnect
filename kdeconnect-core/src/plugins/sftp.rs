@@ -28,6 +28,8 @@ pub struct Sftp {
     pub path: Option<String>,
     #[serde(default)]
     pub multi_paths: Vec<String>,
+    #[serde(default)]
+    pub path_names: Vec<String>,
     pub error_message: Option<String>,
 }
 
@@ -74,12 +76,48 @@ impl Sftp {
             || run_uri_command("xdg-open", &[&uri]).await;
 
         if !opened {
-            let display_uri = uri_without_password(&uri);
+            let host = host.clone();
+            let user = self.user.clone();
+            let password = self.password.clone();
+            let single_path = self.path.clone();
+            let multi_paths = self.multi_paths.clone();
+            let path_names = self.path_names.clone();
+
             tokio::task::spawn_blocking(move || {
+                let uris: Vec<String> = if multi_paths.len() > 1 {
+                    multi_paths
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let uri = sftp_uri(
+                                &host,
+                                port,
+                                user.as_deref(),
+                                password.as_deref(),
+                                Some(p),
+                            );
+                            let label = path_names
+                                .get(i)
+                                .filter(|n| !n.is_empty())
+                                .map(|n| n.as_str())
+                                .unwrap_or(p.as_str());
+                            format!("{}: {}", label, uri_without_password(&uri))
+                        })
+                        .collect()
+                } else {
+                    vec![uri_without_password(&sftp_uri(
+                        &host,
+                        port,
+                        user.as_deref(),
+                        password.as_deref(),
+                        single_path.as_deref(),
+                    ))]
+                };
+
                 let _ = notify_rust::Notification::new()
                     .appname("KDE Connect")
                     .summary("Device filesystem is ready")
-                    .body(&display_uri)
+                    .body(&uris.join("\n"))
                     .show();
             });
         }
@@ -227,6 +265,27 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_full_sftp_response_with_path_names() {
+        use super::Sftp;
+        let json = serde_json::json!({
+            "ip": "192.168.1.71",
+            "port": 1743,
+            "user": "kdeconnect",
+            "password": "abc123",
+            "path": "/storage/emulated/0",
+            "multiPaths": ["/storage/0000-0000", "/storage/emulated/0"],
+            "pathNames": ["SD Card", "All files"]
+        });
+        let sftp: Sftp = serde_json::from_value(json).unwrap();
+        assert_eq!(sftp.ip.as_deref(), Some("192.168.1.71"));
+        assert_eq!(sftp.port, Some(1743));
+        assert_eq!(sftp.multi_paths.len(), 2);
+        assert_eq!(sftp.path_names.len(), 2);
+        assert_eq!(sftp.path_names[0], "SD Card");
+        assert_eq!(sftp.path_names[1], "All files");
+    }
+
+    #[test]
     fn received_packet_returns_immediately_without_blocking() {
         use crate::device::{Device, DeviceId};
         use std::time::Duration;
@@ -244,6 +303,7 @@ mod tests {
                 password: None,
                 path: None,
                 multi_paths: vec![],
+                path_names: vec![],
                 error_message: Some("test error".to_string()),
             };
             let device = Device {
