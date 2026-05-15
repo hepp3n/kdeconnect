@@ -356,8 +356,7 @@ impl MprisRequest {
                 return;
             }
 
-            if (request.request_now_playing == Some(true)
-                || request.request_volume == Some(true))
+            if (request.request_now_playing == Some(true) || request.request_volume == Some(true))
                 && let Ok(player_info) = MprisPlayer::new(Some(player_name))
             {
                 let construct_packet = ProtocolPacket::new(

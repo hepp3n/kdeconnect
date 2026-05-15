@@ -339,10 +339,7 @@ mod tests {
             .is_ok()
         });
 
-        NOTIFICATION_IDS
-            .lock()
-            .unwrap()
-            .remove("nonblock-test-1");
+        NOTIFICATION_IDS.lock().unwrap().remove("nonblock-test-1");
         rt.shutdown_background();
 
         assert!(
@@ -425,10 +422,8 @@ mod tests {
 
             let start = std::time::Instant::now();
             for i in 0..10 {
-                let notification = test_notification(
-                    &format!("multi-notif-{}", i),
-                    &format!("Title {}", i),
-                );
+                let notification =
+                    test_notification(&format!("multi-notif-{}", i), &format!("Title {}", i));
                 let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
                 notification.received_packet(&device, core_tx).await;
             }
