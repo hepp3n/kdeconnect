@@ -17,7 +17,7 @@ use tokio::{
         split,
     },
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
     time::MissedTickBehavior,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -82,6 +82,7 @@ pub enum TransportEvent {
         addr: SocketAddr,
         id: DeviceId,
         raw: String,
+        conn_id: u64,
     },
     NewConnection {
         addr: SocketAddr,
@@ -97,6 +98,7 @@ pub enum TransportEvent {
         /// DER-encoded TLS certificate presented by the peer.
         peer_certificate: Vec<u8>,
         write_tx: mpsc::UnboundedSender<ProtocolPacket>,
+        shutdown_tx: watch::Sender<bool>,
         /// Unique ID for this connection instance.
         conn_id: u64,
     },
@@ -459,6 +461,7 @@ async fn handle_incoming_tcp(
 
     let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
     let write_rx = Arc::new(Mutex::new(write_rx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
 
@@ -473,6 +476,7 @@ async fn handle_incoming_tcp(
         pairing_timestamp: 0,
         peer_certificate,
         write_tx,
+        shutdown_tx,
         conn_id,
     }) {
         return Err(anyhow::anyhow!("transport event channel closed: {}", e));
@@ -486,6 +490,7 @@ async fn handle_incoming_tcp(
         peer,
         DeviceId(id.clone()),
         conn_id,
+        shutdown_rx,
     ));
 
     Ok(())
@@ -775,6 +780,7 @@ async fn handle_discovered_device(
 
     let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
     let write_rx = Arc::new(Mutex::new(write_rx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
 
@@ -789,6 +795,7 @@ async fn handle_discovered_device(
         pairing_timestamp: 0,
         peer_certificate,
         write_tx,
+        shutdown_tx,
         conn_id,
     }) {
         return Err(anyhow::anyhow!("transport event channel closed: {}", e));
@@ -802,6 +809,7 @@ async fn handle_discovered_device(
         peer,
         id.clone(),
         conn_id,
+        shutdown_rx,
     ));
 
     Ok(())
@@ -859,6 +867,7 @@ async fn handle_connection<R, W>(
     peer: SocketAddr,
     id: DeviceId,
     conn_id: u64,
+    shutdown_rx: watch::Receiver<bool>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -869,11 +878,20 @@ async fn handle_connection<R, W>(
     // Reader task — forwards packets and emits Disconnected when the connection ends.
     let event_tx_reader = event_tx.clone();
     let id_reader = id.clone();
+    let mut shutdown_rx_reader = shutdown_rx.clone();
     tokio::spawn(async move {
         loop {
-            match reader.read_line(&mut buffer).await {
+            let read_result = tokio::select! {
+                _ = shutdown_rx_reader.changed() => {
+                    debug!(peer = ?peer, "[reader loop] shutting down superseded connection");
+                    break;
+                }
+                result = reader.read_line(&mut buffer) => result,
+            };
+
+            match read_result {
                 Ok(0) => {
-                    warn!(peer = ?peer, "[reader loop] connection closed");
+                    debug!(peer = ?peer, "[reader loop] connection closed");
                     break;
                 }
                 Ok(_) => {
@@ -891,6 +909,7 @@ async fn handle_connection<R, W>(
                         addr: peer,
                         id: id_reader.clone(),
                         raw: trimmed.to_string(),
+                        conn_id,
                     }) {
                         error!(peer = ?peer, "[reader loop] transport event channel closed: {}", e);
                         break;
@@ -903,7 +922,7 @@ async fn handle_connection<R, W>(
             }
             buffer.clear();
         }
-        warn!(peer = ?peer, "reader loop ended");
+        debug!(peer = ?peer, "reader loop ended");
         // Notify core the connection is dead. conn_id lets core distinguish this
         // disconnect from a stale event belonging to a previous connection.
         let _ = event_tx_reader.send(TransportEvent::Disconnected {
@@ -916,9 +935,14 @@ async fn handle_connection<R, W>(
     // keepalives to prevent the TCP connection from going idle.
     let event_tx_writer = event_tx.clone();
     let id_writer = id.clone();
+    let mut shutdown_rx_writer = shutdown_rx;
     tokio::spawn(async move {
         loop {
             let msg = tokio::select! {
+                _ = shutdown_rx_writer.changed() => {
+                    debug!(peer = ?peer, "writer shutting down superseded connection");
+                    break;
+                }
                 msg = async {
                     let mut rx = write_rx.lock().await;
                     rx.recv().await

@@ -5,7 +5,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{Mutex, mpsc},
+    sync::{Mutex, mpsc, watch},
     time::MissedTickBehavior,
 };
 use tracing::{debug, error, info, warn};
@@ -48,12 +48,18 @@ pub static GLOBAL_CONFIG: OnceLock<config::Config> = OnceLock::new();
 pub(crate) static TEST_ENV_LOCK: once_cell::sync::Lazy<Mutex<()>> =
     once_cell::sync::Lazy::new(|| Mutex::new(()));
 
+#[derive(Clone)]
+struct ConnectionHandle {
+    write_tx: mpsc::UnboundedSender<ProtocolPacket>,
+    shutdown_tx: watch::Sender<bool>,
+}
+
 pub struct KdeConnectCore {
     device_manager: Arc<DeviceManager>,
     pairing: Arc<PairingManager>,
     plugin_registry: Arc<PluginRegistry>,
     transport_rx: mpsc::UnboundedReceiver<TransportEvent>,
-    writer_map: Arc<Mutex<HashMap<DeviceId, mpsc::UnboundedSender<ProtocolPacket>>>>,
+    writer_map: Arc<Mutex<HashMap<DeviceId, ConnectionHandle>>>,
     /// Tracks the conn_id of the most recently accepted connection per device.
     /// A `Disconnected` event whose conn_id doesn't match is from a superseded
     /// connection and is discarded so it cannot wipe a live writer_map entry.
@@ -355,7 +361,7 @@ impl KdeConnectCore {
 
                 let sender = {
                     let guard = self.writer_map.lock().await;
-                    guard.get(&device).cloned()
+                    guard.get(&device).map(|handle| handle.write_tx.clone())
                 };
 
                 if let Some(sender) = sender {
@@ -385,6 +391,7 @@ impl KdeConnectCore {
                 pairing_timestamp,
                 peer_certificate,
                 write_tx,
+                shutdown_tx,
                 conn_id,
             } => {
                 debug!("[core] new connection from: {}", addr);
@@ -466,7 +473,17 @@ impl KdeConnectCore {
                 }
 
                 self.conn_id_map.lock().await.insert(id.clone(), conn_id);
-                self.writer_map.lock().await.insert(id.clone(), write_tx);
+                let previous_handle = self.writer_map.lock().await.insert(
+                    id.clone(),
+                    ConnectionHandle {
+                        write_tx,
+                        shutdown_tx,
+                    },
+                );
+                if let Some(previous_handle) = previous_handle {
+                    let _ = previous_handle.shutdown_tx.send(true);
+                    debug!("[core] shut down superseded connection for {}", id);
+                }
 
                 if device.pair_state == crate::device::PairState::Paired {
                     if self
@@ -561,7 +578,20 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
-            TransportEvent::IncomingPacket { addr, id, raw } => {
+            TransportEvent::IncomingPacket {
+                addr,
+                id,
+                raw,
+                conn_id,
+            } => {
+                if !self.is_current_connection(&id, conn_id).await {
+                    info!(
+                        "[core] stale packet from {} (conn_id {} != current) — ignoring",
+                        id, conn_id
+                    );
+                    return;
+                }
+
                 info!("[core] incoming packet.");
                 match serde_json::from_str::<ProtocolPacket>(&raw) {
                     Ok(pkt) => {
@@ -724,7 +754,9 @@ impl KdeConnectCore {
 
                 self.fail_pairing_if_pending(&id, "connection dropped")
                     .await;
-                self.writer_map.lock().await.remove(&id);
+                if let Some(handle) = self.writer_map.lock().await.remove(&id) {
+                    let _ = handle.shutdown_tx.send(true);
+                }
                 self.conn_id_map.lock().await.remove(&id);
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
@@ -856,14 +888,10 @@ impl KdeConnectCore {
                     info!("Sent pair request packet to device: {}", device_id);
                 } else {
                     warn!(
-                        "[core] failed to send pair request to {} (no connection)",
+                        "[core] failed to send pair request to {} (no active connection); reconnecting before retry",
                         device_id
                     );
                     let _ = self.udp_transport.send_identity().await;
-                    let ev = ConnectionEvent::PairingTimedOut(device_id);
-                    let _ = self.conn_tx.send(ev.clone());
-                    let _ = self.mpris_conn_tx.send(ev);
-                    return;
                 }
 
                 let attempt_id = {
@@ -882,35 +910,43 @@ impl KdeConnectCore {
                     .await;
 
                 let attempts = self.pairing_attempts.clone();
+                let initially_queued = queued;
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
-
-                    if attempts.lock().await.get(&did).copied() != Some(attempt_id) {
-                        return;
-                    }
-
-                    if let Some(dev) = dm.get_device(&did).await
-                        && dev.pair_state != crate::device::PairState::Requesting
-                    {
-                        attempts.lock().await.remove(&did);
-                        return;
-                    }
-
-                    info!(
-                        "[core] pair request to {} timed out after {}s — attempting reconnect",
-                        did, PAIRING_TIMEOUT_SECS
-                    );
-
-                    let _ = udp.send_identity().await;
-
                     let mut retried = false;
+
+                    if initially_queued {
+                        tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+
+                        if attempts.lock().await.get(&did).copied() != Some(attempt_id) {
+                            return;
+                        }
+
+                        if let Some(dev) = dm.get_device(&did).await
+                            && dev.pair_state != crate::device::PairState::Requesting
+                        {
+                            attempts.lock().await.remove(&did);
+                            return;
+                        }
+
+                        info!(
+                            "[core] pair request to {} timed out after {}s — attempting reconnect",
+                            did, PAIRING_TIMEOUT_SECS
+                        );
+
+                        let _ = udp.send_identity().await;
+                    }
+
                     for _ in 0..30 {
                         tokio::time::sleep(Duration::from_millis(500)).await;
-                        let sender = wm.lock().await.get(&did).cloned();
+                        let sender = wm
+                            .lock()
+                            .await
+                            .get(&did)
+                            .map(|handle| handle.write_tx.clone());
                         if let Some(sender) = sender
                             && sender.send(pkt_clone.clone()).is_ok()
                         {
-                            info!("[core] pair request resent to {} after reconnect", did);
+                            info!("[core] pair request sent to {} after reconnect", did);
                             retried = true;
                             break;
                         }
@@ -963,7 +999,7 @@ impl KdeConnectCore {
 
                 let sender = {
                     let guard = self.writer_map.lock().await;
-                    guard.get(&device_id).cloned()
+                    guard.get(&device_id).map(|handle| handle.write_tx.clone())
                 };
 
                 if let Some(sender) = sender {
@@ -1168,9 +1204,7 @@ impl KdeConnectCore {
             }
             AppEvent::Disconnect(device_id) => {
                 info!("frontend sent disconnect event to device: {}", device_id);
-                self.conn_id_map.lock().await.remove(&device_id);
-                let mut guard = self.writer_map.lock().await;
-                if guard.remove(&device_id).is_some() {
+                if self.drop_connection(&device_id).await {
                     let conn_event = ConnectionEvent::Disconnected(device_id);
                     let _ = self.conn_tx.send(conn_event.clone());
                     let _ = self.mpris_conn_tx.send(conn_event);
@@ -1200,15 +1234,11 @@ impl KdeConnectCore {
                     .set_device_disabled(&device_id.0, disabled.clone())
                     .await;
 
-                {
-                    self.conn_id_map.lock().await.remove(&device_id);
-                    let mut guard = self.writer_map.lock().await;
-                    if guard.remove(&device_id).is_some() {
-                        info!(
-                            "[plugin] dropped connection to {} — phone will reconnect with updated capabilities",
-                            device_id
-                        );
-                    }
+                if self.drop_connection(&device_id).await {
+                    info!(
+                        "[plugin] dropped connection to {} — phone will reconnect with updated capabilities",
+                        device_id
+                    );
                 }
             }
         };
@@ -1217,7 +1247,7 @@ impl KdeConnectCore {
     async fn queue_packet(&self, device_id: &DeviceId, packet: ProtocolPacket) -> bool {
         let sender = {
             let guard = self.writer_map.lock().await;
-            guard.get(device_id).cloned()
+            guard.get(device_id).map(|handle| handle.write_tx.clone())
         };
 
         let Some(sender) = sender else {
@@ -1235,7 +1265,9 @@ impl KdeConnectCore {
                 device_id,
                 e
             );
-            self.writer_map.lock().await.remove(device_id);
+            if let Some(handle) = self.writer_map.lock().await.remove(device_id) {
+                let _ = handle.shutdown_tx.send(true);
+            }
             self.conn_id_map.lock().await.remove(device_id);
             let conn_event = ConnectionEvent::Disconnected(device_id.clone());
             let _ = self.conn_tx.send(conn_event.clone());
@@ -1248,11 +1280,14 @@ impl KdeConnectCore {
 
     async fn drop_connection(&self, device_id: &DeviceId) -> bool {
         self.conn_id_map.lock().await.remove(device_id);
-        let removed = self.writer_map.lock().await.remove(device_id).is_some();
-        if removed {
+        let removed = self.writer_map.lock().await.remove(device_id);
+        if let Some(handle) = removed {
+            let _ = handle.shutdown_tx.send(true);
             info!("[core] dropped connection for {}", device_id);
+            true
+        } else {
+            false
         }
-        removed
     }
 
     async fn is_current_connection(&self, device_id: &DeviceId, conn_id: u64) -> bool {
