@@ -3,7 +3,8 @@
 use anyhow::Result;
 use kdeconnect_core::{
     KdeConnectCore, PacketType, ProtocolPacket,
-    device::{DeviceId, DeviceState, PairState},
+    config::CONFIG_DIR,
+    device::{Device as CoreDevice, DeviceId, DeviceState, PairState},
     event::{AppEvent, ConnectionEvent},
 };
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,71 @@ async fn load_sms_cache(device_id: &str) -> Option<String> {
     }
 }
 
+fn dbus_device_from_core(device: &CoreDevice, is_reachable: bool) -> DbusDevice {
+    DbusDevice {
+        id: device.device_id.0.clone(),
+        name: device.name.clone(),
+        device_type: device.device_type.clone(),
+        incoming_capabilities: device.incoming_capabilities.clone(),
+        outgoing_capabilities: device.outgoing_capabilities.clone(),
+        is_paired: true,
+        is_reachable,
+    }
+}
+
+async fn load_persisted_paired_device(device_id: &str) -> Option<CoreDevice> {
+    let path = dirs::config_dir()?
+        .join(CONFIG_DIR)
+        .join(format!("{device_id}.ron"));
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let device = ron::de::from_str::<CoreDevice>(&raw).ok()?;
+    (device.pair_state == PairState::Paired).then_some(device)
+}
+
+async fn load_persisted_paired_devices() -> Vec<CoreDevice> {
+    let Some(config_dir) = dirs::config_dir() else {
+        return Vec::new();
+    };
+    let kc_dir = config_dir.join(CONFIG_DIR);
+    let Ok(mut entries) = tokio::fs::read_dir(&kc_dir).await else {
+        return Vec::new();
+    };
+
+    let mut devices = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("ron") {
+            continue;
+        }
+        if let Ok(raw) = tokio::fs::read_to_string(&path).await
+            && let Ok(device) = ron::de::from_str::<CoreDevice>(&raw)
+            && device.pair_state == PairState::Paired
+        {
+            devices.push(device);
+        }
+    }
+    devices
+}
+
+async fn reconcile_persisted_pair_state(devices: &Arc<Mutex<HashMap<String, DbusDevice>>>) {
+    let persisted_devices = load_persisted_paired_devices().await;
+    if persisted_devices.is_empty() {
+        return;
+    }
+
+    let mut map = devices.lock().await;
+    for device in persisted_devices {
+        let reachable = map
+            .get(&device.device_id.0)
+            .map(|device| device.is_reachable)
+            .unwrap_or(false);
+        map.insert(
+            device.device_id.0.clone(),
+            dbus_device_from_core(&device, reachable),
+        );
+    }
+}
+
 // ----------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -156,6 +222,7 @@ impl DaemonInterface {
     /// List all known devices
     async fn list_devices(&self) -> Vec<DbusDevice> {
         info!("D-Bus: ListDevices called");
+        reconcile_persisted_pair_state(&self.devices).await;
         let devices = self.devices.lock().await;
         let device_list: Vec<DbusDevice> = devices.values().cloned().collect();
         info!("D-Bus: Returning {} devices", device_list.len());
@@ -618,34 +685,10 @@ impl KdeConnectService {
         // Pre-populate known paired devices as offline so list_devices() returns
         // them immediately after reboot, before the phone actively reconnects.
         {
-            use kdeconnect_core::{config::CONFIG_DIR, device::Device as CoreDevice};
             let mut map = devices.lock().await;
-            if let Some(config_dir) = dirs::config_dir() {
-                let kc_dir = config_dir.join(CONFIG_DIR);
-                if let Ok(mut entries) = tokio::fs::read_dir(&kc_dir).await {
-                    while let Ok(Some(entry)) = entries.next_entry().await {
-                        let path = entry.path();
-                        if path.extension().and_then(|e| e.to_str()) == Some("ron")
-                            && let Ok(raw) = tokio::fs::read_to_string(&path).await
-                            && let Ok(dev) = ron::de::from_str::<CoreDevice>(&raw)
-                            && dev.pair_state == PairState::Paired
-                        {
-                            info!("Restoring offline paired device: {}", dev.name);
-                            map.insert(
-                                dev.device_id.0.clone(),
-                                DbusDevice {
-                                    id: dev.device_id.0.clone(),
-                                    name: dev.name.clone(),
-                                    device_type: dev.device_type.clone(),
-                                    incoming_capabilities: dev.incoming_capabilities.clone(),
-                                    outgoing_capabilities: dev.outgoing_capabilities.clone(),
-                                    is_paired: true,
-                                    is_reachable: false,
-                                },
-                            );
-                        }
-                    }
-                }
+            for dev in load_persisted_paired_devices().await {
+                info!("Restoring offline paired device: {}", dev.name);
+                map.insert(dev.device_id.0.clone(), dbus_device_from_core(&dev, false));
             }
         }
 
@@ -874,12 +917,14 @@ impl KdeConnectService {
                     "Event: PairStateChanged - {} → {:?}",
                     device_id.0, pair_state
                 );
-                let is_paired = matches!(pair_state, PairState::Paired);
-
                 {
                     let mut map = devices.lock().await;
                     if let Some(dev) = map.get_mut(&device_id.0) {
-                        dev.is_paired = is_paired;
+                        match pair_state {
+                            PairState::Paired => dev.is_paired = true,
+                            PairState::NotPaired => dev.is_paired = false,
+                            PairState::Requesting | PairState::Requested => {}
+                        }
                     }
                 }
 
@@ -983,9 +1028,19 @@ impl KdeConnectService {
                 info!("Pairing timed out for {}", device_id.0);
                 // Update the device to reflect the unpaired state and emit a
                 // device_connected signal so the applet refreshes immediately.
+                let persisted_paired = load_persisted_paired_device(&device_id.0).await;
                 {
                     let mut map = devices.lock().await;
-                    if let Some(dev) = map.get_mut(&device_id.0) {
+                    if let Some(device) = persisted_paired {
+                        let reachable = map
+                            .get(&device_id.0)
+                            .map(|device| device.is_reachable)
+                            .unwrap_or(false);
+                        map.insert(
+                            device_id.0.clone(),
+                            dbus_device_from_core(&device, reachable),
+                        );
+                    } else if let Some(dev) = map.get_mut(&device_id.0) {
                         dev.is_paired = false;
                     }
                 }

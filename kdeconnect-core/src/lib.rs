@@ -18,7 +18,7 @@ use crate::{
     plugin_interface::PluginRegistry,
     plugins::{ping::Ping, share::ShareRequest},
     protocol::{DeviceFile, DevicePayload, Pair},
-    transport::{TcpTransport, TransportEvent, UdpTransport},
+    transport::{ConnectionRateLimiter, TcpTransport, TransportEvent, UdpTransport},
 };
 
 /// Maximum allowed difference between device clocks for pairing (30 minutes in seconds).
@@ -92,8 +92,10 @@ impl KdeConnectCore {
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
 
-        let tcp_transport = TcpTransport::new(&transport_tx);
-        let udp_transport = Arc::new(UdpTransport::new(&transport_tx).await);
+        let connection_rate_limiter = Arc::new(ConnectionRateLimiter::default());
+        let tcp_transport = TcpTransport::new(&transport_tx, connection_rate_limiter.clone());
+        let udp_transport =
+            Arc::new(UdpTransport::new(&transport_tx, connection_rate_limiter).await);
 
         tokio::spawn(async move {
             if let Err(e) = tcp_transport.listen().await {
@@ -729,7 +731,18 @@ impl KdeConnectCore {
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
-            TransportEvent::PacketSendFailed { id, packet_type } => {
+            TransportEvent::PacketSendFailed {
+                id,
+                packet_type,
+                conn_id,
+            } => {
+                if !self.is_current_connection(&id, conn_id).await {
+                    info!(
+                        "[core] stale send failure for {} (conn_id {} != current) — ignoring",
+                        id, conn_id
+                    );
+                    return;
+                }
                 warn!(
                     "[core] failed to send {:?} to {}; checking pending pairing state",
                     packet_type, id
@@ -784,6 +797,12 @@ impl KdeConnectCore {
                             "[core] ignoring pair request for already paired device {}",
                             device_id
                         );
+                        let conn_event = ConnectionEvent::PairStateChanged((
+                            device_id,
+                            crate::device::PairState::Paired,
+                        ));
+                        let _ = self.conn_tx.send(conn_event.clone());
+                        let _ = self.mpris_conn_tx.send(conn_event);
                         return;
                     }
                     crate::device::PairState::Requested => {
@@ -1234,6 +1253,14 @@ impl KdeConnectCore {
             info!("[core] dropped connection for {}", device_id);
         }
         removed
+    }
+
+    async fn is_current_connection(&self, device_id: &DeviceId, conn_id: u64) -> bool {
+        let guard = self.conn_id_map.lock().await;
+        guard
+            .get(device_id)
+            .map(|&current| current == conn_id)
+            .unwrap_or(false)
     }
 
     async fn fail_pairing_if_pending(&self, device_id: &DeviceId, reason: &str) {

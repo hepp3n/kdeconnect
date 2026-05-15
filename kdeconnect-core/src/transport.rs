@@ -1,11 +1,12 @@
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use rustls::pki_types::ServerName;
@@ -38,6 +39,9 @@ pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
 /// surfaced to users.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_IDENTITY_PACKET_SIZE: usize = 8192;
+const MIN_DISCOVERY_CONNECTION_INTERVAL: Duration = Duration::from_millis(500);
+const IDENTITY_BURST_COUNT: usize = 2;
+const IDENTITY_BURST_DELAY: Duration = Duration::from_millis(250);
 
 pub const DEFAULT_LISTEN_PORT: u16 = 1716;
 pub const DEFAULT_LISTEN_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
@@ -52,6 +56,25 @@ pub const BROADCAST_ADDR: SocketAddr =
 /// connection that generated them, preventing stale disconnects from
 /// incorrectly wiping a newer live connection out of `writer_map`.
 static CONN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Default)]
+pub(crate) struct ConnectionRateLimiter {
+    by_device: Mutex<HashMap<DeviceId, Instant>>,
+}
+
+impl ConnectionRateLimiter {
+    pub(crate) async fn allow_device_connection(&self, id: &DeviceId) -> bool {
+        let now = Instant::now();
+        let mut guard = self.by_device.lock().await;
+        if let Some(last_seen) = guard.get(id)
+            && now.duration_since(*last_seen) < MIN_DISCOVERY_CONNECTION_INTERVAL
+        {
+            return false;
+        }
+        guard.insert(id.clone(), now);
+        true
+    }
+}
 
 #[derive(Debug)]
 pub enum TransportEvent {
@@ -85,6 +108,7 @@ pub enum TransportEvent {
     PacketSendFailed {
         id: DeviceId,
         packet_type: PacketType,
+        conn_id: u64,
     },
     /// Emitted when the reader loop ends (peer closed / broken pipe).
     /// `conn_id` must match the stored value for this device before core
@@ -241,10 +265,14 @@ pub struct TcpTransport {
     identity: Arc<Identity>,
     client_config: Arc<rustls::ClientConfig>,
     server_config: Arc<rustls::ServerConfig>,
+    rate_limiter: Arc<ConnectionRateLimiter>,
 }
 
 impl TcpTransport {
-    pub fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
+    pub fn new(
+        event_tx: &mpsc::UnboundedSender<TransportEvent>,
+        rate_limiter: Arc<ConnectionRateLimiter>,
+    ) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
         let listen_addr = config.listen_addr;
         let event_tx = event_tx.clone();
@@ -258,6 +286,7 @@ impl TcpTransport {
             identity,
             client_config,
             server_config,
+            rate_limiter,
         }
     }
 
@@ -284,6 +313,7 @@ impl TcpTransport {
                     let identity = self.identity.clone();
                     let client_config = self.client_config.clone();
                     let server_config = self.server_config.clone();
+                    let rate_limiter = self.rate_limiter.clone();
 
                     tokio::spawn(async move {
                         if let Err(e) = handle_incoming_tcp(
@@ -293,6 +323,7 @@ impl TcpTransport {
                             identity,
                             client_config,
                             server_config,
+                            rate_limiter,
                         )
                         .await
                         {
@@ -315,6 +346,7 @@ async fn handle_incoming_tcp(
     identity: Arc<Identity>,
     client_config: Arc<rustls::ClientConfig>,
     server_config: Arc<rustls::ServerConfig>,
+    rate_limiter: Arc<ConnectionRateLimiter>,
 ) -> anyhow::Result<()> {
     if !is_private_kdeconnect_addr(peer.ip()) {
         return Err(anyhow::anyhow!(
@@ -367,6 +399,15 @@ async fn handle_incoming_tcp(
 
     // Validate device ID and sanitize name early, before TLS.
     crate::device::validate_device_id(&id)?;
+    let device_id = DeviceId(id.clone());
+    if !rate_limiter.allow_device_connection(&device_id).await {
+        debug!(
+            peer = ?peer,
+            device_id = ?device_id,
+            "[tcp] duplicate connection attempt suppressed"
+        );
+        return Ok(());
+    }
     let name = crate::device::sanitize_device_name(&name);
 
     // Step 2: TLS handshake. KDE Connect's LAN protocol makes the
@@ -458,10 +499,14 @@ pub struct UdpTransport {
     identity: Arc<Identity>,
     server_config: Arc<rustls::ServerConfig>,
     broadcast_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    rate_limiter: Arc<ConnectionRateLimiter>,
 }
 
 impl UdpTransport {
-    pub async fn new(event_tx: &mpsc::UnboundedSender<TransportEvent>) -> Self {
+    pub async fn new(
+        event_tx: &mpsc::UnboundedSender<TransportEvent>,
+        rate_limiter: Arc<ConnectionRateLimiter>,
+    ) -> Self {
         let config = GLOBAL_CONFIG.get().unwrap();
 
         let socket = {
@@ -509,6 +554,7 @@ impl UdpTransport {
             identity,
             server_config,
             broadcast_handle: Arc::new(Mutex::new(None)),
+            rate_limiter,
         }
     }
 
@@ -542,14 +588,14 @@ impl UdpTransport {
             // Send a short burst immediately for explicit scans. UDP broadcast is
             // intentionally lossy on many Wi-Fi networks, so a single packet can
             // be missed even when discovery should work.
-            for _ in 0..3 {
+            for _ in 0..IDENTITY_BURST_COUNT {
                 match udp_socket.send_to(packet.as_slice(), BROADCAST_ADDR).await {
                     Ok(size) => {
                         debug!(addr = ?BROADCAST_ADDR, packet.size = size, "Sending udp broadcast")
                     }
                     Err(e) => warn!(addr = ?BROADCAST_ADDR, "Failed to send UDP packet: {}", e),
                 }
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(IDENTITY_BURST_DELAY).await;
             }
 
             let mut interval = tokio::time::interval(Duration::from_secs(interval.as_secs()));
@@ -616,6 +662,7 @@ impl UdpTransport {
                     let event_tx = self.event_tx.clone();
                     let this_identity = self.identity.clone();
                     let server_config = self.server_config.clone();
+                    let rate_limiter = self.rate_limiter.clone();
 
                     tokio::spawn(async move {
                         if let Err(e) = handle_discovered_device(
@@ -624,6 +671,7 @@ impl UdpTransport {
                             event_tx,
                             this_identity,
                             server_config,
+                            rate_limiter,
                         )
                         .await
                         {
@@ -645,6 +693,7 @@ async fn handle_discovered_device(
     event_tx: mpsc::UnboundedSender<TransportEvent>,
     this_identity: Arc<Identity>,
     server_config: Arc<rustls::ServerConfig>,
+    rate_limiter: Arc<ConnectionRateLimiter>,
 ) -> anyhow::Result<()> {
     if !is_private_kdeconnect_addr(peer.ip()) {
         return Err(anyhow::anyhow!(
@@ -659,6 +708,14 @@ async fn handle_discovered_device(
 
     // Validate device ID and sanitize name early.
     crate::device::validate_device_id(&id.0)?;
+    if !rate_limiter.allow_device_connection(&id).await {
+        debug!(
+            peer = ?peer,
+            device_id = ?id,
+            "[udp] duplicate discovery connection suppressed"
+        );
+        return Ok(());
+    }
     let name = crate::device::sanitize_device_name(&name);
 
     if let Some(new_port) = peer_identity.tcp_port {
@@ -888,6 +945,7 @@ async fn handle_connection<R, W>(
                         let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
                             id: id_writer.clone(),
                             packet_type,
+                            conn_id,
                         });
                         break;
                     }
@@ -896,6 +954,7 @@ async fn handle_connection<R, W>(
                         let _ = event_tx_writer.send(TransportEvent::PacketSendFailed {
                             id: id_writer.clone(),
                             packet_type,
+                            conn_id,
                         });
                         break;
                     }
@@ -1097,7 +1156,8 @@ pub(crate) async fn receive_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::is_private_kdeconnect_addr;
+    use super::{ConnectionRateLimiter, is_private_kdeconnect_addr};
+    use crate::device::DeviceId;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -1126,5 +1186,14 @@ mod tests {
         assert!(!is_private_kdeconnect_addr(IpAddr::V6(
             "2001:4860:4860::8888".parse().unwrap()
         )));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_suppresses_immediate_duplicate_device_connections() {
+        let limiter = ConnectionRateLimiter::default();
+        let id = DeviceId("duplicate-device-000000000000000".to_string());
+
+        assert!(limiter.allow_device_connection(&id).await);
+        assert!(!limiter.allow_device_connection(&id).await);
     }
 }

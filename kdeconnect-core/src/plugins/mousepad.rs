@@ -3,7 +3,7 @@ use std::{
     io::Read as _,
     process::{Command, ExitStatus, Stdio},
     sync::{
-        OnceLock,
+        Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -34,11 +34,14 @@ static YDOTOOL_DAEMON_WARNED: AtomicBool = AtomicBool::new(false);
 static YDOTOOL_TIMEOUT_WARNED: AtomicBool = AtomicBool::new(false);
 static INPUT_QUEUE_FULL_WARNED: AtomicBool = AtomicBool::new(false);
 static INPUT_QUEUE_CLOSED_WARNED: AtomicBool = AtomicBool::new(false);
+static MOTION_FLUSH_QUEUED: AtomicBool = AtomicBool::new(false);
 
 const INPUT_QUEUE_CAPACITY: usize = 256;
 const YDOTOOL_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_MOTION_BATCHES_PER_FLUSH: usize = 8;
 
 static INPUT_QUEUE: OnceLock<mpsc::Sender<InputJob>> = OnceLock::new();
+static MOTION_ACCUMULATOR: OnceLock<StdMutex<MotionAccumulator>> = OnceLock::new();
 
 #[derive(Debug)]
 enum InputJob {
@@ -47,7 +50,67 @@ enum InputJob {
         device: DeviceId,
         core_tx: mpsc::UnboundedSender<CoreEvent>,
     },
+    FlushMouseMotion,
     Presenter(PresenterRequest),
+}
+
+#[derive(Debug, Default)]
+struct MotionAccumulator {
+    pointer_dx: f64,
+    pointer_dy: f64,
+    scroll_dx: f64,
+    scroll_dy: f64,
+}
+
+#[derive(Debug, Default)]
+struct MotionBatch {
+    pointer_dx: i64,
+    pointer_dy: i64,
+    scroll_dx: i64,
+    scroll_dy: i64,
+}
+
+impl MotionAccumulator {
+    fn add_request(&mut self, request: &MousepadRequest) {
+        let dx = request.dx.unwrap_or_default();
+        let dy = request.dy.unwrap_or_default();
+        if request.scroll.unwrap_or(false) {
+            self.scroll_dx += dx;
+            self.scroll_dy += dy;
+        } else {
+            self.pointer_dx += dx;
+            self.pointer_dy += dy;
+        }
+    }
+
+    fn has_dispatchable_motion(&self) -> bool {
+        self.pointer_dx.round() != 0.0
+            || self.pointer_dy.round() != 0.0
+            || self.scroll_dx.round() != 0.0
+            || self.scroll_dy.round() != 0.0
+    }
+
+    fn take_dispatchable_batch(&mut self) -> MotionBatch {
+        let batch = MotionBatch {
+            pointer_dx: self.pointer_dx.round() as i64,
+            pointer_dy: self.pointer_dy.round() as i64,
+            scroll_dx: self.scroll_dx.round() as i64,
+            scroll_dy: self.scroll_dy.round() as i64,
+        };
+
+        self.pointer_dx -= batch.pointer_dx as f64;
+        self.pointer_dy -= batch.pointer_dy as f64;
+        self.scroll_dx -= batch.scroll_dx as f64;
+        self.scroll_dy -= batch.scroll_dy as f64;
+
+        batch
+    }
+}
+
+impl MotionBatch {
+    fn is_empty(&self) -> bool {
+        self.pointer_dx == 0 && self.pointer_dy == 0 && self.scroll_dx == 0 && self.scroll_dy == 0
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
@@ -88,11 +151,35 @@ impl MousepadRequest {
         device: &Device,
         core_tx: mpsc::UnboundedSender<CoreEvent>,
     ) {
+        if self.is_coalescable_motion() {
+            enqueue_motion_request(self);
+            return;
+        }
+
         enqueue_input_job(InputJob::Mousepad {
             request: self.clone(),
             device: device.device_id.clone(),
             core_tx,
         });
+    }
+
+    fn is_coalescable_motion(&self) -> bool {
+        let has_motion = self.dx.unwrap_or_default() != 0.0 || self.dy.unwrap_or_default() != 0.0;
+        has_motion
+            && self.key.is_none()
+            && self.special_key.is_none()
+            && !self.alt.unwrap_or(false)
+            && !self.ctrl.unwrap_or(false)
+            && !self.shift.unwrap_or(false)
+            && !self.meta.unwrap_or(false)
+            && !self.singleclick.unwrap_or(false)
+            && !self.doubleclick.unwrap_or(false)
+            && !self.middleclick.unwrap_or(false)
+            && !self.rightclick.unwrap_or(false)
+            && !self.singlehold.unwrap_or(false)
+            && !self.singlerelease.unwrap_or(false)
+            && !self.send_ack.unwrap_or(false)
+            && !self.is_ack.unwrap_or(false)
     }
 }
 
@@ -132,6 +219,9 @@ fn input_queue() -> &'static mpsc::Sender<InputJob> {
                             Err(error) => warn!("[mousepad] handler task failed: {error}"),
                         }
                     }
+                    InputJob::FlushMouseMotion => {
+                        flush_mouse_motion().await;
+                    }
                     InputJob::Presenter(request) => {
                         match tokio::task::spawn_blocking(move || run_presenter_request(&request))
                             .await
@@ -153,20 +243,76 @@ fn input_queue() -> &'static mpsc::Sender<InputJob> {
     })
 }
 
-fn enqueue_input_job(job: InputJob) {
+fn enqueue_input_job(job: InputJob) -> bool {
     match input_queue().try_send(job) {
-        Ok(()) => {}
+        Ok(()) => true,
         Err(mpsc::error::TrySendError::Full(_)) => {
             if !INPUT_QUEUE_FULL_WARNED.swap(true, Ordering::Relaxed) {
                 warn!(
                     "[mousepad] remote input queue is full; dropping input until the backend catches up"
                 );
             }
+            false
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             if !INPUT_QUEUE_CLOSED_WARNED.swap(true, Ordering::Relaxed) {
                 warn!("[mousepad] remote input queue is closed; dropping input");
             }
+            false
+        }
+    }
+}
+
+fn motion_accumulator() -> &'static StdMutex<MotionAccumulator> {
+    MOTION_ACCUMULATOR.get_or_init(|| StdMutex::new(MotionAccumulator::default()))
+}
+
+fn enqueue_motion_request(request: &MousepadRequest) {
+    let should_flush = {
+        let mut guard = motion_accumulator().lock().unwrap();
+        guard.add_request(request);
+        guard.has_dispatchable_motion()
+    };
+
+    if should_flush && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel) {
+        if !enqueue_input_job(InputJob::FlushMouseMotion) {
+            MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
+        }
+    }
+}
+
+fn take_motion_batch() -> MotionBatch {
+    motion_accumulator()
+        .lock()
+        .unwrap()
+        .take_dispatchable_batch()
+}
+
+fn has_dispatchable_motion() -> bool {
+    motion_accumulator()
+        .lock()
+        .unwrap()
+        .has_dispatchable_motion()
+}
+
+async fn flush_mouse_motion() {
+    for _ in 0..MAX_MOTION_BATCHES_PER_FLUSH {
+        let batch = take_motion_batch();
+        if batch.is_empty() {
+            break;
+        }
+
+        match tokio::task::spawn_blocking(move || run_motion_batch(&batch)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => debug!("[mousepad] failed to handle motion batch: {error}"),
+            Err(error) => warn!("[mousepad] motion handler task failed: {error}"),
+        }
+    }
+
+    MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
+    if has_dispatchable_motion() && !MOTION_FLUSH_QUEUED.swap(true, Ordering::AcqRel) {
+        if !enqueue_input_job(InputJob::FlushMouseMotion) {
+            MOTION_FLUSH_QUEUED.store(false, Ordering::Release);
         }
     }
 }
@@ -197,6 +343,22 @@ fn run_presenter_request(request: &PresenterRequest) -> anyhow::Result<()> {
             &(dx * 1000.0).round().to_string(),
             &(dy * 1000.0).round().to_string(),
         ]);
+    }
+
+    Ok(())
+}
+
+fn run_motion_batch(batch: &MotionBatch) -> anyhow::Result<()> {
+    if batch.pointer_dx != 0 || batch.pointer_dy != 0 {
+        let dx = batch.pointer_dx.to_string();
+        let dy = batch.pointer_dy.to_string();
+        ydotool(["mousemove", "--", &dx, &dy])?;
+    }
+
+    if batch.scroll_dx != 0 || batch.scroll_dy != 0 {
+        let dx = batch.scroll_dx.to_string();
+        let dy = batch.scroll_dy.to_string();
+        ydotool(["mousemove", "-w", "--", &dx, &dy])?;
     }
 
     Ok(())
@@ -418,5 +580,70 @@ mod tests {
         assert_eq!(special_key_code(12), Some(28));
         assert_eq!(special_key_code(32), Some(88));
         assert_eq!(special_key_code(99), None);
+    }
+
+    #[test]
+    fn coalesces_plain_motion_but_not_clicks_or_acks() {
+        assert!(
+            MousepadRequest {
+                dx: Some(1.0),
+                dy: Some(2.0),
+                ..Default::default()
+            }
+            .is_coalescable_motion()
+        );
+
+        assert!(
+            MousepadRequest {
+                dx: Some(0.0),
+                dy: Some(2.0),
+                scroll: Some(true),
+                ..Default::default()
+            }
+            .is_coalescable_motion()
+        );
+
+        assert!(
+            !MousepadRequest {
+                dx: Some(1.0),
+                dy: Some(2.0),
+                singleclick: Some(true),
+                ..Default::default()
+            }
+            .is_coalescable_motion()
+        );
+
+        assert!(
+            !MousepadRequest {
+                dx: Some(1.0),
+                dy: Some(2.0),
+                send_ack: Some(true),
+                ..Default::default()
+            }
+            .is_coalescable_motion()
+        );
+    }
+
+    #[test]
+    fn motion_accumulator_keeps_fractional_remainder() {
+        let mut accumulator = MotionAccumulator::default();
+        accumulator.add_request(&MousepadRequest {
+            dx: Some(0.4),
+            dy: Some(0.4),
+            ..Default::default()
+        });
+        assert!(!accumulator.has_dispatchable_motion());
+
+        accumulator.add_request(&MousepadRequest {
+            dx: Some(0.4),
+            dy: Some(0.4),
+            ..Default::default()
+        });
+        assert!(accumulator.has_dispatchable_motion());
+
+        let batch = accumulator.take_dispatchable_batch();
+        assert_eq!(batch.pointer_dx, 1);
+        assert_eq!(batch.pointer_dy, 1);
+        assert!(!accumulator.has_dispatchable_motion());
     }
 }
