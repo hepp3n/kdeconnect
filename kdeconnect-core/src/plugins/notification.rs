@@ -87,7 +87,20 @@ impl Notification {
         let reply_id = self.request_reply_id.clone();
         let original = self.clone();
 
-        let _ = tokio::task::spawn_blocking(move || {
+        let old_handle_id = if !key.is_empty() {
+            NOTIFICATION_IDS
+                .lock()
+                .ok()
+                .and_then(|mut ids| ids.remove(&key))
+        } else {
+            None
+        };
+
+        tokio::task::spawn_blocking(move || {
+            if let Some(old_id) = old_handle_id {
+                close_notification_sync(old_id);
+            }
+
             let mut notify = notify_rust::Notification::new();
             notify.appname(&app_name);
             notify.summary(if app_name.is_empty() {
@@ -173,8 +186,7 @@ impl Notification {
                     }
                 }
             });
-        })
-        .await;
+        });
     }
 }
 
@@ -236,6 +248,19 @@ fn prompt_reply(notification: &Notification) -> Option<String> {
     }
 }
 
+fn close_notification_sync(id: u32) {
+    let Ok(connection) = zbus::blocking::Connection::session() else {
+        return;
+    };
+    let _ = connection.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "CloseNotification",
+        &(id),
+    );
+}
+
 async fn close_notification(key: &str) {
     let Some(id) = NOTIFICATION_IDS
         .lock()
@@ -269,7 +294,18 @@ async fn close_notification(key: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::notification_body;
+    use super::*;
+    use crate::device::{Device, DeviceId};
+    use std::time::Duration;
+
+    fn test_notification(key: &str, title: &str) -> Notification {
+        Notification {
+            id: Some(key.to_string()),
+            title: Some(title.to_string()),
+            app_name: Some("TestApp".to_string()),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn formats_remote_notification_body_like_gsconnect() {
@@ -278,5 +314,138 @@ mod tests {
             "Message: Hello"
         );
         assert_eq!(notification_body("Messages", "Hello", "Messages"), "Hello");
+    }
+
+    #[test]
+    fn received_packet_returns_immediately_without_blocking() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let passed = rt.block_on(async {
+            let notification = test_notification("nonblock-test-1", "Test Title");
+            let device = Device {
+                device_id: DeviceId("test-device-nonblock".to_string()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                notification.received_packet(&device, core_tx),
+            )
+            .await
+            .is_ok()
+        });
+
+        NOTIFICATION_IDS
+            .lock()
+            .unwrap()
+            .remove("nonblock-test-1");
+        rt.shutdown_background();
+
+        assert!(
+            passed,
+            "received_packet must return immediately without blocking on notification interaction"
+        );
+    }
+
+    #[test]
+    fn duplicate_key_removes_old_entry_from_map() {
+        let key = "dedup-test-key";
+        NOTIFICATION_IDS
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), 99999);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let notification = test_notification(key, "Duplicate Test");
+            let device = Device {
+                device_id: DeviceId("test-device-dedup".to_string()),
+                ..Default::default()
+            };
+            let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+            notification.received_packet(&device, core_tx).await;
+        });
+
+        let has_old = NOTIFICATION_IDS.lock().unwrap().get(key).copied();
+        NOTIFICATION_IDS.lock().unwrap().remove(key);
+        rt.shutdown_background();
+
+        assert_ne!(
+            has_old,
+            Some(99999),
+            "old notification handle must be evicted when a new notification arrives with the same key"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_notification_returns_immediately() {
+        let notification = Notification {
+            id: Some("cancel-nonblock-test".to_string()),
+            is_cancel: Some(true),
+            ..Default::default()
+        };
+        let device = Device {
+            device_id: DeviceId("test-device-cancel".to_string()),
+            ..Default::default()
+        };
+        let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            notification.received_packet(&device, core_tx),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "cancel notification must return immediately"
+        );
+    }
+
+    #[test]
+    fn multiple_notifications_processed_without_serialization() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let elapsed = rt.block_on(async {
+            let device = Device {
+                device_id: DeviceId("test-device-multi".to_string()),
+                ..Default::default()
+            };
+
+            let start = std::time::Instant::now();
+            for i in 0..10 {
+                let notification = test_notification(
+                    &format!("multi-notif-{}", i),
+                    &format!("Title {}", i),
+                );
+                let (core_tx, _core_rx) = tokio::sync::mpsc::unbounded_channel();
+                notification.received_packet(&device, core_tx).await;
+            }
+            start.elapsed()
+        });
+
+        let mut ids = NOTIFICATION_IDS.lock().unwrap();
+        for i in 0..10 {
+            ids.remove(&format!("multi-notif-{}", i));
+        }
+        drop(ids);
+        rt.shutdown_background();
+
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "10 notifications must be dispatched without blocking; took {:?}",
+            elapsed
+        );
     }
 }
