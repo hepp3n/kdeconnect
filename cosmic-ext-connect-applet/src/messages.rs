@@ -43,7 +43,9 @@ pub enum Message {
     AcceptPairing(String),
     RejectPairing(String),
     PairingRequestReceived(String, String, String), // device_id, device_name, device_type
+    PairRequestFinished(String, u64, bool),         // device_id, attempt_id, dbus_call_succeeded
     PairingFinished(String),
+    PairingTimedOut(String, u64),
 
     // Delayed refresh for post-pairing updates
     DelayedRefresh,

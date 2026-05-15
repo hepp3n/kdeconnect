@@ -3,15 +3,14 @@ use crate::models::Device;
 use cosmic::app::Core;
 use cosmic::iced::{Alignment, Length};
 use cosmic::{Element, widget};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// Build the popup view using the real application Core so popup_container
-/// has proper applet context, theme, and sizing.
 pub fn create_popup_view<'a>(
     core: &'a Core,
     devices: &'a HashMap<String, Device>,
     expanded_device: Option<&'a String>,
     pairing_requests: Option<&'a HashMap<String, String>>,
+    pairing_in_progress: &'a HashSet<String>,
 ) -> Element<'a, Message> {
     let spacing = cosmic::theme::active().cosmic().spacing;
     let mut content = widget::Column::new()
@@ -92,7 +91,6 @@ pub fn create_popup_view<'a>(
         content = content.push(widget::divider::horizontal::default());
     }
 
-    // All paired devices — reachable and unreachable — sorted alphabetically
     let mut paired_devices: Vec<_> = devices.values().filter(|d| d.is_paired).collect();
     paired_devices.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -110,8 +108,54 @@ pub fn create_popup_view<'a>(
                 .font(cosmic::font::bold()),
         );
 
-        for device in paired_devices {
+        for device in &paired_devices {
             content = content.push(create_device_card(device, &spacing, expanded_device));
+        }
+    }
+
+    let active_pairing_ids: HashSet<&String> = pairing_requests
+        .map(|r| r.keys().collect())
+        .unwrap_or_default();
+    let mut available_devices: Vec<_> = devices
+        .values()
+        .filter(|d| !d.is_paired && d.is_reachable && !active_pairing_ids.contains(&d.id))
+        .collect();
+    available_devices.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if !available_devices.is_empty() {
+        content = content.push(widget::divider::horizontal::default());
+        content = content.push(
+            widget::text(fl!("available-devices-header"))
+                .size(14)
+                .font(cosmic::font::bold()),
+        );
+
+        for device in available_devices {
+            let is_pairing = pairing_in_progress.contains(&device.id);
+
+            let pair_btn: Element<'_, Message> = if is_pairing {
+                widget::button::standard(fl!("available-devices-pairing"))
+                    .width(Length::Shrink)
+                    .into()
+            } else {
+                widget::button::suggested(fl!("available-devices-pair"))
+                    .on_press(Message::PairDevice(device.id.clone()))
+                    .width(Length::Shrink)
+                    .into()
+            };
+
+            let row = widget::Row::new()
+                .push(widget::icon::from_name(device.device_icon()).size(20))
+                .push(widget::text(&device.name).size(14).width(Length::Fill))
+                .push(pair_btn)
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center);
+
+            content = content.push(
+                widget::container(row)
+                    .padding([spacing.space_xxs, spacing.space_xs])
+                    .width(Length::Fill),
+            );
         }
     }
 
@@ -121,7 +165,6 @@ pub fn create_popup_view<'a>(
         .padding(spacing.space_xs)
         .class(cosmic::theme::Container::Dialog);
 
-    // Use the real Core so the popup has proper applet context and theme
     core.applet.popup_container(popup_content).into()
 }
 
@@ -264,6 +307,13 @@ fn create_device_card<'a>(
                 );
             }
         }
+
+        menu_items = menu_items.push(widget::divider::horizontal::light());
+        menu_items = menu_items.push(
+            widget::button::destructive(fl!("paired-devices-unpair"))
+                .on_press(Message::UnpairDevice(device.id.clone()))
+                .width(Length::Fill),
+        );
 
         col = col.push(
             widget::container(menu_items)

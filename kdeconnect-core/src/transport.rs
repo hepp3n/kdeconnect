@@ -421,16 +421,6 @@ async fn handle_incoming_tcp(
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    tokio::spawn(handle_connection(
-        event_tx.clone(),
-        reader,
-        writer,
-        write_rx,
-        peer,
-        DeviceId(id.clone()),
-        conn_id,
-    ));
-
     if let Err(e) = event_tx.send(TransportEvent::NewConnection {
         addr: peer,
         id: DeviceId(peer_identity.device_id),
@@ -446,6 +436,16 @@ async fn handle_incoming_tcp(
     }) {
         return Err(anyhow::anyhow!("transport event channel closed: {}", e));
     }
+
+    tokio::spawn(handle_connection(
+        event_tx.clone(),
+        reader,
+        writer,
+        write_rx,
+        peer,
+        DeviceId(id.clone()),
+        conn_id,
+    ));
 
     Ok(())
 }
@@ -721,16 +721,6 @@ async fn handle_discovered_device(
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    tokio::spawn(handle_connection(
-        event_tx.clone(),
-        reader,
-        writer,
-        write_rx,
-        peer,
-        id.clone(),
-        conn_id,
-    ));
-
     if let Err(e) = event_tx.send(TransportEvent::NewConnection {
         addr: peer,
         id: DeviceId(peer_identity.device_id),
@@ -746,6 +736,16 @@ async fn handle_discovered_device(
     }) {
         return Err(anyhow::anyhow!("transport event channel closed: {}", e));
     }
+
+    tokio::spawn(handle_connection(
+        event_tx.clone(),
+        reader,
+        writer,
+        write_rx,
+        peer,
+        id.clone(),
+        conn_id,
+    ));
 
     Ok(())
 }

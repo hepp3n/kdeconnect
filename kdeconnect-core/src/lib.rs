@@ -58,6 +58,7 @@ pub struct KdeConnectCore {
     /// A `Disconnected` event whose conn_id doesn't match is from a superseded
     /// connection and is discarded so it cannot wipe a live writer_map entry.
     conn_id_map: Arc<Mutex<HashMap<DeviceId, u64>>>,
+    pairing_attempts: Arc<Mutex<HashMap<DeviceId, u64>>>,
     event_tx: mpsc::UnboundedSender<CoreEvent>,
     event_rx: mpsc::UnboundedReceiver<CoreEvent>,
     udp_transport: Arc<UdpTransport>,
@@ -86,6 +87,7 @@ impl KdeConnectCore {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let writer_map = Arc::new(Mutex::new(HashMap::new()));
         let conn_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let pairing_attempts = Arc::new(Mutex::new(HashMap::new()));
 
         let device_manager = DeviceManager::new(event_tx.clone());
         let pairing = Arc::new(PairingManager::new(device_manager.clone()));
@@ -199,6 +201,7 @@ impl KdeConnectCore {
                 transport_rx,
                 writer_map,
                 conn_id_map,
+                pairing_attempts,
                 event_tx,
                 event_rx,
                 udp_transport,
@@ -270,6 +273,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePaired((device_id, device)) => {
                 info!("[core] device paired: {}", device_id);
+                self.pairing_attempts.lock().await.remove(&device_id);
 
                 if self
                     .plugin_registry
@@ -319,6 +323,7 @@ impl KdeConnectCore {
             }
             CoreEvent::DevicePairCancelled(device_id) => {
                 info!("[core] device pair cancelled.");
+                self.pairing_attempts.lock().await.remove(&device_id);
                 let conn_event = ConnectionEvent::PairStateChanged((
                     device_id,
                     crate::device::PairState::NotPaired,
@@ -327,6 +332,9 @@ impl KdeConnectCore {
                 let _ = self.mpris_conn_tx.send(conn_event);
             }
             CoreEvent::DevicePairStateChanged((device_id, pair_state)) => {
+                if matches!(pair_state, PairState::NotPaired | PairState::Paired) {
+                    self.pairing_attempts.lock().await.remove(&device_id);
+                }
                 let conn_event = ConnectionEvent::PairStateChanged((device_id, pair_state));
                 let _ = self.conn_tx.send(conn_event.clone());
                 let _ = self.mpris_conn_tx.send(conn_event);
@@ -803,8 +811,10 @@ impl KdeConnectCore {
                         return;
                     }
                     crate::device::PairState::Requesting => {
-                        debug!("[core] pair request already in progress for {}", device_id);
-                        return;
+                        warn!(
+                            "[core] restarting stale or in-progress pair request for {}",
+                            device_id
+                        );
                     }
                     crate::device::PairState::NotPaired => {}
                 }
@@ -836,16 +846,34 @@ impl KdeConnectCore {
                     let _ = self.mpris_conn_tx.send(ev);
                     return;
                 }
+
+                let attempt_id = {
+                    let mut attempts = self.pairing_attempts.lock().await;
+                    let next = attempts
+                        .get(&device_id)
+                        .copied()
+                        .unwrap_or(0)
+                        .wrapping_add(1);
+                    attempts.insert(device_id.clone(), next);
+                    next
+                };
+
                 self.device_manager
                     .update_pair_state(&device_id, crate::device::PairState::Requesting)
                     .await;
 
+                let attempts = self.pairing_attempts.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
+
+                    if attempts.lock().await.get(&did).copied() != Some(attempt_id) {
+                        return;
+                    }
 
                     if let Some(dev) = dm.get_device(&did).await
                         && dev.pair_state != crate::device::PairState::Requesting
                     {
+                        attempts.lock().await.remove(&did);
                         return;
                     }
 
@@ -873,6 +901,10 @@ impl KdeConnectCore {
                         tokio::time::sleep(Duration::from_secs(PAIRING_TIMEOUT_SECS)).await;
                     }
 
+                    if attempts.lock().await.get(&did).copied() != Some(attempt_id) {
+                        return;
+                    }
+
                     if let Some(dev) = dm.get_device(&did).await
                         && dev.pair_state == crate::device::PairState::Requesting
                     {
@@ -886,6 +918,7 @@ impl KdeConnectCore {
                         });
                         dm.update_pair_state(&did, crate::device::PairState::NotPaired)
                             .await;
+                        attempts.lock().await.remove(&did);
                         let ev = ConnectionEvent::PairingTimedOut(did);
                         let _ = conn_tx2.send(ev.clone());
                         let _ = mpris_tx2.send(ev);
@@ -1219,6 +1252,7 @@ impl KdeConnectCore {
             "[core] pairing with {} failed while in {:?}: {}",
             device_id, device.pair_state, reason
         );
+        self.pairing_attempts.lock().await.remove(device_id);
         self.device_manager
             .update_pair_state(device_id, PairState::NotPaired)
             .await;

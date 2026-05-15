@@ -189,9 +189,18 @@ impl DeviceManager {
         }
     }
 
-    pub async fn add_or_update_device(&self, device_id: DeviceId, device: Device) {
+    pub async fn add_or_update_device(&self, device_id: DeviceId, mut device: Device) {
         info!("updating: {}", device_id);
         let mut guard = self.devices.write().await;
+        if let Some(existing) = guard.get(&device_id)
+            && matches!(
+                existing.pair_state,
+                PairState::Requesting | PairState::Requested
+            )
+            && device.pair_state == PairState::NotPaired
+        {
+            device.pair_state = existing.pair_state;
+        }
         guard.entry(device_id).insert_entry(device.clone());
     }
 
@@ -322,6 +331,18 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
+    async fn setup_test_env() -> (tokio::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
+        let guard = crate::TEST_ENV_LOCK.lock().await;
+        let td = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", td.path());
+        }
+        tokio::fs::create_dir_all(td.path().join(".config").join(crate::config::CONFIG_DIR))
+            .await
+            .unwrap();
+        (guard, td)
+    }
+
     #[test]
     fn sanitizes_long_unicode_device_names_without_panicking() {
         let name = sanitize_device_name(
@@ -391,6 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn device_manager_set_paired_emits_event() {
+        let (_guard, _td) = setup_test_env().await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
 
@@ -412,6 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn device_manager_update_pair_state() {
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
 
@@ -441,14 +464,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_manager_preserves_transient_pair_state_on_identity_refresh() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let dm = DeviceManager::new(tx);
+
+        let id = DeviceId("transient-refresh-device".to_string());
+        let requesting = Device {
+            device_id: id.clone(),
+            pair_state: PairState::Requesting,
+            ..Default::default()
+        };
+        dm.add_or_update_device(id.clone(), requesting).await;
+
+        let refreshed = Device {
+            device_id: id.clone(),
+            pair_state: PairState::NotPaired,
+            ..Default::default()
+        };
+        dm.add_or_update_device(id.clone(), refreshed).await;
+
+        assert_eq!(
+            dm.get_device(&id).await.unwrap().pair_state,
+            PairState::Requesting
+        );
+    }
+
+    #[tokio::test]
     async fn transient_pair_states_are_not_persisted_or_reloaded() {
-        let _guard = crate::TEST_ENV_LOCK.lock().await;
-        let td = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("HOME", td.path());
-        }
+        let (_guard, td) = setup_test_env().await;
         let config_dir = td.path().join(".config").join(crate::config::CONFIG_DIR);
-        tokio::fs::create_dir_all(&config_dir).await.unwrap();
 
         let raw_id = "transientdevice00000000000000000";
         let device = Device {
@@ -489,6 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn device_manager_unpair_clears_certificate() {
+        let (_guard, _td) = setup_test_env().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let dm = DeviceManager::new(tx);
 
