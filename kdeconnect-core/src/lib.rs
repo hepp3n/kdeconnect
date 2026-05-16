@@ -891,6 +891,7 @@ impl KdeConnectCore {
                 remove_connection_if_current(&self.writer_map, &self.conn_id_map, &id, conn_id)
                     .await;
                 plugins::systemvolume::on_device_disconnect(&id);
+                self.broadcast_on_disconnect(&id).await;
                 info!("[core] removed dead connection for {}", id);
                 let conn_event = ConnectionEvent::Disconnected(id);
                 let _ = self.conn_tx.send(conn_event.clone());
@@ -920,6 +921,7 @@ impl KdeConnectCore {
                     .await
                 {
                     plugins::systemvolume::on_device_disconnect(&id);
+                    self.broadcast_on_disconnect(&id).await;
                     let conn_event = ConnectionEvent::Disconnected(id);
                     let _ = self.conn_tx.send(conn_event.clone());
                     let _ = self.mpris_conn_tx.send(conn_event);
@@ -1503,6 +1505,7 @@ impl KdeConnectCore {
             );
             remove_connection(&self.writer_map, &self.conn_id_map, device_id).await;
             plugins::systemvolume::on_device_disconnect(device_id);
+            self.broadcast_on_disconnect(device_id).await;
             let conn_event = ConnectionEvent::Disconnected(device_id.clone());
             let _ = self.conn_tx.send(conn_event.clone());
             let _ = self.mpris_conn_tx.send(conn_event);
@@ -1510,6 +1513,20 @@ impl KdeConnectCore {
         }
 
         true
+    }
+
+    async fn broadcast_on_disconnect(&self, device_id: &DeviceId) {
+        if let Some(device) = self.device_manager.get_device(device_id).await {
+            if device.pair_state == PairState::Paired {
+                debug!(
+                    "[core] broadcasting identity after disconnect of {}",
+                    device_id
+                );
+                if let Err(e) = self.udp_transport.send_identity().await {
+                    error!("Identity broadcast after disconnect failed: {}", e);
+                }
+            }
+        }
     }
 
     async fn drop_connection(&self, device_id: &DeviceId) -> bool {
