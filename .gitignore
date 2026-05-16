@@ -29,3 +29,4 @@ builddir/
 .flatpak-builder/
 repo/
 *.flatpak
+kdeconnect-info/
