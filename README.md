@@ -70,6 +70,11 @@ just install
 
 The service starts automatically on next login via D-Bus activation and XDG autostart.
 
+Once it is installed, you can easily apply your updates to your desktop with this singular command without having to log out:
+```bash
+cargo fmt && cargo test --workspace && cargo check --workspace && just build && just install && just restart
+```
+
 ### Optional: Systemd Integration
 
 For journalctl logging and `systemctl` control instead of D-Bus activation:

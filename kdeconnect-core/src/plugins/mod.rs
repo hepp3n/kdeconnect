@@ -2,6 +2,7 @@ pub mod battery;
 pub mod clipboard;
 pub mod connectivity_report;
 pub mod contacts;
+pub mod digitizer;
 pub mod findmyphone;
 pub mod mousepad;
 pub mod mpris;

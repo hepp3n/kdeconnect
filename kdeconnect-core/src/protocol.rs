@@ -75,6 +75,8 @@ pub enum PacketType {
     ClipboardConnect,
     ConnectivityReport,
     ConnectivityReportRequest,
+    Digitizer,
+    DigitizerSession,
     ContactsRequestAllUidsTimestamps,
     ContactsRequestVcardsByUid,
     ContactsResponseUidsTimestamps,
@@ -125,6 +127,8 @@ impl From<String> for PacketType {
             "kdeconnect.clipboard.connect" => PacketType::ClipboardConnect,
             "kdeconnect.connectivity_report" => PacketType::ConnectivityReport,
             "kdeconnect.connectivity_report.request" => PacketType::ConnectivityReportRequest,
+            "kdeconnect.digitizer" => PacketType::Digitizer,
+            "kdeconnect.digitizer.session" => PacketType::DigitizerSession,
             "kdeconnect.contacts.request_all_uids_timestamps" => {
                 PacketType::ContactsRequestAllUidsTimestamps
             }
@@ -185,6 +189,8 @@ impl Display for PacketType {
             PacketType::ConnectivityReportRequest => {
                 write!(f, "kdeconnect.connectivity_report.request")
             }
+            PacketType::Digitizer => write!(f, "kdeconnect.digitizer"),
+            PacketType::DigitizerSession => write!(f, "kdeconnect.digitizer.session"),
             PacketType::ContactsRequestAllUidsTimestamps => {
                 write!(f, "kdeconnect.contacts.request_all_uids_timestamps")
             }

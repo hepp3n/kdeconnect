@@ -105,6 +105,7 @@ pub async fn fetch_devices() -> Vec<Device> {
                             "kdeconnect.mousepad.keyboardstate",
                         ]),
                         has_presenter: remote_accepts("kdeconnect.presenter"),
+                        has_digitizer: remote_sends("kdeconnect.digitizer"),
                         has_lockdevice: remote_accepts_any(&[
                             "kdeconnect.lock",
                             "kdeconnect.lock.request",

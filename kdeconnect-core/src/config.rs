@@ -24,6 +24,8 @@ const INCOMING_CAPABILITIES: &[&str] = &[
     "kdeconnect.clipboard",
     "kdeconnect.clipboard.connect",
     "kdeconnect.connectivity_report",
+    "kdeconnect.digitizer",
+    "kdeconnect.digitizer.session",
     "kdeconnect.contacts.response_uids_timestamps",
     "kdeconnect.contacts.response_vcards",
     "kdeconnect.findmyphone.request",

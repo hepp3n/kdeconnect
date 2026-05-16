@@ -1229,6 +1229,11 @@ async fn filtered_identity_for_device(device_id: &str) -> Identity {
             &["kdeconnect.share.request"],
             &["kdeconnect.share.request"],
         ),
+        (
+            "digitizer",
+            &["kdeconnect.digitizer", "kdeconnect.digitizer.session"],
+            &[],
+        ),
         ("sftp", &["kdeconnect.sftp"], &["kdeconnect.sftp.request"]),
         (
             "sms",

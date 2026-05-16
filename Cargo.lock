@@ -2789,6 +2789,7 @@ dependencies = [
  "base64",
  "dirs",
  "hostname",
+ "libc",
  "libpulse-binding",
  "mpris",
  "notify-rust",

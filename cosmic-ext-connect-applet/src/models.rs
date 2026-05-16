@@ -26,6 +26,7 @@ pub struct Device {
     pub has_sftp: bool,
     #[allow(dead_code)]
     pub has_presenter: bool,
+    pub has_digitizer: bool,
     pub has_lockdevice: bool,
     pub has_virtualmonitor: bool,
     pub pairing_requests: i32,

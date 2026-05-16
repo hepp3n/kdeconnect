@@ -39,6 +39,7 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         PacketType::ConnectivityReport | PacketType::ConnectivityReportRequest => {
             Some("connectivity_report")
         }
+        PacketType::Digitizer | PacketType::DigitizerSession => Some("digitizer"),
         PacketType::ContactsResponseUidsTimestamps
         | PacketType::ContactsResponseVcards
         | PacketType::ContactsRequestAllUidsTimestamps
@@ -358,6 +359,20 @@ impl PluginRegistry {
             }
             PacketType::TelephonyRequestMute => {
                 debug!("TelephonyRequestMute received — no action needed on desktop");
+            }
+            PacketType::DigitizerSession => {
+                if let Ok(session) =
+                    serde_json::from_value::<plugins::digitizer::DigitizerSession>(body)
+                {
+                    session.received_packet().await;
+                }
+            }
+            PacketType::Digitizer => {
+                if let Ok(event) =
+                    serde_json::from_value::<plugins::digitizer::DigitizerEvent>(body)
+                {
+                    event.received_packet().await;
+                }
             }
             _ => {
                 debug!(

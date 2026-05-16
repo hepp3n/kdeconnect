@@ -1847,6 +1847,8 @@ mod pairing_regression_tests {
             PacketType::ClipboardConnect,
             PacketType::ConnectivityReport,
             PacketType::ConnectivityReportRequest,
+            PacketType::Digitizer,
+            PacketType::DigitizerSession,
             PacketType::ContactsRequestAllUidsTimestamps,
             PacketType::ContactsRequestVcardsByUid,
             PacketType::ContactsResponseUidsTimestamps,
