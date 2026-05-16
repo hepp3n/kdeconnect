@@ -215,31 +215,44 @@ impl DeviceManager {
     }
 
     pub async fn set_paired(&self, id: &DeviceId, flag: bool) {
-        let mut guard = self.devices.write().await;
+        let device_clone = {
+            let mut guard = self.devices.write().await;
 
-        if let Some(device) = guard.get_mut(id) {
+            let Some(device) = guard.get_mut(id) else {
+                return;
+            };
+
             if flag {
                 device.pair_state = PairState::Paired;
                 let _ = self.event_tx.send(CoreEvent::DevicePaired((
                     device.device_id.clone(),
                     device.clone(),
                 )));
-                let _ = device.update_pair_state(PairState::Paired).await;
             } else {
                 device.pair_state = PairState::NotPaired;
                 device.remote_certificate.clear();
                 let _ = self
                     .event_tx
                     .send(CoreEvent::DevicePairCancelled(device.device_id.clone()));
-                let _ = device.update_pair_state(PairState::NotPaired).await;
             }
-        }
+            device.clone()
+        };
+
+        let state = if flag {
+            PairState::Paired
+        } else {
+            PairState::NotPaired
+        };
+        device_clone.update_pair_state(state).await;
     }
 
     pub async fn update_pair_state(&self, id: &DeviceId, state: PairState) {
-        let mut guard = self.devices.write().await;
+        let device_clone = {
+            let mut guard = self.devices.write().await;
 
-        if let Some(device) = guard.get_mut(id) {
+            let Some(device) = guard.get_mut(id) else {
+                return;
+            };
             device.pair_state = state;
             if state == PairState::NotPaired {
                 device.remote_certificate.clear();
@@ -247,8 +260,10 @@ impl DeviceManager {
             let _ = self
                 .event_tx
                 .send(CoreEvent::DevicePairStateChanged((id.clone(), state)));
-            let _ = device.update_pair_state(state).await;
-        }
+            device.clone()
+        };
+
+        device_clone.update_pair_state(state).await;
     }
 
     pub async fn set_protocol_version(&self, id: &DeviceId, version: usize) {

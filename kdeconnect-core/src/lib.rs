@@ -1480,15 +1480,18 @@ impl KdeConnectCore {
 
         let sender = {
             let guard = self.writer_map.lock().await;
-            guard.get(device_id).map(|handle| handle.write_tx.clone())
+            let sender = guard.get(device_id).map(|handle| handle.write_tx.clone());
+            if sender.is_none() {
+                debug!(
+                    "No sender for device {} — available: {:?}",
+                    device_id,
+                    guard.keys().collect::<Vec<_>>()
+                );
+            }
+            sender
         };
 
         let Some(sender) = sender else {
-            debug!(
-                "No sender for device {} — available: {:?}",
-                device_id,
-                self.writer_map.lock().await.keys().collect::<Vec<_>>()
-            );
             return false;
         };
 

@@ -461,7 +461,6 @@ async fn handle_incoming_tcp(
     let (reader, writer) = split(tls_stream);
 
     let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-    let write_rx = Arc::new(Mutex::new(write_rx));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -782,7 +781,6 @@ async fn handle_discovered_device(
     let (reader, writer) = split(tls_stream);
 
     let (write_tx, write_rx) = mpsc::unbounded_channel::<ProtocolPacket>();
-    let write_rx = Arc::new(Mutex::new(write_rx));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let conn_id = CONN_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -866,7 +864,7 @@ async fn paired_certificate_mismatch(
 
 struct ConnectionContext {
     event_tx: mpsc::UnboundedSender<TransportEvent>,
-    write_rx: Arc<Mutex<mpsc::UnboundedReceiver<ProtocolPacket>>>,
+    write_rx: mpsc::UnboundedReceiver<ProtocolPacket>,
     peer: SocketAddr,
     id: DeviceId,
     conn_id: u64,
@@ -918,7 +916,7 @@ where
 {
     let ConnectionContext {
         event_tx,
-        write_rx,
+        mut write_rx,
         peer,
         id,
         conn_id,
@@ -1023,10 +1021,7 @@ where
                     close_gracefully = false;
                     break;
                 }
-                msg = async {
-                    let mut rx = write_rx.lock().await;
-                    rx.recv().await
-                } => msg,
+                msg = write_rx.recv() => msg,
                 _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {
                     match write_all_interruptible(
                         &mut writer,
@@ -1342,13 +1337,10 @@ mod tests {
         device::DeviceId,
         protocol::{PacketType, ProtocolPacket},
     };
-    use std::{
-        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
-        sync::Arc,
-    };
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex, split},
-        sync::{Mutex, mpsc, watch},
+        sync::{mpsc, watch},
         time::{Duration, timeout},
     };
 
@@ -1366,7 +1358,6 @@ mod tests {
         let (local, remote) = duplex(capacity);
         let (reader, writer) = split(local);
         let (write_tx, write_rx) = mpsc::unbounded_channel();
-        let write_rx = Arc::new(Mutex::new(write_rx));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let id = DeviceId(format!("transport-regression-{conn_id}"));
         let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1716));
