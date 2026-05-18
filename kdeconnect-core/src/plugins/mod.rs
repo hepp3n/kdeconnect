@@ -7,6 +7,7 @@ pub mod mpris;
 pub mod notification;
 pub mod ping;
 pub mod run_command;
+pub mod sftp;
 pub mod share;
 pub mod sms;
 pub mod systemvolume;

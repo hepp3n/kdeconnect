@@ -12,7 +12,7 @@ use crate::{
     GLOBAL_CONFIG,
     device::Device,
     event::{ConnectionEvent, CoreEvent},
-    filetransfer::{send_progress, TransferAdapter},
+    filetransfer::{TransferAdapter, send_progress},
     plugins::{
         self,
         battery::Battery,
@@ -52,6 +52,7 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         PacketType::Ping => Some("ping"),
         PacketType::RunCommand | PacketType::RunCommandRequest => Some("runcommand"),
         PacketType::ShareRequest | PacketType::ShareRequestUpdate => Some("share"),
+        PacketType::Sftp | PacketType::SftpRequest => Some("sftp"),
         PacketType::SmsMessages
         | PacketType::SmsRequest
         | PacketType::SmsRequestConversations
@@ -69,8 +70,6 @@ fn packet_plugin_id(pt: &PacketType) -> Option<&'static str> {
         | PacketType::MousePadKeyboardState
         | PacketType::MousePadRequest
         | PacketType::Presenter
-        | PacketType::Sftp
-        | PacketType::SftpRequest
         | PacketType::Unknown(_) => None,
     }
 }
@@ -123,10 +122,7 @@ impl PluginRegistry {
     ) {
         // Gate on plugin enabled state before doing any work.
         if let Some(plugin_id) = packet_plugin_id(&packet.packet_type) {
-            if !self
-                .is_plugin_enabled(&device.device_id.0, plugin_id)
-                .await
-            {
+            if !self.is_plugin_enabled(&device.device_id.0, plugin_id).await {
                 debug!(
                     "[plugin_registry] packet {:?} skipped — plugin '{}' disabled for {}",
                     packet.packet_type, plugin_id, device.device_id
@@ -237,10 +233,16 @@ impl PluginRegistry {
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
                     if timestamp > 0 && timestamp >= local_ts {
-                        info!("Clipboard sync on connect accepted (ts={} local={})", timestamp, local_ts);
+                        info!(
+                            "Clipboard sync on connect accepted (ts={} local={})",
+                            timestamp, local_ts
+                        );
                         clipboard.received_packet(connection_tx).await;
                     } else {
-                        info!("Clipboard sync on connect ignored — stale timestamp (ts={} local={})", timestamp, local_ts);
+                        info!(
+                            "Clipboard sync on connect ignored — stale timestamp (ts={} local={})",
+                            timestamp, local_ts
+                        );
                     }
                 }
             }
@@ -309,6 +311,11 @@ impl PluginRegistry {
                             warn!("[share] receive_share failed: {}", e);
                         }
                     });
+                }
+            }
+            PacketType::Sftp => {
+                if let Ok(packet) = serde_json::from_value::<plugins::sftp::Sftp>(body) {
+                    packet.received_packet(&device).await;
                 }
             }
             PacketType::SystemVolumeRequest => {

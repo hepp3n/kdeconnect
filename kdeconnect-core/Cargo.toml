@@ -26,5 +26,6 @@ tracing = { workspace = true }
 mpris = { workspace = true }
 zbus = { workspace = true }
 libpulse-binding = { workspace = true }
+percent-encoding = { workspace = true }
 base64 = "0.22"
 tempfile = "3"
